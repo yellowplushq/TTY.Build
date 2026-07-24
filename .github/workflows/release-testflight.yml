@@ -497,10 +497,19 @@ jobs:
           fi
           jq -e --arg build "$build_id" 'any(.data[]; .id == $build)' \
             "$PEDALS_RELEASE_DIR/internal-group-builds.json" >/dev/null
-          asc testflight notifications send \
+          notification_log="$PEDALS_RELEASE_DIR/internal-notification.log"
+          if asc testflight notifications send \
             --build-id "$build_id" \
             --output json \
-            --pretty
+            --pretty > "$notification_log" 2>&1; then
+            sed -n '1,120p' "$notification_log"
+          elif rg -q 'auto-notify is already enabled' "$notification_log"; then
+            sed -n '1,120p' "$notification_log"
+            echo "Internal group auto-notify already covers this build."
+          else
+            sed -n '1,120p' "$notification_log" >&2
+            exit 1
+          fi
 
       - name: Publish to external TestFlight
         if: inputs.distribute_external
