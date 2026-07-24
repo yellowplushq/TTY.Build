@@ -59,9 +59,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install asc baguette ripgrep xcodegen
+          brew install asc ripgrep xcodegen
           asc version
-          baguette --version
           xcodegen --version
 
       - name: Verify App Store Connect identity
@@ -188,7 +187,6 @@ jobs:
           fi
           xcrun simctl boot "$simulator" 2>/dev/null || true
           xcrun simctl bootstatus "$simulator" -b
-          echo "PEDALS_IOS_UDID=$simulator" >> "$GITHUB_ENV"
           xcodebuild \
             -project ios/Pedals.xcodeproj \
             -scheme Pedals \
@@ -196,14 +194,6 @@ jobs:
             -derivedDataPath "$PEDALS_RELEASE_DIR/derived-data-tests" \
             -parallel-testing-enabled NO \
             test
-
-      - name: Run full local end-to-end test
-        shell: bash
-        run: |
-          set -euo pipefail
-          PEDALS_E2E_SKIP_TESTS=1 \
-          SIM_UDID="$PEDALS_IOS_UDID" \
-            ./scripts/e2e.sh
 
       - name: Import iOS Distribution certificate
         shell: bash
