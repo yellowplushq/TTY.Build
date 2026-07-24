@@ -136,7 +136,10 @@ final class SessionManagerTests: XCTestCase {
         let options = SessionManager.Options(
             shell: "/bin/zsh",
             shellArguments: ["-f"],
-            extraEnvironment: ["PS1": "$ "]
+            extraEnvironment: [
+                "PS1": "$ ",
+                "PEDALS_TEST_READY": "ORDERED-READY",
+            ]
         )
         let manager = SessionManager(options: options)
         defer { manager.closeAll() }
@@ -152,9 +155,12 @@ final class SessionManagerTests: XCTestCase {
         manager.write(
             id: id,
             data: Data(
-                #"/bin/sh -c "trap 'printf ORDERED-WINCH\\n' WINCH; printf ORDERED-READY\\n; while :; do sleep 1; done""#.appending("\n").utf8
+                #"/bin/sh -c 'on_winch() { printf "%s\n" ORDERED-WINCH; }; trap on_winch WINCH; printf "%s\n" "$PEDALS_TEST_READY"; while :; do sleep 1; done'"#.appending("\n").utf8
             )
         )
+        // The readiness value comes from the environment, so the interactive
+        // shell's echoed command cannot satisfy this wait before the child has
+        // installed its signal handler.
         try collected.wait(for: "ORDERED-READY", timeout: 10)
 
         // The PTY echoes the command itself, including the marker text. Start
@@ -196,7 +202,10 @@ final class SessionManagerTests: XCTestCase {
         let options = SessionManager.Options(
             shell: "/bin/zsh",
             shellArguments: ["-f"],
-            extraEnvironment: ["PS1": "$ "]
+            extraEnvironment: [
+                "PS1": "$ ",
+                "PEDALS_TEST_READY": "ZSH-CHILD-ARMED",
+            ]
         )
         let manager = SessionManager(options: options)
         defer { manager.closeAll() }
@@ -210,9 +219,12 @@ final class SessionManagerTests: XCTestCase {
         manager.write(
             id: id,
             data: Data(
-                #"/bin/sh -c "trap 'printf \"ZSH-CHILD-WINCH:%s\\n\" \"\$(stty size)\"' WINCH; printf 'ZSH-CHILD-ARMED\n'; while :; do sleep 1; done""#.appending("\n").utf8
+                #"/bin/sh -c 'on_winch() { printf "ZSH-CHILD-WINCH:%s\n" "$(stty size)"; }; trap on_winch WINCH; printf "%s\n" "$PEDALS_TEST_READY"; while :; do sleep 1; done'"#.appending("\n").utf8
             )
         )
+        // The readiness value comes from the environment, so the interactive
+        // shell's echoed command cannot satisfy this wait before the child has
+        // installed its signal handler.
         try collected.wait(for: "ZSH-CHILD-ARMED", timeout: 10)
 
         for (cols, rows) in [(91, 33), (77, 18), (100, 42)] {
@@ -330,7 +342,12 @@ final class SessionManagerTests: XCTestCase {
         )
         wait(for: [sampled], timeout: 5)
 
-        XCTAssertEqual(titles.values, ["final-title"])
+        let sampledTitles = titles.values
+        XCTAssertEqual(sampledTitles.last, "final-title")
+        XCTAssertLessThan(
+            sampledTitles.count, 3,
+            "sampling may straddle one timer tick but must coalesce the three source titles"
+        )
         XCTAssertEqual(
             listBroadcasts.value, baselineLists,
             "a title has its own compact event and must not rebroadcast sessions"
