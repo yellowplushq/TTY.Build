@@ -31,10 +31,10 @@ struct Terminal: Equatable {
 /// - terminals created elsewhere (other devices / CLI) are appended at the
 ///   end and do NOT steal focus.
 ///
-/// Channels connect lazily on first activation. At most `maxLiveChannels`
-/// stay open; beyond that the least recently activated terminal's socket is
-/// closed ("asleep") — the daemon keeps its PTY running, and reactivating
-/// reconnects + replays.
+/// Channels connect lazily on first activation. Only the foreground terminal
+/// keeps a data socket; switching pages closes the previous socket ("asleep")
+/// while the daemon keeps its PTY running. Reactivating reconnects + replays,
+/// so an inactive terminal consumes no stdout/render/resize work on iPhone.
 @MainActor
 final class TerminalManager {
     @Published private(set) var computers: [ComputerConnection] = []
@@ -65,7 +65,7 @@ final class TerminalManager {
     /// echo matched one of our reqs) — the UI should switch to its page.
     let ownCreations = PassthroughSubject<TerminalID, Never>()
 
-    static let maxLiveChannels = 6
+    static let maxLiveChannels = 1
     /// How long to hold an unidentified new session off the tab list while our
     /// own `create` is in flight (`sessions` can arrive before `created`).
     private static let placementGrace: TimeInterval = 2
@@ -253,7 +253,9 @@ final class TerminalManager {
 
     func activate(_ id: TerminalID) {
         guard terminals.contains(where: { $0.id == id }) else { return }
-        activeID = id
+        if activeID != id {
+            activeID = id
+        }
         ensureChannel(id)
     }
 
@@ -283,8 +285,8 @@ final class TerminalManager {
         evictBeyondPoolLimit()
     }
 
-    /// Put the least recently activated channels to sleep. The active terminal
-    /// is never evicted.
+    /// Put every non-active channel to sleep. With a one-channel pool, page
+    /// activation atomically moves the data plane to the foreground terminal.
     private func evictBeyondPoolLimit() {
         while channels.count > Self.maxLiveChannels {
             let victim = channels.values
@@ -297,7 +299,20 @@ final class TerminalManager {
         }
     }
 
-    /// Reconnect everything immediately (app returned to foreground).
+    /// Stop terminal data sockets without touching control connections or the
+    /// daemon PTYs. The selected terminal identity is retained so foreground
+    /// restoration can reopen exactly that channel and receive a fresh replay.
+    func sleepAllChannels() {
+        for channel in channels.values {
+            channel.stop()
+        }
+        channels.removeAll()
+        phases = [:]
+    }
+
+    /// Reconnect currently open links immediately (app returned to foreground).
+    /// A sleeping terminal is reopened by `activate`, after its page is ready
+    /// to consume the replay.
     func kickAll() {
         for computer in computers { computer.kick() }
         for channel in channels.values { channel.kick() }
@@ -344,11 +359,12 @@ final class TerminalManager {
     // MARK: - Terminal I/O passthrough
 
     func sendStdin(_ id: TerminalID, data: Data) {
-        guard terminal(id)?.closing != true else { return }
+        guard activeID == id, terminal(id)?.closing != true else { return }
         channels[id]?.sendStdin(data)
     }
 
     func sendResize(_ id: TerminalID, cols: UInt16, rows: UInt16) {
+        guard activeID == id else { return }
         channels[id]?.sendResize(cols: cols, rows: rows)
     }
 

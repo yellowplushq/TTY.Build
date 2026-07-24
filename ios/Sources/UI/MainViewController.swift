@@ -15,6 +15,20 @@ private enum TerminalKeyboardPagingHintMemory {
     }
 }
 
+enum TerminalFocusPolicy {
+    static func shouldFocus(
+        applicationActive: Bool,
+        restoreFocus: Bool,
+        pageChanged: Bool,
+        hasBeenFocused: Bool,
+        isFirstResponder: Bool
+    ) -> Bool {
+        applicationActive
+            && !isFirstResponder
+            && (restoreFocus || pageChanged || !hasBeenFocused)
+    }
+}
+
 /// Safari-style main screen: floating glass tab strip on top, the active
 /// page filling the screen beneath it, and a persistent glass input toolbar
 /// at the bottom that rides above the keyboard while a terminal is visible.
@@ -51,6 +65,10 @@ final class MainViewController: UIViewController {
             overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             overlay.frame = container.bounds
             container.addSubview(overlay)
+            // Standalone TerminalHost instances are interactive by default for
+            // previews/tests. A pageable host starts asleep until this
+            // controller explicitly presents it.
+            host.setActive(false)
         }
     }
 
@@ -60,6 +78,11 @@ final class MainViewController: UIViewController {
     /// Cold launch lands on Home; terminal activation never steals it (only
     /// explicit navigation — taps, pans, own creations — switches pages).
     private var visiblePage: PageID = .home
+    /// The page whose visibility/focus lifecycle was last committed. Animated
+    /// navigation updates `visiblePage` before settling; keeping this separate
+    /// lets completion transfer first responder from the genuinely old page.
+    private var presentedPage: PageID = .home
+    private var isApplicationActive = UIApplication.shared.applicationState == .active
     private var visibleId: TerminalID? {
         if case .terminal(let id) = visiblePage { return id }
         return nil
@@ -300,9 +323,14 @@ final class MainViewController: UIViewController {
             .sink { [weak self] message in self?.showToast(message) }
             .store(in: &cancellables)
 
-        NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+        NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.manager.kickAll() }
+            .sink { [weak self] _ in self?.suspendTerminalPresentation() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.resumeTerminalPresentation() }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(
@@ -428,7 +456,7 @@ final class MainViewController: UIViewController {
                 terminalKeyboard.setModifierState(state)
             }
             page.host.onFocusChange = { [weak self] focused in
-                guard let self, !focused, visibleId == id else { return }
+                guard let self, isApplicationActive, !focused, visibleId == id else { return }
                 exitTerminalKeyboardMode()
             }
             pages[id] = page
@@ -483,31 +511,54 @@ final class MainViewController: UIViewController {
     /// Idempotent on purpose: a `created` echo can arrive BEFORE the terminal
     /// list does (create flow), so the first call may record a page that
     /// doesn't exist yet — the re-run after page creation must still unhide it.
-    private func setVisiblePage(_ page: PageID) {
-        let previousPage = visiblePage
+    private func setVisiblePage(
+        _ page: PageID,
+        restoreFocus: Bool = false
+    ) {
+        let previousPage = presentedPage
         visiblePage = page
         homeView.isHidden = page != .home
         homeView.frame = pagesContainer.bounds
         for (pageId, terminalPage) in pages {
+            let isPresented = PageID.terminal(pageId) == page && isApplicationActive
+            terminalPage.host.setActive(isPresented)
             terminalPage.container.isHidden = PageID.terminal(pageId) != page
             terminalPage.container.frame = pagesContainer.bounds
         }
         if case .terminal(let id) = page, let terminalPage = pages[id] {
+            if isApplicationActive {
+                // The page is ready before opening its one live data channel,
+                // so the reconnect replay cannot be dropped into a sleeping
+                // renderer.
+                manager.activate(id)
+            } else {
+                manager.sleepAllChannels()
+            }
             terminalPage.host.setReplacementInputView(
                 isTerminalKeyboardEnabled ? terminalKeyboard : nil
             )
             toolbar.setModifierState(terminalPage.host.modifierState)
             terminalKeyboard.setModifierState(terminalPage.host.modifierState)
-            if (previousPage != page || !terminalPage.hasBeenFocused)
-                && !terminalPage.host.view.isFirstResponder
-            {
+            if TerminalFocusPolicy.shouldFocus(
+                applicationActive: isApplicationActive,
+                restoreFocus: restoreFocus,
+                pageChanged: previousPage != page,
+                hasBeenFocused: terminalPage.hasBeenFocused,
+                isFirstResponder: terminalPage.host.view.isFirstResponder
+            ) {
                 terminalPage.host.view.becomeFirstResponder()
             }
             terminalPage.hasBeenFocused = true
             // Unhiding does not fire didMoveToWindow, so nothing else
             // repaints output that arrived while the view was hidden.
-            terminalPage.host.kickRender()
+            if isApplicationActive {
+                terminalPage.host.kickRender()
+                if previousPage != page || restoreFocus {
+                    manager.requestReplay(id)
+                }
+            }
         } else {
+            manager.sleepAllChannels()
             toolbar.setModifierState(TerminalModifierState())
             terminalKeyboard.setModifierState(TerminalModifierState())
             if page == .home {
@@ -517,8 +568,31 @@ final class MainViewController: UIViewController {
                 view.endEditing(true)
             }
         }
+        presentedPage = page
         updateTerminalChromeVisibility()
         tabStrip.setHomeSelected(page == .home)
+    }
+
+    private func suspendTerminalPresentation() {
+        guard isApplicationActive else { return }
+        isApplicationActive = false
+        for page in pages.values {
+            page.host.setActive(false)
+        }
+        manager.sleepAllChannels()
+    }
+
+    private func resumeTerminalPresentation() {
+        guard !isApplicationActive else {
+            manager.kickAll()
+            return
+        }
+        isApplicationActive = true
+        manager.kickAll()
+        // Reattach the foreground renderer before its data channel, force a
+        // replay to cover everything produced while asleep, and restore input
+        // ownership to the terminal the user can actually see.
+        setVisiblePage(visiblePage, restoreFocus: visibleId != nil)
     }
 
     // MARK: - Page navigation

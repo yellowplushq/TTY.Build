@@ -31,6 +31,10 @@ final class TerminalHost {
     private weak var selectionOverlay: TerminalSelectionOverlay?
     private var selectionStartedWithFirstResponder = false
     private var shiftIsArmed = false
+    /// False while this terminal is offscreen or the application is inactive.
+    /// The daemon-side PTY keeps running; the next activation receives a full
+    /// replay before live stdout resumes.
+    private(set) var isActive = true
 
     var isTextSelectionActive: Bool { selectionOverlay != nil }
 
@@ -88,6 +92,7 @@ final class TerminalHost {
         view.focusChangeHandler = { [weak self] focused in
             self?.onFocusChange?(focused)
         }
+        view.setTerminalInteractionEnabled(true)
     }
 
     var modifierState: TerminalModifierState {
@@ -100,6 +105,7 @@ final class TerminalHost {
     }
 
     func toggleModifier(_ modifier: TerminalModifier) {
+        guard isActive else { return }
         switch modifier {
         case .shift:
             shiftIsArmed.toggle()
@@ -114,6 +120,7 @@ final class TerminalHost {
     }
 
     func sendToolbarKey(_ key: TerminalInputKey) {
+        guard isActive else { return }
         switch key {
         case .text(let text):
             // Use libghostty's text path so sticky Control/Option/Command and
@@ -159,6 +166,33 @@ final class TerminalHost {
         }
     }
 
+    /// Move this renderer between foreground and sleep. Suspending explicitly
+    /// ends selection and first-responder ownership before the page is hidden,
+    /// preventing delayed UIKit key events from reaching the old TTY.
+    @discardableResult
+    func setActive(_ active: Bool) -> Bool {
+        guard isActive != active else { return false }
+        isActive = active
+
+        if active {
+            view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            if let container = view.superview {
+                view.frame = container.bounds
+            }
+            view.setTerminalInteractionEnabled(true)
+            armSizeReports()
+            kickRender()
+        } else {
+            selectionOverlay?.finish()
+            view.setTerminalInteractionEnabled(false)
+            // Keep the last rendered geometry frozen. Hidden containers may
+            // still follow keyboard/rotation layout, but a sleeping terminal
+            // must not resize its Ghostty grid until it is foreground again.
+            view.autoresizingMask = []
+        }
+        return true
+    }
+
     private var activeKeyModifiers: TerminalKeyModifiers {
         var modifiers: TerminalKeyModifiers = []
         if shiftIsArmed { modifiers.insert(.shift) }
@@ -195,6 +229,7 @@ final class TerminalHost {
 
     /// Feed live remote `stdout` bytes into the emulator.
     func feed(_ data: Data) {
+        guard isActive else { return }
         session.receive(data)
         kickRender()
     }
@@ -202,6 +237,7 @@ final class TerminalHost {
     /// Feed a `replay` snapshot: reset the emulator first (RIS + erase
     /// scrollback) so a reconnect replay doesn't duplicate earlier output.
     func feedReplay(_ data: Data) {
+        guard isActive else { return }
         muteInputUntil = Date().addingTimeInterval(0.5)
         session.receive(Data("\u{1b}c\u{1b}[3J".utf8))
         session.receive(data)
@@ -223,17 +259,20 @@ final class TerminalHost {
 
     /// Surface the remote process exit inside the emulator.
     func markExited(code: Int) {
+        guard isActive else { return }
         session.finish(exitCode: UInt32(clamping: max(0, code)), runtimeMilliseconds: 0)
         kickRender()
     }
 
     func kickRender() {
+        guard isActive else { return }
         DispatchQueue.main.async { [weak view] in
             view?.fitToSize()
         }
     }
 
     private func handleInput(_ data: Data) {
+        guard isActive else { return }
         // Mode 2048 size reports ride the input channel but are addressed to
         // this host, not the remote pty: each one certifies that the emulator
         // has applied the grid it describes.
@@ -325,6 +364,7 @@ final class TerminalHost {
     }
 
     private func beginTextSelection(_ request: TerminalTextSelectionRequest) {
+        guard isActive else { return }
         selectionOverlay?.finish()
         selectionStartedWithFirstResponder = view.wasFirstResponderBeforeCurrentTouch
         view.setPreservesFirstResponderDuringSelection(true)
@@ -394,6 +434,7 @@ extension TerminalHost: TerminalSurfaceGridResizeDelegate,
     TerminalSurfaceTextSelectionRequestDelegate
 {
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
+        guard isActive else { return }
         // Arm as early as possible so the very first grid announcement to the
         // daemon is already an applied one (the enable answers with a report
         // of the surface's creation grid).
@@ -408,7 +449,7 @@ extension TerminalHost: TerminalSurfaceGridResizeDelegate,
         // right for view-side geometry (a long press during a keyboard
         // animation must not select against a stale grid), and exactly wrong
         // for the daemon: `onResize` waits for the applied-resize report.
-        guard size.columns > 0, size.rows > 0 else { return }
+        guard isActive, size.columns > 0, size.rows > 0 else { return }
         noteViewportGeometry(InMemoryTerminalViewport(
             columns: size.columns,
             rows: size.rows,
@@ -443,6 +484,7 @@ final class PedalsTerminalView: TerminalView {
     private var focusTouchStartTimestamp: TimeInterval?
     private var focusTouchMaximumMovement: CGFloat = 0
     private var focusTouchIsEligible = false
+    private var isTerminalInteractionEnabled = true
     /// KVO tokens watching Ghostty's IOSurface sublayers, keyed by layer
     /// identity. See `syncSurfaceLayerScaleGuards()`.
     private var surfaceLayerScaleGuards: [ObjectIdentifier: NSKeyValueObservation] = [:]
@@ -450,6 +492,7 @@ final class PedalsTerminalView: TerminalView {
     var focusChangeHandler: ((Bool) -> Void)?
 
     override var inputView: UIView? { replacementInputView }
+    override var canBecomeFirstResponder: Bool { isTerminalInteractionEnabled }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -528,6 +571,7 @@ final class PedalsTerminalView: TerminalView {
     }
 
     override func insertText(_ text: String) {
+        guard isTerminalInteractionEnabled else { return }
         // `ghostty_surface_text` is a text/paste path, not a key path. Even if
         // LF is changed to CR before calling super, a TUI can still receive it
         // as inserted text rather than the terminal Enter key. Route a
@@ -553,6 +597,7 @@ final class PedalsTerminalView: TerminalView {
         _ presses: Set<UIPress>,
         with event: UIPressesEvent?
     ) {
+        guard isTerminalInteractionEnabled else { return }
         if presses.contains(where: Self.isHardwareReturn) {
             hardwareReturnIsPressed = true
         }
@@ -563,6 +608,7 @@ final class PedalsTerminalView: TerminalView {
         _ presses: Set<UIPress>,
         with event: UIPressesEvent?
     ) {
+        guard isTerminalInteractionEnabled else { return }
         super.pressesEnded(presses, with: event)
         if presses.contains(where: Self.isHardwareReturn) {
             hardwareReturnIsPressed = false
@@ -573,6 +619,7 @@ final class PedalsTerminalView: TerminalView {
         _ presses: Set<UIPress>,
         with event: UIPressesEvent?
     ) {
+        guard isTerminalInteractionEnabled else { return }
         super.pressesCancelled(presses, with: event)
         if presses.contains(where: Self.isHardwareReturn) {
             hardwareReturnIsPressed = false
@@ -581,6 +628,7 @@ final class PedalsTerminalView: TerminalView {
 
     @discardableResult
     override func becomeFirstResponder() -> Bool {
+        guard isTerminalInteractionEnabled else { return false }
         let result = super.becomeFirstResponder()
         if result {
             focusChangeHandler?(true)
@@ -589,6 +637,7 @@ final class PedalsTerminalView: TerminalView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard isTerminalInteractionEnabled else { return }
         guard let touch = touches.first(where: { $0.type == .direct }) else {
             super.touchesBegan(touches, with: event)
             return
@@ -700,6 +749,19 @@ final class PedalsTerminalView: TerminalView {
 
     func setReplacementInputView(_ inputView: UIView?) {
         replacementInputView = inputView
+    }
+
+    func setTerminalInteractionEnabled(_ enabled: Bool) {
+        guard isTerminalInteractionEnabled != enabled else { return }
+        if !enabled {
+            preservesFirstResponderDuringSelection = false
+            resetFocusTouch()
+        }
+        isTerminalInteractionEnabled = enabled
+        isUserInteractionEnabled = enabled
+        if !enabled, isFirstResponder {
+            _ = resignFirstResponder()
+        }
     }
 
     func setPreservesFirstResponderDuringSelection(_ preserves: Bool) {
