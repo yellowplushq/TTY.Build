@@ -51,8 +51,12 @@ trap cleanup EXIT
 
 # ---- 1. local Cloudflare service ----------------------------------------
 
-log "installing and testing Worker dependencies"
-(cd "$ROOT/relay" && npm ci --no-audit --no-fund --silent && npm test)
+if [[ "${PEDALS_E2E_SKIP_TESTS:-0}" == "1" ]]; then
+  log "using Worker dependencies and test results from the release gate"
+else
+  log "installing and testing Worker dependencies"
+  (cd "$ROOT/relay" && npm ci --no-audit --no-fund --silent && npm test)
+fi
 
 log "applying the v2 schema to an isolated local D1"
 (

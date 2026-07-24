@@ -201,7 +201,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SIM_UDID="$PEDALS_IOS_UDID" ./scripts/e2e.sh
+          PEDALS_E2E_SKIP_TESTS=1 \
+          SIM_UDID="$PEDALS_IOS_UDID" \
+            ./scripts/e2e.sh
 
       - name: Import iOS Distribution certificate
         shell: bash
