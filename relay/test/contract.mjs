@@ -271,3 +271,8 @@ try {
     }
   }
 }
+
+// Node's built-in WebSocket can retain its transport while the remote close
+// handshake drains. All assertions and authenticated cleanup are complete at
+// this point, so do not let that implementation detail hang release workflows.
+process.exit(0);

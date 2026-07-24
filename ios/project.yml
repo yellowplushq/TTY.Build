@@ -163,6 +163,7 @@ targets:
       - Resources/AgentMarks.xcassets
       - path: SharedStatus
         excludes:
+          - AgentActivityKeyStore.swift
           - IOSWatchConnectivityBridge.swift
           - TTYActivityAttributes.swift
           - TTYLiveActivityController.swift
@@ -210,6 +211,7 @@ targets:
       - WatchWidgets
       - path: SharedStatus
         excludes:
+          - AgentActivityKeyStore.swift
           - IOSWatchConnectivityBridge.swift
           - TTYActivityAttributes.swift
           - TTYLiveActivityController.swift

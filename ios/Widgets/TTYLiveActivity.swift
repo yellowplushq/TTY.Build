@@ -88,6 +88,9 @@ private struct AgentMark: View {
     let presentation: ActivityPresentation
     var size: CGFloat = 22
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var workingBadgeDimmed = false
+
     var body: some View {
         let badgeSize: CGFloat = size >= 22 ? 10 : 8
         ZStack(alignment: .topLeading) {
@@ -115,6 +118,9 @@ private struct AgentMark: View {
                             .stroke(PedalsTheme.canvas, lineWidth: size >= 22 ? 2 : 1.5)
                     }
                     .offset(x: size - badgeSize / 2 - 1)
+                    .opacity(
+                        agentState == .running && workingBadgeDimmed ? 0.25 : 1
+                    )
                     .accessibilityHidden(true)
             }
         }
@@ -124,6 +130,25 @@ private struct AgentMark: View {
         .accessibilityLabel(
             "\(presentation.agentName), \(ActivityStyle.label(for: presentation))"
         )
+        .onAppear {
+            updateWorkingBadgeAnimation()
+        }
+        .onChange(of: presentation.agentState) { _, _ in
+            updateWorkingBadgeAnimation()
+        }
+        .onChange(of: reduceMotion) { _, _ in
+            updateWorkingBadgeAnimation()
+        }
+    }
+
+    private func updateWorkingBadgeAnimation() {
+        withAnimation(.none) {
+            workingBadgeDimmed = false
+        }
+        guard presentation.agentState == .running, !reduceMotion else { return }
+        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+            workingBadgeDimmed = true
+        }
     }
 }
 

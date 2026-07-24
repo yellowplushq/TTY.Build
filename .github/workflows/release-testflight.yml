@@ -59,8 +59,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install asc ripgrep xcodegen
+          brew install asc baguette ripgrep xcodegen
           asc version
+          baguette --version
           xcodegen --version
 
       - name: Verify App Store Connect identity
@@ -187,12 +188,20 @@ jobs:
           fi
           xcrun simctl boot "$simulator" 2>/dev/null || true
           xcrun simctl bootstatus "$simulator" -b
+          echo "PEDALS_IOS_UDID=$simulator" >> "$GITHUB_ENV"
           xcodebuild \
             -project ios/Pedals.xcodeproj \
             -scheme Pedals \
             -destination "platform=iOS Simulator,id=$simulator" \
             -derivedDataPath "$PEDALS_RELEASE_DIR/derived-data-tests" \
+            -parallel-testing-enabled NO \
             test
+
+      - name: Run full local end-to-end test
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIM_UDID="$PEDALS_IOS_UDID" ./scripts/e2e.sh
 
       - name: Import iOS Distribution certificate
         shell: bash
@@ -247,6 +256,7 @@ jobs:
             local name="$1"
             local application_identifier="$2"
             local requires_apns="$3"
+            local requires_shared_keychain="$4"
             local count profile_id mobileprovision decoded uuid
             count="$(jq --arg name "$name" \
               '[.data[] | select(.attributes.name == $name)] | length' \
@@ -273,6 +283,15 @@ jobs:
               [[ "$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:aps-environment' "$decoded")" \
                 == "production" ]]
             fi
+            if [[ "$requires_shared_keychain" == "true" ]]; then
+              plutil -extract Entitlements.keychain-access-groups json \
+                -o "$profile_dir/keychain-groups.json" "$decoded"
+              jq -e \
+                --arg exact "$PEDALS_TEAM_ID.air.build.pedals.shared" \
+                --arg wildcard "$PEDALS_TEAM_ID.*" \
+                'index($exact) != null or index($wildcard) != null' \
+                "$profile_dir/keychain-groups.json" >/dev/null
+            fi
             uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$decoded")"
             cp "$mobileprovision" "$install_dir/$uuid.mobileprovision"
           }
@@ -280,19 +299,23 @@ jobs:
           install_profile \
             "Pedals YellowPlus App Store" \
             "$PEDALS_TEAM_ID.air.build.pedals" \
+            true \
             true
           install_profile \
             "Pedals Widgets YellowPlus App Store" \
             "$PEDALS_TEAM_ID.air.build.pedals.widgets" \
+            true \
             true
           install_profile \
             "Pedals Watch YellowPlus App Store" \
             "$PEDALS_TEAM_ID.air.build.pedals.watchapp" \
+            false \
             false
           install_profile \
             "Pedals Watch Widgets YellowPlus App Store" \
             "$PEDALS_TEAM_ID.air.build.pedals.watchapp.widgets" \
-            true
+            true \
+            false
 
       - name: Create export options
         shell: bash
@@ -345,6 +368,7 @@ jobs:
             local bundle_id="$2"
             local profile_name="$3"
             local requires_apns="$4"
+            local requires_shared_keychain="$5"
             local entitlements profile bundle_name
             bundle_name="$(basename "$bundle")"
             entitlements="$RUNNER_TEMP/$bundle_name.entitlements.xml"
@@ -369,28 +393,41 @@ jobs:
               [[ "$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$entitlements")" \
                 == "production" ]]
             fi
+            if [[ "$requires_shared_keychain" == "true" ]]; then
+              plutil -extract keychain-access-groups json \
+                -o "$RUNNER_TEMP/$bundle_name.keychain-groups.json" \
+                "$entitlements"
+              jq -e \
+                --arg group "$PEDALS_TEAM_ID.air.build.pedals.shared" \
+                'index($group) != null' \
+                "$RUNNER_TEMP/$bundle_name.keychain-groups.json" >/dev/null
+            fi
           }
 
           verify_bundle \
             "$app" \
             air.build.pedals \
             "Pedals YellowPlus App Store" \
+            true \
             true
           verify_bundle \
             "$app/PlugIns/PedalsWidgets.appex" \
             air.build.pedals.widgets \
             "Pedals Widgets YellowPlus App Store" \
+            true \
             true
           verify_bundle \
             "$app/Watch/PedalsWatch.app" \
             air.build.pedals.watchapp \
             "Pedals Watch YellowPlus App Store" \
+            false \
             false
           verify_bundle \
             "$app/Watch/PedalsWatch.app/PlugIns/PedalsWatchWidgets.appex" \
             air.build.pedals.watchapp.widgets \
             "Pedals Watch Widgets YellowPlus App Store" \
-            true
+            true \
+            false
 
       - name: Export IPA
         shell: bash

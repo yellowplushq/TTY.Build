@@ -145,8 +145,9 @@ final class AppServices {
         synchronizeWatchTerminalContext()
     }
 
-    /// Mirrors per-computer content keys into the widget keychain group. Derived keys only —
-    /// the root computer secrets never leave the app's own group.
+    /// Mirrors per-computer content keys into the widget App Group, with a
+    /// shared-Keychain compatibility copy. Derived keys only — the root
+    /// computer secrets never leave the app's own Keychain group.
     private func synchronizeActivityKeys(bindings: [ComputerBinding]) {
         var keys: [String: Data] = [:]
         for binding in bindings {
