@@ -99,10 +99,10 @@ final class HookInstallerCodexTests: XCTestCase {
         let sessionStart = try XCTUnwrap(hooks["SessionStart"] as? [[String: Any]])
         XCTAssertNil(sessionStart[0]["matcher"])
         let startEntry = try XCTUnwrap((sessionStart[0]["hooks"] as? [[String: Any]])?.first)
-        XCTAssertEqual(startEntry["timeout"] as? Int, 5)
+        XCTAssertEqual(startEntry["timeout"] as? Int, 1)
         let stop = try XCTUnwrap(hooks["Stop"] as? [[String: Any]])
         let stopEntry = try XCTUnwrap((stop[0]["hooks"] as? [[String: Any]])?.first)
-        XCTAssertEqual(stopEntry["timeout"] as? Int, 10)
+        XCTAssertEqual(stopEntry["timeout"] as? Int, 1)
 
         let config = try readConfig()
         XCTAssertTrue(config.contains("[features]"))

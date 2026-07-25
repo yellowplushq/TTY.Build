@@ -18,12 +18,12 @@ extension HookInstaller {
         /// (kimi event, reporter event, timeout seconds). No matchers in our
         /// set.
         static let events: [(event: String, reporterEvent: String, timeout: Int)] = [
-            ("SessionStart", "session-start", 5),
-            ("UserPromptSubmit", "prompt", 10),
-            ("PreToolUse", "tool", 5),
-            ("Notification", "notify", 10),
-            ("Stop", "stop", 10),
-            ("SessionEnd", "session-end", 5),
+            ("SessionStart", "session-start", 1),
+            ("UserPromptSubmit", "prompt", 1),
+            ("PreToolUse", "tool", 1),
+            ("Notification", "notify", 1),
+            ("Stop", "stop", 1),
+            ("SessionEnd", "session-end", 1),
         ]
 
         static func command(reporterPath: String, reporterEvent: String) -> String {

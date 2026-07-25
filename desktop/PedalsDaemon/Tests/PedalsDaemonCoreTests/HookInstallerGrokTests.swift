@@ -60,7 +60,7 @@ final class HookInstallerGrokTests: XCTestCase {
             toolEntry["command"] as? String,
             "\(reporter) grok --event tool \(HookInstaller.sentinel)"
         )
-        XCTAssertEqual(toolEntry["timeout"] as? Int, 5)
+        XCTAssertEqual(toolEntry["timeout"] as? Int, 1)
         let stop = try XCTUnwrap(hooks["Stop"] as? [[String: Any]])
         XCTAssertNil(stop[0]["matcher"])
         XCTAssertEqual(try state(), .installed)

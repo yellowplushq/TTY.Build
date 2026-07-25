@@ -8,6 +8,7 @@ public enum HookWire {
     ) -> Data? {
         var object: [String: Any] = [
             "cmd": "agent-event",
+            "noReply": true,
             "agent": agent,
             "event": report.event,
             "agentSessionId": report.agentSessionId,

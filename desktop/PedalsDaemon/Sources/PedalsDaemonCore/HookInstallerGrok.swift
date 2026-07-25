@@ -17,12 +17,12 @@ extension HookInstaller {
 
         static func entries(reporterPath: String) -> [GroupedHookEntry] {
             let events: [(event: String, matcher: String?, reporterEvent: String, timeout: Int)] = [
-                ("SessionStart", nil, "session-start", 5),
-                ("UserPromptSubmit", nil, "prompt", 10),
-                ("PreToolUse", "", "tool", 5),
-                ("Notification", "", "notify", 10),
-                ("Stop", nil, "stop", 10),
-                ("SessionEnd", "", "session-end", 5),
+                ("SessionStart", nil, "session-start", 1),
+                ("UserPromptSubmit", nil, "prompt", 1),
+                ("PreToolUse", "", "tool", 1),
+                ("Notification", "", "notify", 1),
+                ("Stop", nil, "stop", 1),
+                ("SessionEnd", "", "session-end", 1),
             ]
             return events.map { event, matcher, reporterEvent, timeout in
                 GroupedHookEntry(

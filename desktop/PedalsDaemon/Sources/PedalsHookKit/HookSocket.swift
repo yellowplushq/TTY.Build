@@ -18,13 +18,21 @@ public enum HookSocket {
             .appendingPathComponent("pedals.sock").path
     }
 
-    /// Connects (1 s timeout), writes the line (1 s timeout), best-effort
-    /// reads one reply line, closes. Returns whether the write completed.
+    /// Connects and writes within one small shared budget, then closes without
+    /// waiting for a reply. The daemon treats hook requests as fire-and-forget;
+    /// its acknowledgement must never sit on a coding agent's critical path.
     @discardableResult
-    public static func send(_ line: Data, socketPath: String) -> Bool {
+    public static func send(
+        _ line: Data,
+        socketPath: String,
+        budgetMilliseconds: Int32 = 100
+    ) -> Bool {
+        guard budgetMilliseconds > 0 else { return false }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
         defer { close(fd) }
+        let deadline = DispatchTime.now().uptimeNanoseconds
+            + UInt64(budgetMilliseconds) * 1_000_000
 
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -36,9 +44,8 @@ public enum HookSocket {
             pathBytes.withUnsafeBytes { destination.copyMemory(from: $0) }
         }
 
-        // Non-blocking connect with a 1 s poll: a wedged daemon (full listen
-        // backlog) must not hang the hook past its budget.
         let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0 else { return false }
         _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
         let connected = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -48,18 +55,15 @@ public enum HookSocket {
         if connected != 0 {
             guard errno == EINPROGRESS || errno == EAGAIN else { return false }
             var pollFD = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-            guard poll(&pollFD, 1, 1000) == 1 else { return false }
+            guard poll(&pollFD, 1, remainingMilliseconds(until: deadline)) == 1 else {
+                return false
+            }
             var socketError: Int32 = 0
             var errorSize = socklen_t(MemoryLayout<Int32>.size)
             guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &errorSize) == 0,
                   socketError == 0
             else { return false }
         }
-        _ = fcntl(fd, F_SETFL, flags)
-
-        var timeout = timeval(tv_sec: 1, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var noSigpipe: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigpipe, socklen_t(MemoryLayout<Int32>.size))
 
@@ -69,22 +73,27 @@ public enum HookSocket {
                 let n = write(fd, raw.baseAddress! + offset, raw.count - offset)
                 if n > 0 { offset += n; continue }
                 if n < 0 && errno == EINTR { continue }
+                if n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    var pollFD = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                    guard poll(
+                        &pollFD, 1, remainingMilliseconds(until: deadline)
+                    ) == 1 else { return false }
+                    continue
+                }
                 return false
             }
             return true
         }
         guard written else { return false }
-
-        // Best-effort read of the one-line reply so the daemon's write does
-        // not hit a closed pipe; the content is ignored.
-        var chunk = [UInt8](repeating: 0, count: 4096)
-        var received = 0
-        while received < 1 << 16 {
-            let n = read(fd, &chunk, chunk.count)
-            guard n > 0 else { break }
-            received += n
-            if chunk[0..<n].contains(0x0A) { break }
-        }
+        _ = shutdown(fd, SHUT_WR)
         return true
+    }
+
+    private static func remainingMilliseconds(until deadline: UInt64) -> Int32 {
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now < deadline else { return 0 }
+        return Int32(
+            min(UInt64(Int32.max), (deadline - now + 999_999) / 1_000_000)
+        )
     }
 }

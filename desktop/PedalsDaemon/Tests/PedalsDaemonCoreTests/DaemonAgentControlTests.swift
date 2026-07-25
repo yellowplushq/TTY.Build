@@ -92,8 +92,14 @@ final class DaemonAgentControlTests: XCTestCase {
         )
         XCTAssertTrue(HookSocket.send(line, socketPath: home.socketPath))
 
-        let reply = try send(["cmd": "agents"])
-        let list = try XCTUnwrap(reply["agents"] as? [[String: Any]])
+        var list: [[String: Any]] = []
+        let deadline = Date().addingTimeInterval(1)
+        repeat {
+            let reply = try send(["cmd": "agents"])
+            list = reply["agents"] as? [[String: Any]] ?? []
+            if !list.isEmpty { break }
+            Thread.sleep(forTimeInterval: 0.01)
+        } while Date() < deadline
         XCTAssertEqual(list.count, 1)
         XCTAssertEqual(list[0]["id"] as? String, "wire-1")
         XCTAssertEqual(list[0]["state"] as? String, "waiting")

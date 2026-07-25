@@ -10,6 +10,9 @@ public struct ControlRequest: Decodable, Sendable {
     public var cmd: String
     public var id: Int?
     public var reset: Bool?
+    /// Hook reporters are one-way. Avoid writing an acknowledgement after
+    /// their bounded client has already closed the socket.
+    public var noReply: Bool?
     // agent-event (AgentMonitor)
     public var agent: String?
     public var event: String?
@@ -181,13 +184,16 @@ public final class ControlServer: @unchecked Sendable {
                 let line = buffer.prefix(upTo: newline)
                 buffer.removeSubrange(...newline)
                 guard !line.isEmpty else { continue }
-                let response: ControlResponse
                 if let request = try? JSONDecoder().decode(ControlRequest.self, from: line) {
-                    response = handler(request)
+                    let response = handler(request)
+                    if request.noReply == true { continue }
+                    guard writeAll(fd: fd, data: response.encoded()) else { return }
                 } else {
-                    response = .error("malformed request")
+                    guard writeAll(
+                        fd: fd,
+                        data: ControlResponse.error("malformed request").encoded()
+                    ) else { return }
                 }
-                guard writeAll(fd: fd, data: response.encoded()) else { return }
             }
             if buffer.count > 1 << 20 { return } // oversized garbage; drop connection
             let n = read(fd, &chunk, chunk.count)

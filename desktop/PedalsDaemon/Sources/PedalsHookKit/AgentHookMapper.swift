@@ -124,7 +124,8 @@ public enum AgentHookMapper {
     public static func report(
         slug: String, event: String, stdinData: Data,
         fallbackSessionId: String? = nil,
-        codexHome: URL? = nil
+        codexHome: URL? = nil,
+        resolveCodexMetadata: Bool = true
     ) -> HookReport? {
         // Deterministic per agent process, so repeated events without a
         // stdin session id coalesce into one record.
@@ -139,7 +140,7 @@ public enum AgentHookMapper {
                 return nil
             }
             let sessionID = stdin.sessionId ?? fallback
-            let codexMetadata = slug == "codex"
+            let codexMetadata = slug == "codex" && resolveCodexMetadata
                 ? CodexSessionMetadata.resolve(sessionID: sessionID, home: codexHome)
                 : nil
             // Codex's hook `session_title` is often the animated terminal

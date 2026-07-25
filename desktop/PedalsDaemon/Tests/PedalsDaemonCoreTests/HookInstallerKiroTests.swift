@@ -68,11 +68,11 @@ final class HookInstallerKiroTests: XCTestCase {
             spawn[0]["command"] as? String,
             "\(reporter) kiro --event session-start \(HookInstaller.sentinel)"
         )
-        XCTAssertEqual(spawn[0]["timeout_ms"] as? Int, 5000)
+        XCTAssertEqual(spawn[0]["timeout_ms"] as? Int, 1000)
         XCTAssertNil(spawn[0]["type"])
         XCTAssertNil(spawn[0]["timeout"])
         let stop = try XCTUnwrap(hooks["stop"] as? [[String: Any]])
-        XCTAssertEqual(stop[0]["timeout_ms"] as? Int, 10000)
+        XCTAssertEqual(stop[0]["timeout_ms"] as? Int, 1000)
         XCTAssertEqual(try state(), .installed)
     }
 

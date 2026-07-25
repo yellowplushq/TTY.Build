@@ -81,6 +81,12 @@ thin; the hook protocol is the stable surface. Initial agent support starts
 narrow (Claude Code first, then Codex) with the panel honestly labelling
 per-agent capability differences.
 
+The reporter is a fail-open observer, never part of the agent's control path:
+stdin and local-socket work have a 100 ms budget, requests are one-way, every
+failure exits zero and silently, and installed synchronous hooks have a one
+second host-enforced ceiling. Codex title/transcript metadata is resolved in
+the daemon rather than read twice inside each high-frequency hook.
+
 When the shim tier ships later, it appears in the same panel as a separate
 opt-in toggle per agent ("Enable remote control"), distinct from hook
 installation.
@@ -169,10 +175,12 @@ the existing pairing / new-session guidance.
 The existing invariant holds unchanged: the Worker stores identities,
 bindings, counts, and push endpoint state — never content.
 
-- **Worker/D1 see aggregate counts only** — per-computer
+- **D1 sees aggregate counts only** — per-computer
   running/blocked/recently-done counts, structurally identical to the
-  alive-TTY count. A transient Live Activity envelope adds only a state,
-  timestamp, alert bit, and opaque ciphertext; it is never persisted.
+  alive-TTY count. A Live Activity envelope adds only a state, timestamp,
+  alert bit, and opaque ciphertext. The newest envelope is retained
+  temporarily in the per-client PushCoordinator Durable Object for delivery
+  retries, never in D1, and is deleted when its agent is no longer active.
 - **Rich content is E2EE.** Agent names, project names, current-action
   lines, and last messages travel from the daemon to the app over the
   existing E2EE relay channel, peer to terminal bytes.

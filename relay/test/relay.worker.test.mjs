@@ -2928,6 +2928,86 @@ describe("agent counts and alerts", () => {
     }
   });
 
+  test("rich activity failure retains the encrypted card for a forced retry", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    expect((await bind(client, computer)).status).toBe(201);
+    const host = (await connect(computer.computerId, computer.hostToken)).peer;
+    const coordinator = env.PUSH_COORDINATOR.getByName(client.clientId);
+    try {
+      host.ws.send(
+        snapshotWithAgents("Retry Mac", [], { running: 1, waiting: 0, done: 0 }),
+      );
+      await waitFor(async () => ((await state(client)).agentsRunning === 1 ? true : null));
+      expect(
+        (await api("/v2/clients/me/push-endpoints/liveactivity-update", {
+          method: "PUT",
+          token: client.statusToken,
+          body: {
+            token: "fb".repeat(32),
+            environment: "sandbox",
+            activityId: "retry-rich-card",
+          },
+        })).status,
+      ).toBe(200);
+
+      const before = Date.now();
+      const delivered = await coordinator.fetch("https://push.internal/activity", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: client.clientId,
+          computerId: computer.computerId,
+          activity: {
+            eventID: "55555555-5555-4555-8555-555555555555",
+            state: "running",
+            updatedAt: Date.now(),
+            alert: false,
+            sealed: btoa("retryable-agent-ciphertext"),
+          },
+        }),
+      });
+      expect(delivered.status).toBe(202);
+
+      const endpoint = await env.DB
+        .prepare(
+          `SELECT retry_not_before AS retryNotBefore,
+                  failure_count AS failureCount,
+                  last_failure_reason AS lastFailureReason
+             FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
+        )
+        .bind(client.clientId)
+        .first();
+      expect(Number(endpoint.failureCount)).toBe(1);
+      expect(endpoint.lastFailureReason).toBe("TooManyRequests");
+      expect(Number(endpoint.retryNotBefore) * 1000).toBeGreaterThanOrEqual(
+        before + 3_599_000,
+      );
+
+      await runInDurableObject(coordinator, async (_instance, durableState) => {
+        const cached = await durableState.storage.get("recentAgentActivities");
+        expect(cached[computer.computerId].activity.eventID)
+          .toBe("55555555-5555-4555-8555-555555555555");
+        expect(cached[computer.computerId].highPriority).toBe(true);
+        expect(await durableState.storage.get("pendingClientIds"))
+          .toEqual([client.clientId]);
+        expect(await durableState.storage.get("forceClientIds"))
+          .toEqual([client.clientId]);
+        expect(await durableState.storage.getAlarm()).toBeLessThan(before + 1_000);
+      });
+      await runDurableObjectAlarm(coordinator);
+      await runInDurableObject(coordinator, async (_instance, durableState) => {
+        expect(await durableState.storage.getAlarm()).toBeGreaterThanOrEqual(
+          before + 3_599_000,
+        );
+        expect(await durableState.storage.get("pendingClientIds"))
+          .toEqual([client.clientId]);
+      });
+    } finally {
+      closeAll(host);
+    }
+  });
+
   test("aggregate refresh preserves a recent agent card, then ends it", async () => {
     const computer = await createComputer();
     const client = await createClient();
@@ -2970,8 +3050,8 @@ describe("agent counts and alerts", () => {
       expect(delivered.status).toBe(202);
       await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
 
-      // A later TTY-only projection still contains the done aggregate but no
-      // encrypted agent envelope. It must not replace the rich agent card.
+      // A later TTY-only projection reuses the retained opaque envelope, so
+      // the terminal count advances without replacing the rich agent card.
       host.ws.send(
         snapshotWithAgents(
           "Island Mac",
@@ -2994,8 +3074,8 @@ describe("agent counts and alerts", () => {
         )
         .bind(client.clientId)
         .first();
-      expect(Number(active.lastSequence)).toBe(completed.sequence);
-      expect(Number(active.lastTotal)).toBe(1);
+      expect(Number(active.lastSequence)).toBe(terminalChanged.sequence);
+      expect(Number(active.lastTotal)).toBe(2);
       expect(terminalChanged.sequence).toBeGreaterThan(completed.sequence);
 
       host.ws.send(
@@ -3011,6 +3091,9 @@ describe("agent counts and alerts", () => {
         .bind(client.clientId)
         .first();
       expect(ended).toBeNull();
+      await runInDurableObject(coordinator, async (_instance, durableState) => {
+        expect(await durableState.storage.get("recentAgentActivities")).toBeUndefined();
+      });
     } finally {
       closeAll(host);
     }

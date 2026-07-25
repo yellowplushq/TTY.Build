@@ -15,13 +15,13 @@ extension HookInstaller {
         /// (copilot event, reporter event, timeoutSec). Copilot alone has a
         /// distinct `notification` reporter event.
         static let events: [(event: String, reporterEvent: String, timeout: Int)] = [
-            ("sessionStart", "session-start", 5),
-            ("userPromptSubmitted", "prompt", 10),
-            ("preToolUse", "tool", 5),
-            ("postToolUse", "busy", 5),
-            ("agentStop", "stop", 10),
-            ("sessionEnd", "session-end", 5),
-            ("notification", "notification", 10),
+            ("sessionStart", "session-start", 1),
+            ("userPromptSubmitted", "prompt", 1),
+            ("preToolUse", "tool", 1),
+            ("postToolUse", "busy", 1),
+            ("agentStop", "stop", 1),
+            ("sessionEnd", "session-end", 1),
+            ("notification", "notification", 1),
         ]
 
         static func canonicalData(reporterPath: String) -> Data {

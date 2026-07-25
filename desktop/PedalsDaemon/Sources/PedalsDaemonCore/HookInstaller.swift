@@ -109,7 +109,7 @@ public enum HookInstaller {
         claudeEvents.map { event, matcher in
             GroupedHookEntry(
                 event: event, matcher: matcher,
-                command: reporterCommand(reporterPath, slug: "claude"), timeout: 10
+                command: reporterCommand(reporterPath, slug: "claude"), timeout: 1
             )
         }
     }

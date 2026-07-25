@@ -47,14 +47,14 @@ final class HookInstallerCopilotTests: XCTestCase {
             start[0]["bash"] as? String,
             "\(reporter) copilot --event session-start \(HookInstaller.sentinel)"
         )
-        XCTAssertEqual(start[0]["timeoutSec"] as? Int, 5)
+        XCTAssertEqual(start[0]["timeoutSec"] as? Int, 1)
         XCTAssertNil(start[0]["command"], "copilot uses `bash`, not `command`")
         let notify = try XCTUnwrap(hooks["notification"] as? [[String: Any]])
         XCTAssertEqual(
             notify[0]["bash"] as? String,
             "\(reporter) copilot --event notification \(HookInstaller.sentinel)"
         )
-        XCTAssertEqual(notify[0]["timeoutSec"] as? Int, 10)
+        XCTAssertEqual(notify[0]["timeoutSec"] as? Int, 1)
         XCTAssertEqual(try state(), .installed)
     }
 

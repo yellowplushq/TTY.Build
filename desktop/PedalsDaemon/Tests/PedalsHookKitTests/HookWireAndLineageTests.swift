@@ -26,6 +26,7 @@ final class HookWireAndLineageTests: XCTestCase {
             try JSONSerialization.jsonObject(with: line) as? [String: Any]
         )
         XCTAssertEqual(object["cmd"] as? String, "agent-event")
+        XCTAssertEqual(object["noReply"] as? Bool, true)
         XCTAssertEqual(object["agent"] as? String, "claude")
         XCTAssertEqual(object["event"] as? String, "tool")
         XCTAssertEqual(object["agentSessionId"] as? String, "s-1")
@@ -73,5 +74,31 @@ final class HookWireAndLineageTests: XCTestCase {
     func testLineageRejectsNonPositivePids() {
         XCTAssertTrue(ProcessLineage.walk(from: 0).isEmpty)
         XCTAssertTrue(ProcessLineage.walk(from: -5).isEmpty)
+    }
+
+    func testHookInputDoesNotWaitForAnInheritedOpenWriter() throws {
+        var descriptors: [Int32] = [0, 0]
+        XCTAssertEqual(pipe(&descriptors), 0)
+        defer {
+            close(descriptors[0])
+            close(descriptors[1])
+        }
+        let payload = Data(#"{"session_id":"bounded"}"#.utf8)
+        XCTAssertEqual(
+            payload.withUnsafeBytes {
+                Darwin.write(descriptors[1], $0.baseAddress, $0.count)
+            },
+            payload.count
+        )
+
+        let started = Date()
+        let received = HookInput.read(
+            fd: descriptors[0],
+            cap: 1024,
+            budgetMilliseconds: 30
+        )
+
+        XCTAssertEqual(received, payload)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.25)
     }
 }

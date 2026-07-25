@@ -40,12 +40,12 @@ extension HookInstaller {
 
         static func entries(reporterPath: String) -> [GroupedHookEntry] {
             [
-                ("SessionStart", "session-start", 5),
-                ("UserPromptSubmit", "prompt", 10),
-                ("PreToolUse", "tool", 10),
-                ("PermissionRequest", "ask", 10),
-                ("Stop", "stop", 10),
-                ("SessionEnd", "session-end", 5),
+                ("SessionStart", "session-start", 1),
+                ("UserPromptSubmit", "prompt", 1),
+                ("PreToolUse", "tool", 1),
+                ("PermissionRequest", "ask", 1),
+                ("Stop", "stop", 1),
+                ("SessionEnd", "session-end", 1),
             ].map { event, reporterEvent, timeout in
                 GroupedHookEntry(
                     event: event, matcher: nil,

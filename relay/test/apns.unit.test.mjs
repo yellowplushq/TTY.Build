@@ -363,6 +363,15 @@ test("retains Live Activity transitions while offline with event-specific expiry
     },
     { state: { ...state, totalRunning: 0, sequence: 13 }, event: "end" },
   );
+  await client.send(
+    {
+      token: "immediate-token",
+      surface: "liveactivity-update",
+      environment: "production",
+      immediate: true,
+    },
+    { state: { ...state, totalRunning: 1, sequence: 14 }, event: "update" },
+  );
 
   assert.equal(requests[0].init.headers["apns-expiration"], "1800000900");
   assert.equal(requests[0].init.headers["apns-priority"], "5");
@@ -372,6 +381,8 @@ test("retains Live Activity transitions while offline with event-specific expiry
   const endPayload = JSON.parse(requests[1].init.body);
   assert.equal(endPayload.aps["dismissal-date"], 1_800_000_000);
   assert.equal(endPayload.aps["stale-date"], 1_800_000_300);
+  assert.equal(requests[2].init.headers["apns-priority"], "10");
+  assert.equal(JSON.parse(requests[2].init.body).aps.alert, undefined);
 });
 
 test("classifies APNs responses for endpoint lifecycle and retry", () => {

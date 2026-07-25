@@ -53,8 +53,7 @@ final class HookInstallerKimiTests: XCTestCase {
         XCTAssertTrue(config.contains(
             "command = \"\(reporter) kimi --event session-start \(HookInstaller.sentinel)\""
         ))
-        XCTAssertTrue(config.contains("timeout = 5"))
-        XCTAssertTrue(config.contains("timeout = 10"))
+        XCTAssertTrue(config.contains("timeout = 1"))
         XCTAssertTrue(config.hasSuffix("\n"))
         XCTAssertEqual(try state(), .installed)
     }

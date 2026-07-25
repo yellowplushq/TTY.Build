@@ -7,6 +7,7 @@ const FORCE_KEY = "forceClientIds";
 const INFLIGHT_KEY = "inflightClientIds";
 const INFLIGHT_FORCE_KEY = "inflightForceClientIds";
 const TOKEN_CACHE_KEY = "apnsProviderToken";
+const RECENT_AGENT_ACTIVITIES_KEY = "recentAgentActivities";
 const COALESCE_MILLISECONDS = 150;
 const RETRY_MILLISECONDS = 15 * 60_000;
 const FATAL_RETRY_MILLISECONDS = 24 * 60 * 60_000;
@@ -22,11 +23,11 @@ function fingerprint(state) {
   return JSON.stringify(state);
 }
 
-async function deliveryApnsId(endpointId, sequence, event) {
+async function deliveryApnsId(endpointId, deliveryKey, event) {
   const digest = new Uint8Array(
     await crypto.subtle.digest(
       "SHA-256",
-      new TextEncoder().encode(`${endpointId}:${sequence}:${event}`),
+      new TextEncoder().encode(`${endpointId}:${deliveryKey}:${event}`),
     ),
   ).slice(0, 16);
   digest[6] = (digest[6] & 0x0f) | 0x40;
@@ -99,6 +100,88 @@ export class PushCoordinator extends DurableObject {
       if (alarm === null || alarm > desired) await this.ctx.storage.setAlarm(desired);
     });
     return new Response(null, { status: 202 });
+  }
+
+  async cacheAgentActivity(computerId, activity, highPriority) {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const cached = await this.ctx.storage.get(RECENT_AGENT_ACTIVITIES_KEY);
+      const activities = cached && typeof cached === "object" && !Array.isArray(cached)
+        ? cached
+        : {};
+      activities[computerId] = {
+        computerId,
+        activity,
+        highPriority: highPriority === true,
+      };
+      await this.ctx.storage.put(RECENT_AGENT_ACTIVITIES_KEY, activities);
+    });
+  }
+
+  async recentAgentActivity(state) {
+    const cached = await this.ctx.storage.get(RECENT_AGENT_ACTIVITIES_KEY);
+    if (!cached || typeof cached !== "object" || Array.isArray(cached)) return null;
+    const activeComputerIds = new Set(
+      state.computers
+        .filter((computer) =>
+          computer.online &&
+          computer.agents &&
+          computer.agents.running + computer.agents.waiting + computer.agents.done > 0)
+        .map((computer) => computer.id),
+    );
+    const retained = {};
+    for (const [computerId, entry] of Object.entries(cached)) {
+      if (
+        activeComputerIds.has(computerId) &&
+        entry &&
+        typeof entry === "object" &&
+        entry.computerId === computerId &&
+        entry.activity &&
+        typeof entry.activity === "object"
+      ) {
+        retained[computerId] = entry;
+      }
+    }
+    const retainedKeys = Object.keys(retained);
+    if (retainedKeys.length !== Object.keys(cached).length) {
+      if (retainedKeys.length === 0) {
+        await this.ctx.storage.delete(RECENT_AGENT_ACTIVITIES_KEY);
+      } else {
+        await this.ctx.storage.put(RECENT_AGENT_ACTIVITIES_KEY, retained);
+      }
+    }
+    return Object.values(retained).sort(
+      (lhs, rhs) => Number(rhs.activity.updatedAt) - Number(lhs.activity.updatedAt),
+    )[0] ?? null;
+  }
+
+  async markAgentActivityDelivered(computerId, eventID) {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const cached = await this.ctx.storage.get(RECENT_AGENT_ACTIVITIES_KEY);
+      const entry = cached?.[computerId];
+      if (!entry || entry.activity?.eventID !== eventID || entry.highPriority !== true) return;
+      await this.ctx.storage.put(RECENT_AGENT_ACTIVITIES_KEY, {
+        ...cached,
+        [computerId]: { ...entry, highPriority: false },
+      });
+    });
+  }
+
+  async clearAgentActivities() {
+    await this.ctx.storage.delete(RECENT_AGENT_ACTIVITIES_KEY);
+  }
+
+  async enqueueActivityRetry(clientId, retryAt) {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const [pending, forced, alarm] = await Promise.all([
+        this.ctx.storage.get(PENDING_KEY),
+        this.ctx.storage.get(FORCE_KEY),
+        this.ctx.storage.getAlarm(),
+      ]);
+      await this.ctx.storage.put(PENDING_KEY, mergeIds(pending, [clientId]));
+      await this.ctx.storage.put(FORCE_KEY, mergeIds(forced, [clientId]));
+      const desired = Math.max(Date.now() + COALESCE_MILLISECONDS, retryAt);
+      if (alarm === null || alarm > desired) await this.ctx.storage.setAlarm(desired);
+    });
   }
 
   async alarm() {
@@ -185,7 +268,11 @@ export class PushCoordinator extends DurableObject {
     });
   }
 
-  /// Direct, non-persistent agent content for the aggregate Live Activity.
+  /// Direct E2EE agent content for the aggregate Live Activity. The newest
+  /// opaque envelope per computer is retained in this client's Durable Object
+  /// only while that computer has an active agent. This lets the normal
+  /// sequence/retry queue re-attach the card after a terminal count change
+  /// without storing agent content in D1.
   /// A working edge may consume a push-to-start token so an agent appears even
   /// while the phone app is backgrounded. Later working refreshes are silent;
   /// waiting/error/done retain their attention alerts.
@@ -243,10 +330,19 @@ export class PushCoordinator extends DurableObject {
       (endpoint) => endpoint.surface === "liveactivity-update",
     );
     const mayStartActivity = activity.state === "running" || activity.alert;
+    const highPriority = endpoints.some(
+      (endpoint) =>
+        endpoint.surface === "liveactivity-update" &&
+        Number(endpoint.lastTotalRunning ?? 0) !== totalActive,
+    );
+    await this.cacheAgentActivity(computerId, activity, highPriority);
+    let earliestRetryAt = null;
+    let deliveredRichActivity = false;
 
     for (const endpoint of endpoints) {
       const retryNotBefore = Number(endpoint.retryNotBefore);
       if (Number.isFinite(retryNotBefore) && retryNotBefore > Math.floor(now / 1000)) {
+        earliestRetryAt = earlier(earliestRetryAt, retryNotBefore * 1000);
         continue;
       }
       if (
@@ -270,10 +366,18 @@ export class PushCoordinator extends DurableObject {
             surface: endpoint.surface,
             environment: endpoint.environment,
             apnsId: await deliveryApnsId(endpoint.id, activity.eventID, event),
+            immediate: highPriority,
           },
           payload,
         );
       } catch (error) {
+        const retryAt = now + RETRY_MILLISECONDS;
+        await this.deferEndpoint(
+          endpoint.id,
+          retryAt,
+          error instanceof Error ? error.message : "ProviderConfigurationError",
+        );
+        earliestRetryAt = earlier(earliestRetryAt, retryAt);
         console.error(
           "agent activity build/send failed",
           error instanceof Error ? error.message : error,
@@ -292,6 +396,7 @@ export class PushCoordinator extends DurableObject {
         } else {
           await this.markDelivered(endpoint.id, state, totalActive);
         }
+        deliveredRichActivity = true;
       } else if (outcome.outcome === "invalidate") {
         if (endpoint.surface === "liveactivity-update") {
           await this.deleteEndpoint(endpoint.id);
@@ -303,13 +408,25 @@ export class PushCoordinator extends DurableObject {
           ? retryAtFromHeader(outcome.retryAfter, now)
           : now + FATAL_RETRY_MILLISECONDS;
         await this.deferEndpoint(endpoint.id, retryAt, outcome.reason ?? "APNsError");
+        earliestRetryAt = earlier(earliestRetryAt, retryAt);
       }
+    }
+    if (Number.isFinite(earliestRetryAt)) {
+      await this.enqueueActivityRetry(clientId, earliestRetryAt);
+    } else if (deliveredRichActivity) {
+      await this.markAgentActivityDelivered(computerId, activity.eventID);
     }
     return new Response(null, { status: 202 });
   }
 
   async deliverClient(clientId, force) {
     const state = await aggregateClientState(this.env.DB, clientId);
+    const totalAgents =
+      (state.agentsRunning ?? 0) + (state.agentsWaiting ?? 0)
+      + (state.agentsDone ?? 0);
+    const recentAgent = totalAgents > 0
+      ? await this.recentAgentActivity(state)
+      : null;
     const result = await this.env.DB
       .prepare(
         `SELECT id, surface, apns_environment AS environment, token,
@@ -324,6 +441,7 @@ export class PushCoordinator extends DurableObject {
       .all();
     const endpoints = result.results;
     if (endpoints.length === 0) {
+      if (totalAgents === 0) await this.clearAgentActivities();
       await this.clearClientDeferral(clientId);
       return null;
     }
@@ -339,9 +457,9 @@ export class PushCoordinator extends DurableObject {
     const totalActive =
       state.totalRunning + (state.agentsRunning ?? 0) + (state.agentsWaiting ?? 0)
       + (state.agentsDone ?? 0);
-    const totalAgents =
-      (state.agentsRunning ?? 0) + (state.agentsWaiting ?? 0)
-      + (state.agentsDone ?? 0);
+    const hasUpdateEndpoint = endpoints.some(
+      (endpoint) => endpoint.surface === "liveactivity-update",
+    );
 
     for (const endpoint of endpoints) {
       const surface = endpoint.surface;
@@ -355,33 +473,58 @@ export class PushCoordinator extends DurableObject {
 
       if (surface === "liveactivity-start") {
         // APNs requires a visible alert for push-to-start. Ordinary count
-        // invalidations must never create one; only a rich /activity agent
-        // event uses this token. The foreground app starts terminal-only
-        // activity locally.
-        continue;
-      } else if (surface === "liveactivity-update") {
-        // ActivityKit ContentState updates are full replacements. Aggregate
-        // state intentionally has no rich E2EE agent envelope, so sending it
-        // while an agent exists would erase the most recent agent card and
-        // make the island fall back to terminal content. Direct /activity
-        // delivery owns Live Activity updates until the agent count reaches
-        // zero; aggregate delivery then resumes to show terminals or end it.
-        if (totalAgents > 0) continue;
+        // invalidations never start an activity; a retained rich envelope may
+        // retry a failed agent-driven start without losing the card.
+        if (
+          !recentAgent ||
+          hasUpdateEndpoint ||
+          totalActive === 0 ||
+          Number(endpoint.lastTotalRunning ?? 0) > 0 ||
+          (recentAgent.activity.state !== "running" && recentAgent.activity.alert !== true)
+        ) continue;
         payload = {
           state,
-          event: totalActive === 0 ? "end" : "update",
+          event: "start",
+          activity: {
+            ...recentAgent.activity,
+            computerId: recentAgent.computerId,
+          },
         };
+      } else if (surface === "liveactivity-update") {
+        // ActivityKit ContentState updates are full replacements. Aggregate
+        // state must carry the retained opaque envelope while an agent exists,
+        // otherwise the full replacement would erase the concrete agent card.
+        if (totalAgents > 0) {
+          if (!recentAgent) continue;
+          payload = {
+            state,
+            event: "update",
+            activity: {
+              ...recentAgent.activity,
+              computerId: recentAgent.computerId,
+            },
+          };
+        } else {
+          payload = {
+            state,
+            event: totalActive === 0 ? "end" : "update",
+          };
+        }
       }
 
+      const deliveryKey = recentAgent && payload.activity
+        ? `${state.sequence}:${recentAgent.activity.eventID}`
+        : state.sequence;
       const request = {
         token: endpoint.token,
         surface,
         environment: endpoint.environment,
         apnsId: await deliveryApnsId(
           endpoint.id,
-          state.sequence,
+          deliveryKey,
           payload.event ?? surface,
         ),
+        immediate: recentAgent?.highPriority === true,
       };
       let outcome;
       try {
@@ -412,8 +555,15 @@ export class PushCoordinator extends DurableObject {
         if (endActivity) {
           await this.deleteEndpoint(endpoint.id);
           await this.resetStartBaseline(clientId);
+          await this.clearAgentActivities();
         } else {
           await this.markDelivered(endpoint.id, state, totalActive);
+          if (recentAgent && payload.activity) {
+            await this.markAgentActivityDelivered(
+              recentAgent.computerId,
+              recentAgent.activity.eventID,
+            );
+          }
         }
         pushed = true;
       } else if (outcome.outcome === "invalidate") {

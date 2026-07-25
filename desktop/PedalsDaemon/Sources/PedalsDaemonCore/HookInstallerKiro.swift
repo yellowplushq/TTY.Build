@@ -19,9 +19,9 @@ extension HookInstaller {
 
         /// (kiro event, reporter event, timeout in milliseconds).
         static let events: [(event: String, reporterEvent: String, timeoutMs: Int)] = [
-            ("agentSpawn", "session-start", 5000),
-            ("userPromptSubmit", "prompt", 10000),
-            ("stop", "stop", 10000),
+            ("agentSpawn", "session-start", 1000),
+            ("userPromptSubmit", "prompt", 1000),
+            ("stop", "stop", 1000),
         ]
 
         static func command(reporterPath: String, reporterEvent: String) -> String {
@@ -219,4 +219,3 @@ extension HookInstaller {
         }
     }
 }
-

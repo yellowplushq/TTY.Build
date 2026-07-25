@@ -19,23 +19,22 @@ if let index = arguments.firstIndex(of: "--event"), index + 1 < arguments.count 
     argvEvent = arguments[index + 1]
 }
 
-// Read stdin, capped at 1 MiB; oversized payloads are truncated (and then
-// fail JSON parsing, which degrades to no enrichment / silent exit below).
-let stdinCap = 1 << 20
-var input = Data()
-var chunk = [UInt8](repeating: 0, count: 64 * 1024)
-while input.count < stdinCap {
-    let n = read(0, &chunk, min(chunk.count, stdinCap - input.count))
-    if n > 0 { input.append(contentsOf: chunk[0..<n]) }
-    else if n < 0 && errno == EINTR { continue }
-    else { break }
-}
+// A malformed hook host must not keep the agent waiting for stdin EOF.
+let input = HookInput.read()
 
 let report: HookReport?
 if slug == "claude" {
     report = ClaudeHookMapper.report(stdinData: input)
 } else if let event = argvEvent {
-    report = AgentHookMapper.report(slug: slug, event: event, stdinData: input)
+    // The daemon resolves Codex's title/transcript from its read-only state
+    // database after accepting the event. Avoid doing the same SQLite work
+    // synchronously inside Codex's hook process.
+    report = AgentHookMapper.report(
+        slug: slug,
+        event: event,
+        stdinData: input,
+        resolveCodexMetadata: false
+    )
 } else {
     report = nil // non-Claude slugs require --event
 }

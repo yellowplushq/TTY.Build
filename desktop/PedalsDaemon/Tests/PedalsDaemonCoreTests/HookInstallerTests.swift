@@ -71,7 +71,7 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertNil(stop[0]["matcher"], "Stop takes no matcher")
         let entry = try XCTUnwrap((stop[0]["hooks"] as? [[String: Any]])?.first)
         XCTAssertEqual(entry["type"] as? String, "command")
-        XCTAssertEqual(entry["timeout"] as? Int, 10)
+        XCTAssertEqual(entry["timeout"] as? Int, 1)
 
         XCTAssertEqual(
             try HookInstaller.state(reporterPath: reporter, settingsPath: settingsPath),

@@ -438,7 +438,11 @@ export function createApnsClient(
         "apns-topic": config.topic,
         "apns-priority":
           surface === "liveactivity-update" &&
-          (payload?.event === "end" || payload?.activity?.alert === true)
+          (
+            payload?.event === "end" ||
+            payload?.activity?.alert === true ||
+            value.immediate === true
+          )
             ? "10"
             : config.priority,
         // Non-zero expiration lets APNs retain ActivityKit transitions while

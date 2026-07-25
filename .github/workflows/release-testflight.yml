@@ -143,8 +143,10 @@ jobs:
             ios/Pedals.xcodeproj/project.pbxproj)"
           version_count="$(rg -c "MARKETING_VERSION = $release_version;" \
             ios/Pedals.xcodeproj/project.pbxproj)"
-          [[ "$build_count" == "10" ]]
-          [[ "$version_count" == "10" ]]
+          source_build_count="$(rg -c 'CURRENT_PROJECT_VERSION:' ios/project.yml)"
+          source_version_count="$(rg -c 'MARKETING_VERSION:' ios/project.yml)"
+          [[ "$build_count" == "$((source_build_count * 2))" ]]
+          [[ "$version_count" == "$((source_version_count * 2))" ]]
           git diff --check
 
       - name: Run protocol and service tests

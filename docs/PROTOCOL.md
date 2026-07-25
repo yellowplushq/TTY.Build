@@ -489,7 +489,12 @@ The daemon sends the most recent agent as transient host metadata:
 ```
 
 The Worker immediately fans this to bound clients' Live Activity endpoints
-and never stores it. `sealed` is `ChaChaPoly(key_activity, aad=computerId)`
+and retains only the newest opaque envelope per active computer in that
+client's PushCoordinator Durable Object. The envelope is removed when the
+agent disappears or the Activity ends and is never written to D1. This lets a
+durable terminal-count retry re-attach the concrete agent card instead of
+replacing it with aggregate fallback content. `sealed` is
+`ChaChaPoly(key_activity, aad=computerId)`
 over the compact agent/project/prompt/action/message snapshot, where
 
 ```
@@ -513,12 +518,14 @@ use `{"ok":true,...}` or `{"ok":false,"err":"..."}`.
 
 `agent-event` is sent by the `pedals-hook` reporter (installed into coding
 agents' hook settings by `pedals hooks install` or the menu bar app):
-`{"cmd":"agent-event","agent":"claude","event":"session-start|prompt|ask|tool|
+`{"cmd":"agent-event","noReply":true,"agent":"claude","event":"session-start|prompt|ask|tool|
 busy|notify|compact|stop|session-end","agentSessionId":"...","sessionName"?,
 "cwd"?,"prompt"?,"message"?,"action"?,"agentError"?,
 "lineage":[{"pid","name","tty"?}]}`. The daemon's AgentMonitor applies the
 state machine, matches `lineage`/`tty` against daemon-owned PTYs, and broadcasts
-the encrypted `agents` ctl snapshot. For managed sessions, the daemon's live
+the encrypted `agents` ctl snapshot. `noReply=true` makes reporter delivery
+strictly one-way: stdin and socket operations are bounded and the daemon does
+not write an acknowledgement after the reporter exits. For managed sessions, the daemon's live
 terminal title is authoritative for `sessionName`; otherwise an agent adapter
 may report an explicit session-name field.
 `pedals hooks install|uninstall|status <agent>` manages ten agents — claude,
