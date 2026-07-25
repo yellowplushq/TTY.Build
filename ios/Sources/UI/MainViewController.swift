@@ -191,7 +191,7 @@ final class MainViewController: UIViewController {
 
         tabStrip.translatesAutoresizingMaskIntoConstraints = false
         tabStrip.onSelect = { [weak self] id in self?.showTerminal(id) }
-        tabStrip.onClose = { [weak self] id in self?.manager.closeTerminal(id) }
+        tabStrip.onClose = { [weak self] id in self?.closeTerminal(id) }
         tabStrip.onHome = { [weak self] in self?.switchTo(.home, animated: true) }
         tabStrip.onCreate = { [weak self] in self?.createOnOnlyComputer() }
         tabStrip.setHomeSelected(true)
@@ -267,10 +267,17 @@ final class MainViewController: UIViewController {
     // MARK: - Bindings
 
     private func bind() {
-        manager.$terminals
-            .combineLatest(manager.$activeID)
-            .sink { [weak self] terminals, activeId in
-                self?.apply(terminals: terminals, activeId: activeId)
+        Publishers.CombineLatest3(
+            manager.$terminals,
+            manager.$activeID,
+            manager.$agentRows
+        )
+            .sink { [weak self] terminals, activeId, agentRows in
+                self?.apply(
+                    terminals: terminals,
+                    activeId: activeId,
+                    agentRows: agentRows
+                )
             }
             .store(in: &cancellables)
 
@@ -423,13 +430,19 @@ final class MainViewController: UIViewController {
 
     // MARK: - Terminal/page reconciliation
 
-    private func apply(terminals: [Terminal], activeId: TerminalID?) {
+    private func apply(
+        terminals: [Terminal],
+        activeId: TerminalID?,
+        agentRows emittedAgentRows: [AgentRow]? = nil
+    ) {
         // A pan drives page frames/visibility by hand; a mid-gesture rebuild
         // would hide the page being dragged. Re-run once the gesture settles.
         if isPanning {
             deferredApply = true
             return
         }
+        let agentRows = emittedAgentRows ?? manager.agentRows
+        let previousOrderedIds = orderedIds
         let ids = Set(terminals.map(\.id))
         orderedIds = terminals.map(\.id)
 
@@ -476,10 +489,20 @@ final class MainViewController: UIViewController {
         }
 
         // The visible terminal vanished (closed / computer offline): fall back
-        // to the active terminal's page if it still exists, else Home. Home
-        // itself is never yanked away by data changes.
+        // to its closest surviving predecessor, then successor, before using
+        // the manager's active terminal. Home itself is never yanked away by
+        // data changes.
         if case .terminal(let id) = visiblePage, pages[id] == nil {
-            if let activeId, pages[activeId] != nil {
+            let oldIndex = previousOrderedIds.firstIndex(of: id)
+            let predecessor = oldIndex.flatMap { index in
+                previousOrderedIds[..<index].reversed().first { pages[$0] != nil }
+            }
+            let successor = oldIndex.flatMap { index in
+                previousOrderedIds.dropFirst(index + 1).first { pages[$0] != nil }
+            }
+            if let replacement = predecessor ?? successor {
+                visiblePage = .terminal(replacement)
+            } else if let activeId, pages[activeId] != nil {
                 visiblePage = .terminal(activeId)
             } else {
                 visiblePage = .home
@@ -491,10 +514,13 @@ final class MainViewController: UIViewController {
         let showComputer = computerCount > 1
         tabStrip.update(
             tabs: terminals.map {
-                .init(
+                let agent = TerminalManager.agent(for: $0.id, in: agentRows)
+                return .init(
                     id: $0.id,
                     title: showComputer ? "\($0.computerName) · \($0.info.title)" : $0.info.title,
-                    alive: $0.info.alive && !$0.closing
+                    alive: $0.info.alive && !$0.closing,
+                    agent: agent?.agent,
+                    agentState: agent?.state
                 )
             },
             activeId: visibleId
@@ -596,6 +622,26 @@ final class MainViewController: UIViewController {
     }
 
     // MARK: - Page navigation
+
+    /// Closing the visible tab commits its replacement immediately, before
+    /// the daemon asynchronously confirms removal. Besides feeling direct,
+    /// this prevents the removal emission from ever presenting Home between
+    /// the old and replacement terminal pages.
+    private func closeTerminal(_ id: TerminalID) {
+        guard manager.terminal(id)?.closing == false else { return }
+        if visibleId == id {
+            if let replacementID = TerminalManager.replacementID(
+                afterClosing: id,
+                in: manager.terminals
+            ) {
+                showTerminal(replacementID)
+            } else {
+                setVisiblePage(.home)
+                tabStrip.update(tabs: tabStrip.tabs, activeId: nil)
+            }
+        }
+        manager.closeTerminal(id)
+    }
 
     /// Instant switch (tab strip tap, own-create echo).
     private func showTerminal(_ id: TerminalID) {

@@ -1,7 +1,8 @@
+import PedalsKit
 import UIKit
 
 /// Safari-style top tab strip: one pill per session, the active pill expanded
-/// with settings/title/close, inactive pills collapsed to icons. Widths follow
+/// with icon/title/close, inactive pills collapsed to icons. Widths follow
 /// Chrome's squeeze model (inactive tabs compress before the strip scrolls),
 /// and `setSwitchProgress` lets a content-area pan drive the expand/collapse
 /// interpolation so the strip follows the finger.
@@ -10,6 +11,10 @@ final class TabStripView: UIView {
         let id: TerminalID
         var title: String
         var alive: Bool
+        /// A managed coding agent occupying this terminal. Nil uses the
+        /// standard terminal symbol.
+        var agent: String?
+        var agentState: AgentState?
     }
 
     var onSelect: ((TerminalID) -> Void)?
@@ -235,6 +240,27 @@ final class TabStripView: UIView {
         // A lone tab claims the whole strip.
         guard tabs.count > 1 else { return [available] }
 
+        let rememberedIndex = lastActiveId.flatMap { id in
+            tabs.firstIndex { $0.id == id }
+        }
+        let expandedIndex = activeIndex ?? rememberedIndex
+
+        // On Home before any terminal has been focused, two tabs otherwise
+        // have no expansion owner and sit as two tiny icons beside a large
+        // hole. Keep the first one collapsed and let the final tab absorb the
+        // entire remainder (including wide landscape layouts).
+        if tabs.count == 2, expandedIndex == nil {
+            let inactive = min(
+                Self.maxInactiveWidth,
+                max(Self.minInactiveWidth, available - Self.spacing - Self.minActiveWidth)
+            )
+            let expanded = max(
+                Self.minActiveWidth,
+                available - Self.spacing - inactive
+            )
+            return [inactive, expanded]
+        }
+
         var active = Self.maxActiveWidth
         var inactive = (available - spacingTotal - active) / (count - 1)
         if inactive < Self.maxInactiveWidth {
@@ -248,8 +274,6 @@ final class TabStripView: UIView {
 
         // No active tab (Home page visible): the last-focused pill keeps its
         // expanded width (restyled inactive by layoutStrip); the rest collapse.
-        let expandedIndex = activeIndex
-            ?? lastActiveId.flatMap { id in tabs.firstIndex { $0.id == id } }
         return tabs.indices.map { index in
             var expansion: CGFloat = index == expandedIndex ? 1 : 0
             if let transition {
@@ -299,14 +323,16 @@ final class TabStripView: UIView {
     }
 }
 
-/// One tab pill. Expanded (active) it shows title · close; collapsed it shows
-/// just the session glyph. `setExpansion` cross-fades between the two.
+/// One tab pill. Expanded (active) it shows icon · title · close; collapsed it
+/// keeps the icon centered. A managed agent replaces the terminal symbol and
+/// carries the same state badge used on Home.
 final class TabPillView: UIView {
     var onTap: (() -> Void)?
     var onClose: (() -> Void)?
 
     private let glass = GlassView()
-    private let glyphLabel = UILabel()
+    private let iconView = UIImageView()
+    private let badgeView = UIView()
     private let titleLabel = UILabel()
     private let closeButton = UIButton(type: .system)
 
@@ -317,10 +343,17 @@ final class TabPillView: UIView {
         glass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         addSubview(glass)
 
-        glyphLabel.font = .monospacedSystemFont(ofSize: 15, weight: .semibold)
-        glyphLabel.textColor = .secondaryLabel
-        glyphLabel.textAlignment = .center
-        glass.contentView.addSubview(glyphLabel)
+        iconView.contentMode = .scaleAspectFit
+        iconView.tintColor = .secondaryLabel
+        iconView.accessibilityIdentifier = "pedals.tab.icon"
+        glass.contentView.addSubview(iconView)
+
+        badgeView.layer.cornerRadius = 4
+        badgeView.layer.borderWidth = 1.5
+        badgeView.layer.borderColor = PedalsTheme.uiCanvas.cgColor
+        badgeView.isHidden = true
+        badgeView.accessibilityIdentifier = "pedals.tab.agent-state-badge"
+        glass.contentView.addSubview(badgeView)
 
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.textColor = .label
@@ -346,22 +379,37 @@ final class TabPillView: UIView {
 
     private var alive = true
     private var isActive = false
+    private var expansion: CGFloat = 0
+    private var badgeBlinking = false
 
     func configure(tab: TabStripView.Tab) {
         titleLabel.text = tab.title
-        let glyph = tab.title.first.map { String($0).lowercased() } ?? ">"
-        glyphLabel.text = tab.alive ? glyph : "×"
-        glyphLabel.textColor = tab.alive ? .secondaryLabel : PedalsTheme.uiCritical
+        if let agent = tab.agent {
+            if let asset = HomeViewController.agentAssetName(agent),
+               let image = UIImage(named: asset)
+            {
+                iconView.image = image.withRenderingMode(.alwaysTemplate)
+            } else {
+                iconView.image = UIImage(systemName: "sparkles")
+            }
+        } else {
+            iconView.image = UIImage(
+                systemName: "terminal",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+            )
+        }
+        configureBadge(state: tab.agent == nil ? nil : tab.agentState)
         alive = tab.alive
+        accessibilityLabel = tab.title
         applyTitleStyle()
     }
 
     /// 0 = collapsed icon pill, 1 = fully expanded active pill.
     func setExpansion(_ amount: CGFloat, isActive: Bool) {
+        expansion = amount
         self.isActive = isActive
         titleLabel.alpha = amount
         closeButton.alpha = amount
-        glyphLabel.alpha = 1 - amount
         // An expanded pill's × always works — an expanded pill remains while
         // Home is the visible page (no active tab).
         closeButton.isUserInteractionEnabled = amount > 0.5
@@ -373,6 +421,63 @@ final class TabPillView: UIView {
     /// dims to the secondary color instead of the active label color.
     private func applyTitleStyle() {
         titleLabel.textColor = alive && isActive ? .label : .secondaryLabel
+        iconView.tintColor = alive
+            ? (isActive ? .label : .secondaryLabel)
+            : PedalsTheme.uiCritical
+    }
+
+    /// Home hides the badge for a completed agent; the tab follows the same
+    /// rule. Running blinks, while waiting/error remain steady semantic dots.
+    private func configureBadge(state: AgentState?) {
+        guard let state, state != .done else {
+            badgeView.isHidden = true
+            setBadgeBlinking(false)
+            return
+        }
+        badgeView.isHidden = false
+        badgeView.backgroundColor = Self.stateColor(state)
+        setBadgeBlinking(state == .running)
+    }
+
+    private func setBadgeBlinking(_ blinking: Bool) {
+        guard blinking != badgeBlinking else {
+            if blinking { startBlinkAnimation() }
+            return
+        }
+        badgeBlinking = blinking
+        if blinking {
+            startBlinkAnimation()
+        } else {
+            badgeView.layer.removeAnimation(forKey: "pedals.tab.badge.blink")
+        }
+    }
+
+    private func startBlinkAnimation() {
+        guard badgeBlinking,
+              badgeView.layer.animation(forKey: "pedals.tab.badge.blink") == nil
+        else { return }
+        let blink = CABasicAnimation(keyPath: "opacity")
+        blink.fromValue = 1.0
+        blink.toValue = 0.25
+        blink.duration = 0.9
+        blink.autoreverses = true
+        blink.repeatCount = .infinity
+        blink.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        badgeView.layer.add(blink, forKey: "pedals.tab.badge.blink")
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { startBlinkAnimation() }
+    }
+
+    private static func stateColor(_ state: AgentState) -> UIColor {
+        switch state {
+        case .waiting: PedalsTheme.uiWarning
+        case .error: PedalsTheme.uiCritical
+        case .running: PedalsTheme.uiContent
+        case .done: PedalsTheme.uiSuccess
+        }
     }
 
     @objc private func didTap() {
@@ -382,18 +487,33 @@ final class TabPillView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let bounds = glass.contentView.bounds
-        glyphLabel.frame = bounds
+        let iconSize: CGFloat = 18
+        let collapsedX = (bounds.width - iconSize) / 2
+        let expandedX: CGFloat = 14
+        let iconX = collapsedX + (expandedX - collapsedX) * expansion
+        iconView.frame = CGRect(
+            x: iconX,
+            y: (bounds.height - iconSize) / 2,
+            width: iconSize,
+            height: iconSize
+        )
+        let badgeSize: CGFloat = 8
+        badgeView.frame = CGRect(
+            x: iconView.frame.maxX - badgeSize / 2 + 1,
+            y: iconView.frame.minY - badgeSize / 2 + 1,
+            width: badgeSize,
+            height: badgeSize
+        )
+
         let side: CGFloat = 30
         closeButton.frame = CGRect(
             x: bounds.width - side - 6, y: (bounds.height - side) / 2, width: side, height: side
         )
-        // Keep the title optically centered by mirroring the close button's
-        // footprint on the leading side.
-        let inset = bounds.width - closeButton.frame.minX + 2
+        let titleX = iconView.frame.maxX + 9
         titleLabel.frame = CGRect(
-            x: inset,
+            x: titleX,
             y: 0,
-            width: max(0, bounds.width - inset * 2),
+            width: max(0, closeButton.frame.minX - titleX - 2),
             height: bounds.height
         )
     }

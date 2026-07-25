@@ -7,7 +7,7 @@ import WidgetKit
 struct TTYLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TTYActivityAttributes.self) { context in
-            ActivityCard(state: context.state, stale: context.isStale)
+            ActivityCard(state: context.state)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .foregroundStyle(PedalsTheme.content)
@@ -23,7 +23,7 @@ struct TTYLiveActivityWidget: Widget {
                     // separate expanded regions lets the bottom region choose
                     // an intrinsic centered width, which is what caused the
                     // conspicuous empty margins in the old island.
-                    ActivityCard(state: state, stale: context.isStale)
+                    ActivityCard(state: state)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 7)
@@ -41,25 +41,30 @@ struct TTYLiveActivityWidget: Widget {
     }
 }
 
-private struct ActivityCard: View {
+struct ActivityCard: View {
     let state: TTYActivityAttributes.ContentState
-    let stale: Bool
+    var redactsSensitiveContent = true
 
     var body: some View {
         let presentation = ActivityPresentation(state: state)
         Group {
             if presentation.showsAgent {
                 AgentActivityRow(
-                    state: state, presentation: presentation, stale: stale
+                    state: state,
+                    presentation: presentation,
+                    redactsSensitiveContent: redactsSensitiveContent
                 )
             } else {
-                TerminalActivityCard(state: state, stale: stale)
+                TerminalActivityCard(
+                    state: state,
+                    redactsSensitiveContent: redactsSensitiveContent
+                )
             }
         }
     }
 }
 
-private struct ActivityPresentation {
+struct ActivityPresentation {
     let agent: AgentActivity.Content?
     let agentState: AgentState?
 
@@ -84,7 +89,7 @@ private struct ActivityPresentation {
 
 /// The same visual anchor as a Home agent row: the real agent mark with its
 /// current state sitting on the mark's top-right corner.
-private struct AgentMark: View {
+struct AgentMark: View {
     let presentation: ActivityPresentation
     var size: CGFloat = 22
 
@@ -170,7 +175,7 @@ private struct AgentIdentity: View {
     }
 }
 
-private struct TerminalIdentity: View {
+struct TerminalIdentity: View {
     var body: some View {
         Label("Pedals", systemImage: "terminal.fill")
             .font(.subheadline.weight(.semibold))
@@ -180,7 +185,7 @@ private struct TerminalIdentity: View {
 
 /// Text instead of a filled capsule keeps the expanded island at the same
 /// visual weight as Home's trailing relative time.
-private struct ActivityStateLabel: View {
+struct ActivityStateLabel: View {
     let presentation: ActivityPresentation
 
     var body: some View {
@@ -194,9 +199,18 @@ private struct ActivityStateLabel: View {
 private struct ActivityBody: View {
     let state: TTYActivityAttributes.ContentState
     let presentation: ActivityPresentation
-    let stale: Bool
+    let redactsSensitiveContent: Bool
 
+    @ViewBuilder
     var body: some View {
+        if redactsSensitiveContent {
+            content.privacySensitive()
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 7) {
             if presentation.showsAgent {
                 Text(ActivityStyle.primary(for: presentation, state: state))
@@ -216,9 +230,8 @@ private struct ActivityBody: View {
                     .lineLimit(1)
             }
 
-            ActivityMetrics(state: state, stale: stale)
+            ActivityMetrics(state: state)
         }
-        .privacySensitive()
     }
 }
 
@@ -227,28 +240,14 @@ private struct ActivityBody: View {
 private struct AgentActivityRow: View {
     let state: TTYActivityAttributes.ContentState
     let presentation: ActivityPresentation
-    let stale: Bool
+    let redactsSensitiveContent: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             AgentMark(presentation: presentation)
                 .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(ActivityStyle.primary(for: presentation, state: state))
-                        .font(.headline)
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    ActivityStateLabel(presentation: presentation)
-                }
-                Text(ActivityStyle.detail(for: presentation))
-                    .font(.subheadline)
-                    .foregroundStyle(ActivityStyle.color(for: presentation))
-                    .lineLimit(2)
-                ActivityMetrics(state: state, stale: stale)
-            }
-            .privacySensitive()
+            content
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(presentation.agentName)
@@ -258,11 +257,34 @@ private struct AgentActivityRow: View {
                 + ActivityStyle.detail(for: presentation)
         )
     }
+
+    @ViewBuilder
+    private var content: some View {
+        let content = VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(ActivityStyle.primary(for: presentation, state: state))
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                ActivityStateLabel(presentation: presentation)
+            }
+            Text(ActivityStyle.detail(for: presentation))
+                .font(.subheadline)
+                .foregroundStyle(ActivityStyle.color(for: presentation))
+                .lineLimit(2)
+            ActivityMetrics(state: state)
+        }
+        if redactsSensitiveContent {
+            content.privacySensitive()
+        } else {
+            content
+        }
+    }
 }
 
 private struct TerminalActivityCard: View {
     let state: TTYActivityAttributes.ContentState
-    let stale: Bool
+    let redactsSensitiveContent: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -273,23 +295,21 @@ private struct TerminalActivityCard: View {
                     .font(.caption2.weight(.semibold))
             }
             ActivityBody(
-                state: state, presentation: ActivityPresentation(state: state), stale: stale
+                state: state,
+                presentation: ActivityPresentation(state: state),
+                redactsSensitiveContent: redactsSensitiveContent
             )
         }
     }
 }
 
-private struct ActivityMetrics: View {
+struct ActivityMetrics: View {
     let state: TTYActivityAttributes.ContentState
-    let stale: Bool
 
     var body: some View {
         HStack(spacing: 6) {
             if let summary = state.activityCountSummary {
                 Text(summary)
-            }
-            if stale {
-                Text("Updating…")
             }
         }
         .font(.caption2)
@@ -336,7 +356,7 @@ private struct CompactValue: View {
     }
 }
 
-private enum ActivityStyle {
+enum ActivityStyle {
     static func label(for presentation: ActivityPresentation) -> String {
         switch presentation.agentState {
         case .waiting: "Needs you"
@@ -401,7 +421,7 @@ private enum ActivityStyle {
         case .waiting: "Waiting for your input"
         case .error: "Agent hit an error"
         case .done: "Task completed"
-        case nil: "Agent activity is updating…"
+        case nil: "Agent activity"
         }
     }
 

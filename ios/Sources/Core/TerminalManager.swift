@@ -349,6 +349,19 @@ final class TerminalManager {
         computer(id: id.computerID)?.closeSession(id: id.sid)
     }
 
+    /// Tab-close selection rule: prefer the preceding tab, using the next tab
+    /// only when the first tab is being removed.
+    static func replacementID(
+        afterClosing id: TerminalID,
+        in terminals: [Terminal]
+    ) -> TerminalID? {
+        guard let index = terminals.firstIndex(where: { $0.id == id }) else { return nil }
+        if index > terminals.startIndex {
+            return terminals[index - 1].id
+        }
+        return terminals.dropFirst().first?.id
+    }
+
     /// Forwards an agent dismissal to its daemon (the Home list is
     /// bidirectional): the record disappears for every client until the
     /// agent's next hook event. The caller hides the row optimistically.
@@ -514,13 +527,18 @@ final class TerminalManager {
         placeAsOwnWhenSeen.remove(id)
         heldAppends.removeValue(forKey: id)
         guard let index = terminals.firstIndex(where: { $0.id == id }) else { return }
+        let replacementID = Self.replacementID(afterClosing: id, in: terminals)
         terminals.remove(at: index)
+
         if activeID == id {
-            // Prefer the tab that took the closed one's slot, else the last.
-            let fallback = terminals.indices.contains(index)
-                ? terminals[index] : terminals.last
-            activeID = nil
-            if let fallback { activate(fallback.id) }
+            // Tab-close convention is to return to the tab immediately before
+            // the closed one. The first tab has no predecessor, so it uses the
+            // following tab instead.
+            if let replacementID {
+                activate(replacementID)
+            } else {
+                activeID = nil
+            }
         }
     }
 }
