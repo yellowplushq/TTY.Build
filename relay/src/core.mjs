@@ -326,6 +326,25 @@ export async function notifyPushCoordinator(env, clientIds, { force = false } = 
   }
 }
 
+/// Best-effort, non-persistent rich Live Activity update. The Worker routes
+/// the server-visible state and opaque ciphertext directly to each client's
+/// ActivityKit endpoints; D1 remains limited to aggregate counts.
+export async function notifyAgentActivity(env, computerId, activity) {
+  if (!env.PUSH_COORDINATOR || !isId(computerId)) return;
+  const clientIds = await clientIdsForComputer(env.DB, computerId);
+  for (const clientId of clientIds) {
+    const response = await env.PUSH_COORDINATOR.getByName(clientId).fetch(
+      "https://push.internal/activity",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clientId, computerId, activity }),
+      },
+    );
+    if (!response.ok) throw new Error(`push coordinator returned ${response.status}`);
+  }
+}
+
 async function relayRevocation(env, computerId, path, principalId = undefined) {
   if (!env.RELAY_CHANNELS || !isId(computerId)) return;
   const headers = new Headers({ "x-pedals-computer-id": computerId });
@@ -385,6 +404,9 @@ export async function aggregateClientState(db, clientId, nowSeconds = Math.floor
         `SELECT b.computer_id AS id,
                 COALESCE(NULLIF(s.host_name, ''), 'Mac ' || substr(b.computer_id, 1, 6)) AS name,
                 COALESCE(s.running_terminal_count, 0) AS reportedCount,
+                COALESCE(s.agents_running, 0) AS agentsRunning,
+                COALESCE(s.agents_waiting, 0) AS agentsWaiting,
+                COALESCE(s.agents_done, 0) AS agentsDone,
                 COALESCE(s.online, 0) AS online,
                 COALESCE(s.updated_at, 0) AS updatedAt
            FROM client_computers b
@@ -399,13 +421,21 @@ export async function aggregateClientState(db, clientId, nowSeconds = Math.floor
   ]);
   const delivery = deliveryResult.results?.[0];
 
-  const computers = bindings.results.map((row) => ({
-    id: row.id,
-    name: row.name,
-    runningTTYCount: Number(row.online) === 1 ? Number(row.reportedCount) : 0,
-    online: Number(row.online) === 1,
-    updatedAt: isoDate(Number(row.updatedAt)),
-  }));
+  const computers = bindings.results.map((row) => {
+    const online = Number(row.online) === 1;
+    return {
+      id: row.id,
+      name: row.name,
+      runningTTYCount: online ? Number(row.reportedCount) : 0,
+      agents: {
+        running: online ? Number(row.agentsRunning) : 0,
+        waiting: online ? Number(row.agentsWaiting) : 0,
+        done: online ? Number(row.agentsDone) : 0,
+      },
+      online,
+      updatedAt: isoDate(Number(row.updatedAt)),
+    };
+  });
   const newestUpdate = bindings.results.reduce(
     (latest, row) => Math.max(latest, Number(row.updatedAt)),
     0,
@@ -413,6 +443,9 @@ export async function aggregateClientState(db, clientId, nowSeconds = Math.floor
   return {
     version: SNAPSHOT_VERSION,
     totalRunning: computers.reduce((sum, computer) => sum + computer.runningTTYCount, 0),
+    agentsRunning: computers.reduce((sum, computer) => sum + computer.agents.running, 0),
+    agentsWaiting: computers.reduce((sum, computer) => sum + computer.agents.waiting, 0),
+    agentsDone: computers.reduce((sum, computer) => sum + computer.agents.done, 0),
     computers,
     updatedAt: isoDate(newestUpdate || nowSeconds),
     sequence: Number(delivery?.sequence ?? 0),
@@ -431,16 +464,22 @@ export async function writeDirectoryProjection(
   {
     online,
     runningTerminalCount,
+    agents = { running: 0, waiting: 0, done: 0 },
     hostName = undefined,
   },
 ) {
   const db = env.DB;
   const now = Math.floor(Date.now() / 1000);
+  const validCount = (value) =>
+    Number.isSafeInteger(value) && value >= 0 && value <= 255;
   if (
     typeof online !== "boolean" ||
-    !Number.isSafeInteger(runningTerminalCount) ||
-    runningTerminalCount < 0 ||
-    runningTerminalCount > 255
+    !validCount(runningTerminalCount) ||
+    !agents ||
+    typeof agents !== "object" ||
+    !validCount(agents.running) ||
+    !validCount(agents.waiting) ||
+    !validCount(agents.done)
   ) {
     throw new TypeError("invalid terminal directory projection");
   }
@@ -451,6 +490,9 @@ export async function writeDirectoryProjection(
     const current = await db
       .prepare(
         `SELECT running_terminal_count AS runningTerminalCount,
+                agents_running AS agentsRunning,
+                agents_waiting AS agentsWaiting,
+                agents_done AS agentsDone,
                 host_name AS hostName, online, revision
            FROM computer_state
           WHERE computer_id = ?1`,
@@ -459,10 +501,14 @@ export async function writeDirectoryProjection(
       .first();
     if (!current) return false;
     const nextCount = online ? runningTerminalCount : 0;
+    const nextAgents = online ? agents : { running: 0, waiting: 0, done: 0 };
     const nextHostName = hostName ?? current.hostName;
     const nextOnline = online ? 1 : 0;
     const changed =
       nextCount !== Number(current.runningTerminalCount) ||
+      nextAgents.running !== Number(current.agentsRunning) ||
+      nextAgents.waiting !== Number(current.agentsWaiting) ||
+      nextAgents.done !== Number(current.agentsDone) ||
       nextHostName !== current.hostName ||
       nextOnline !== Number(current.online);
 
@@ -472,6 +518,9 @@ export async function writeDirectoryProjection(
         db.prepare(
           `UPDATE computer_state
               SET running_terminal_count = ?2,
+                  agents_running = ?8,
+                  agents_waiting = ?9,
+                  agents_done = ?10,
                   host_name = ?3,
                   online = ?4,
                   revision = revision + 1,
@@ -487,6 +536,9 @@ export async function writeDirectoryProjection(
           now,
           Number(current.revision),
           mutationId,
+          nextAgents.running,
+          nextAgents.waiting,
+          nextAgents.done,
         ),
         db.prepare(
           `UPDATE client_delivery_state

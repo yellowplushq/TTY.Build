@@ -20,7 +20,21 @@ targets:
     dependencies:
       - package: PedalsDaemon
         product: PedalsDaemonCore
+      # Built for the copy-into-bundle step below; not linked.
+      - package: PedalsDaemon
+        product: pedals-hook
+        link: false
       - package: Sparkle
+    postBuildScripts:
+      - name: Embed pedals-hook reporter
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          cp "$BUILT_PRODUCTS_DIR/pedals-hook" \
+            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/pedals-hook"
+          codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" \
+            --options runtime \
+            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/pedals-hook"
     scheme:
       testTargets: []
     info:

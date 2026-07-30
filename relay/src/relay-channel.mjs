@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { isId, writeDirectoryProjection } from "./core.mjs";
+import { isId, notifyAgentActivity, writeDirectoryProjection } from "./core.mjs";
 
 const HOST_TAG = "role:host";
 const CLIENT_TAG = "role:client";
@@ -89,6 +89,63 @@ function sameSessions(lhs, rhs) {
   );
 }
 
+const MAX_AGENT_COUNT = 255;
+
+function zeroAgentCounts() {
+  return { running: 0, waiting: 0, done: 0 };
+}
+
+// Per-state coding-agent aggregate counts: the only agent-derived data the
+// Worker ever sees (bare numbers; the rich list stays E2EE). Running and
+// `done` is a short-lived completion projection. Absent on snapshots from
+// older daemons (all-zero).
+function canonicalAgentCounts(value, { lenient = false } = {}) {
+  if (value === undefined) return zeroAgentCounts();
+  if (!value || Array.isArray(value) || typeof value !== "object") return null;
+  const keys = Object.keys(value);
+  if (!lenient && keys.length !== 2 && keys.length !== 3) return null;
+  for (const key of ["running", "waiting"]) {
+    if (
+      !Number.isSafeInteger(value[key]) ||
+      value[key] < 0 ||
+      value[key] > MAX_AGENT_COUNT
+    ) {
+      return null;
+    }
+  }
+  const done = value.done ?? 0;
+  if (!Number.isSafeInteger(done) || done < 0 || done > MAX_AGENT_COUNT) return null;
+  if (!lenient && keys.some((key) => !["running", "waiting", "done"].includes(key))) {
+    return null;
+  }
+  return { running: value.running, waiting: value.waiting, done };
+}
+
+function sameAgentCounts(lhs, rhs) {
+  return lhs.running === rhs.running && lhs.waiting === rhs.waiting && lhs.done === rhs.done;
+}
+
+const ACTIVITY_EVENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const ACTIVITY_SEALED = /^[A-Za-z0-9+/]+={0,2}$/;
+const ACTIVITY_STATES = new Set(["running", "waiting", "error", "done"]);
+
+function canonicalAgentActivity(value) {
+  if (!value || Array.isArray(value) || typeof value !== "object") return null;
+  if (
+    Object.keys(value).length !== 5 ||
+    !ACTIVITY_EVENT_ID.test(value.eventID) ||
+    !ACTIVITY_STATES.has(value.state) ||
+    !Number.isSafeInteger(value.updatedAt) || value.updatedAt < 0 ||
+    typeof value.alert !== "boolean" ||
+    typeof value.sealed !== "string" || value.sealed.length > 2_700 ||
+    !ACTIVITY_SEALED.test(value.sealed) ||
+    (value.alert && value.state === "running")
+  ) {
+    return null;
+  }
+  return value;
+}
+
 function emptyDirectory() {
   return {
     computerId: null,
@@ -96,6 +153,7 @@ function emptyDirectory() {
     online: false,
     hostName: null,
     sessions: [],
+    agents: zeroAgentCounts(),
     updatedAt: 0,
     deadlineAt: null,
     reason: null,
@@ -106,8 +164,13 @@ function emptyDirectory() {
 function normalizedDirectory(value) {
   if (!value || typeof value !== "object") return emptyDirectory();
   const sessions = canonicalDirectorySessions(value.sessions);
+  // Lenient: directories stored before the agents field existed normalize
+  // to zero counts, and a stored shape from an older schema (extra keys)
+  // must not reset the whole directory.
+  const agents = canonicalAgentCounts(value.agents, { lenient: true });
   if (
     sessions === null ||
+    agents === null ||
     !Number.isSafeInteger(value.revision) ||
     value.revision < 0 ||
     typeof value.online !== "boolean" ||
@@ -126,6 +189,7 @@ function normalizedDirectory(value) {
     online: value.online,
     hostName: value.hostName,
     sessions: value.online ? sessions : [],
+    agents: value.online ? agents : zeroAgentCounts(),
     updatedAt: value.updatedAt,
     deadlineAt: value.online ? value.deadlineAt : null,
     reason: typeof value.reason === "string" ? value.reason : null,
@@ -446,15 +510,33 @@ export class RelayChannel extends DurableObject {
     }
     if (value.type === "host-snapshot") {
       const sessions = canonicalDirectorySessions(value.sessions);
+      // `agents` is optional so pre-agent daemons keep working; when present
+      // the snapshot has exactly {type, hostName, sessions, agents}.
+      const expectedKeys = value.agents === undefined ? 3 : 4;
+      const agents = canonicalAgentCounts(value.agents);
       if (
-        Object.keys(value).length !== 3 ||
+        Object.keys(value).length !== expectedKeys ||
         !validHostName(value.hostName) ||
-        sessions === null
+        sessions === null ||
+        agents === null
       ) {
         this.retireSocket(ws, 1008, "invalid host snapshot");
         return;
       }
-      this.enqueueDirectoryTask(() => this.applyHostSnapshot(ws, state, value.hostName, sessions));
+      this.enqueueDirectoryTask(() =>
+        this.applyHostSnapshot(ws, state, value.hostName, sessions, agents));
+      return;
+    }
+    if (value.type === "agent-activity") {
+      const activity = canonicalAgentActivity(value.activity);
+      if (Object.keys(value).length !== 2 || activity === null) {
+        this.retireSocket(ws, 1008, "invalid agent activity");
+        return;
+      }
+      this.enqueueDirectoryTask(async () => {
+        if (!this.isActiveHostSlot(ws) || this.activeHostForSend("control") !== ws) return;
+        await notifyAgentActivity(this.env, state.computerId, activity);
+      });
       return;
     }
     if (value.type === "host-offline" && Object.keys(value).length === 1) {
@@ -505,19 +587,21 @@ export class RelayChannel extends DurableObject {
     await this.storeDirectory({ ...current, deadlineAt });
   }
 
-  async applyHostSnapshot(ws, state, hostName, sessions) {
+  async applyHostSnapshot(ws, state, hostName, sessions, agents) {
     if (!this.isActiveHostSlot(ws) || this.activeHostForSend("control") !== ws) return;
     const current = await this.loadDirectory();
     const changed =
       !current.online ||
       current.hostName !== hostName ||
-      !sameSessions(current.sessions, sessions);
+      !sameSessions(current.sessions, sessions) ||
+      !sameAgentCounts(current.agents, agents);
     const next = {
       computerId: state.computerId,
       revision: changed ? current.revision + 1 : current.revision,
       online: true,
       hostName,
       sessions,
+      agents,
       updatedAt: changed ? Math.floor(Date.now() / 1000) : current.updatedAt,
       deadlineAt: Date.now() + HOST_DIRECTORY_LEASE_MS,
       reason: null,
@@ -541,6 +625,7 @@ export class RelayChannel extends DurableObject {
       online: false,
       hostName: current.hostName,
       sessions: [],
+      agents: zeroAgentCounts(),
       updatedAt: Math.floor(Date.now() / 1000),
       deadlineAt: null,
       reason,
@@ -558,6 +643,7 @@ export class RelayChannel extends DurableObject {
       runningTerminalCount: directory.online
         ? directory.sessions.filter((entry) => entry.alive).length
         : 0,
+      agents: directory.online ? directory.agents : zeroAgentCounts(),
       hostName: directory.hostName ?? undefined,
     });
     await this.storeDirectory({ ...directory, projectionPending: false });

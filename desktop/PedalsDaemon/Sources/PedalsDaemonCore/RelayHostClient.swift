@@ -27,6 +27,17 @@ public final class RelayHostClient: @unchecked Sendable {
     /// splice, see PROTOCOL.md §4).
     private var replayedThrough: [Int: UInt64] = [:]
     private var lastReportedDirectory: [RelayMetadata.DirectoryEntry]?
+    private var lastReportedAgentCounts: RelayMetadata.AgentCounts?
+    private var lastReportedActivity: AgentActivity.Content?
+    private var lastActivitySentAt = Date.distantPast
+    private var pendingActivityReport: DispatchWorkItem?
+    /// Latest AgentMonitor snapshot; replayed to late-joining clients right
+    /// after the sessions list. Rich agent content is E2EE-only — it travels
+    /// exclusively in ctl frames, never in relay metadata; the host snapshot
+    /// carries only the per-state counts.
+    private var lastAgents: [AgentInfo] = []
+    /// Client-requested agent dismissal, forwarded to the AgentMonitor.
+    public var onDismissAgent: (@Sendable (String) -> Void)?
 
     private var _state: State = .stopped
     /// A client hello arrived on the current control connection.
@@ -123,6 +134,10 @@ public final class RelayHostClient: @unchecked Sendable {
         sessionLinks.removeAll()
         replayedThrough.removeAll()
         lastReportedDirectory = nil
+        lastReportedAgentCounts = nil
+        lastReportedActivity = nil
+        pendingActivityReport?.cancel()
+        pendingActivityReport = nil
         _clientSeen = false
     }
 
@@ -150,6 +165,10 @@ public final class RelayHostClient: @unchecked Sendable {
             _state = .connected
             reportDirectoryLocked(force: true)
             control?.send(.sessions(list: sessions.list()))
+            control?.send(.agents(list: lastAgents))
+            if let recent = lastAgents.first {
+                sendAgentActivityLocked(recent, alert: false)
+            }
         case .connecting:
             _state = .connecting
             _clientSeen = false
@@ -196,6 +215,7 @@ public final class RelayHostClient: @unchecked Sendable {
             guard who == .client else { return }
             _clientSeen = true
             control?.send(.sessions(list: sessions.list()))
+            control?.send(.agents(list: lastAgents))
         case .create(let cwd, let cols, let rows, let req):
             do {
                 let id = try sessions.create(cwd: cwd, cols: cols, rows: rows)
@@ -210,7 +230,9 @@ public final class RelayHostClient: @unchecked Sendable {
             if !sessions.close(id: id) {
                 control?.send(.err(msg: "no such session \(id)"))
             }
-        case .sessions, .created, .title, .exit, .ready, .requestReplay:
+        case .dismissAgent(let agentId):
+            onDismissAgent?(agentId)
+        case .sessions, .agents, .created, .title, .exit, .ready, .requestReplay:
             break // host→client only; ignore if mirrored back
         case .err(let msg, _):
             FileHandle.standardError.write(Data("client error: \(msg)\n".utf8))
@@ -257,13 +279,132 @@ public final class RelayHostClient: @unchecked Sendable {
         }
     }
 
+    // MARK: - Agent events
+
+    /// Publishes an AgentMonitor snapshot to every control client and keeps
+    /// it for replay on the next client hello / reconnect. Also folds the
+    /// per-state aggregate counts into the server-visible host snapshot —
+    /// bare numbers only, the rich list stays E2EE.
+    public func broadcastAgents(_ list: [AgentInfo]) {
+        queue.async { [self] in
+            lastAgents = list
+            guard started else { return }
+            control?.send(.agents(list: list))
+            reportDirectoryLocked(force: false)
+            scheduleAgentActivityLocked(list.first)
+        }
+    }
+
+    /// Alerting Live Activity updates replace the retired ordinary-notification
+    /// channel. Waiting/error arrive after a short ordering delay so the
+    /// debounced host snapshot reaches D1 first; done already has its own
+    /// monitor-side hold-back window.
+    public func broadcastAgentAttention(_ info: AgentInfo) {
+        queue.asyncAfter(deadline: .now() + 0.55) { [weak self] in
+            guard let self, self.started,
+                  let current = self.lastAgents.first(where: { $0.id == info.id }),
+                  current.state == info.state
+            else { return }
+            self.pendingActivityReport?.cancel()
+            self.pendingActivityReport = nil
+            self.sendAgentActivityLocked(current, alert: true)
+        }
+    }
+
+    static let doneActivityLifetime: TimeInterval = 75
+    static let runningActivityUpdateFloor: TimeInterval = 10
+
+    static func agentCounts(
+        of list: [AgentInfo], now: Date = .now
+    ) -> RelayMetadata.AgentCounts {
+        var running = 0, waiting = 0, done = 0
+        for agent in list {
+            switch agent.state {
+            case .running: running += 1
+            // Error parks the agent on the user just like waiting; the
+            // server-visible aggregate does not distinguish them.
+            case .waiting, .error: waiting += 1
+            case .done:
+                if now.timeIntervalSince1970 - agent.updatedAt < doneActivityLifetime {
+                    done += 1
+                }
+            }
+        }
+        let cap = RelayMetadata.AgentCounts.maxCount
+        return .init(
+            running: min(running, cap),
+            waiting: min(waiting, cap),
+            done: min(done, cap)
+        )
+    }
+
+    private func scheduleAgentActivityLocked(_ recent: AgentInfo?) {
+        pendingActivityReport?.cancel()
+        pendingActivityReport = nil
+        guard let recent else {
+            lastReportedActivity = nil
+            return
+        }
+
+        let content = AgentActivity.Content(info: recent)
+        guard content != lastReportedActivity else { return }
+        let elapsed = Date().timeIntervalSince(lastActivitySentAt)
+        if recent.state != .running || lastReportedActivity == nil
+            || elapsed >= Self.runningActivityUpdateFloor
+        {
+            sendAgentActivityLocked(recent, alert: false)
+            return
+        }
+
+        let delay = Self.runningActivityUpdateFloor - elapsed
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, let latest = self.lastAgents.first else { return }
+            self.pendingActivityReport = nil
+            self.sendAgentActivityLocked(latest, alert: false)
+        }
+        pendingActivityReport = item
+        queue.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func sendAgentActivityLocked(_ info: AgentInfo, alert: Bool) {
+        let content = AgentActivity.Content(info: info)
+        do {
+            let key = AgentActivity.activityKey(secret: identity.computer.secret)
+            let sealed = try AgentActivity.seal(
+                content, key: key, computerID: identity.computer.computerID
+            )
+            guard sealed.count <= RelayMetadata.AgentActivityEnvelope.maxSealedBytes else {
+                return
+            }
+            control?.sendMetadata(.agentActivity(.init(
+                state: info.state,
+                updatedAt: max(0, Int64((info.updatedAt * 1_000).rounded())),
+                alert: alert,
+                sealed: sealed
+            )))
+            lastReportedActivity = content
+            lastActivitySentAt = .now
+        } catch {
+            // Count state remains authoritative and continues to update even if
+            // one rich snapshot cannot be sealed.
+        }
+    }
+
     // MARK: - Session events (on `queue`)
 
     private func handle(sessionEvent event: SessionEvent) {
         guard started else { return }
         switch event {
         case .sessionsChanged(let list):
-            reportDirectoryLocked(force: false, sessions: list)
+            let directoryChanged = reportDirectoryLocked(force: false, sessions: list)
+            // A terminal-count ContentState is a full replacement. Re-attach
+            // the latest encrypted agent card after that projection so a TTY
+            // lifecycle change cannot erase it from the island. Cwd/resize
+            // list refreshes do not change the server-visible directory and
+            // must not generate another activity push.
+            if directoryChanged, let recent = lastAgents.first {
+                sendAgentActivityLocked(recent, alert: false)
+            }
             control?.send(.sessions(list: list))
             reconcileSessionLinksLocked(with: list)
         case .resized(let id, let cols, let rows):
@@ -297,13 +438,24 @@ public final class RelayHostClient: @unchecked Sendable {
         heartbeatTimer = timer
     }
 
-    private func reportDirectoryLocked(force: Bool, sessions list: [SessionInfo]? = nil) {
+    @discardableResult
+    private func reportDirectoryLocked(
+        force: Bool, sessions list: [SessionInfo]? = nil
+    ) -> Bool {
         let directory = (list ?? sessions.list()).map {
             RelayMetadata.DirectoryEntry(id: $0.id, alive: $0.alive)
         }
-        guard force || directory != lastReportedDirectory else { return }
-        control?.sendMetadata(.hostSnapshot(hostName: hostName, sessions: directory))
+        let counts = Self.agentCounts(of: lastAgents)
+        guard force
+            || directory != lastReportedDirectory
+            || counts != lastReportedAgentCounts
+        else { return false }
+        control?.sendMetadata(.hostSnapshot(
+            hostName: hostName, sessions: directory, agents: counts
+        ))
         lastReportedDirectory = directory
+        lastReportedAgentCounts = counts
+        return true
     }
 
     private func reportOfflineLocked() {

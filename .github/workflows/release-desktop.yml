@@ -93,6 +93,11 @@ jobs:
           codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" \
             "$sparkle_contents/Updater.app"
           codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" "$sparkle"
+          # The agent-hook reporter is copied in by the menubar build's
+          # post-build script with a development signature; notarization
+          # requires every Mach-O to carry Developer ID + secure timestamp.
+          codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" \
+            "$app/Contents/MacOS/pedals-hook"
           codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
           signing_details="$(codesign -dv --verbose=4 "$app" 2>&1)"
@@ -104,6 +109,7 @@ jobs:
             "$sparkle_contents/XPCServices/Downloader.xpc" \
             "$sparkle_contents/Autoupdate" \
             "$sparkle_contents/Updater.app" \
+            "$app/Contents/MacOS/pedals-hook" \
             "$sparkle"; do
             component_details="$(codesign -dv --verbose=4 "$component" 2>&1)"
             grep -q 'TeamIdentifier=QDJ93ZUQ9B' <<< "$component_details"

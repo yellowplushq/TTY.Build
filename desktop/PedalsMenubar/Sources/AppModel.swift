@@ -37,7 +37,11 @@ enum RelayState: Equatable {
 final class AppModel: ObservableObject {
     static let pairedDeviceKey = "hasPairedDesktopClientV1"
     private static let legacyOnboardingKey = "completedDesktopOnboardingV2"
-    private static let productionService = "https://pedals.air.build"
+    /// Overridable like the iOS app's PEDALS_SERVICE_URL so local relay
+    /// end-to-end runs never register throwaway identities in production.
+    private static let productionService =
+        ProcessInfo.processInfo.environment["PEDALS_SERVICE_URL"]
+        ?? "https://pedals.air.build"
     private static let pairingDefocusGracePeriod = Duration.seconds(30)
 
     @Published private(set) var serviceRunning = false

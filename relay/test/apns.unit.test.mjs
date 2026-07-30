@@ -110,12 +110,43 @@ test("builds only allow-listed widget and Live Activity payloads", () => {
         "stale-date": 1_700_000_300,
         "content-state": {
           totalRunning: 3,
+          agentsRunning: 0,
+          agentsWaiting: 0,
+          agentsDone: 0,
           onlineComputerCount: 1,
           offlineComputerCount: 1,
           updatedAt: 721_692_800,
           sequence: 9,
         },
       },
+    },
+  );
+  // Agent counts flow into content-state when the aggregate carries them.
+  assert.deepEqual(
+    buildApnsPayload(
+      "liveactivity-update",
+      {
+        state: {
+          totalRunning: 0,
+          agentsRunning: 2,
+          agentsWaiting: 1,
+          sequence: 12,
+          updatedAt: "2023-11-14T22:13:20Z",
+          computers: [{ online: true }],
+        },
+        event: "update",
+      },
+      1_700_000_000_999,
+    ).aps["content-state"],
+    {
+      totalRunning: 0,
+      agentsRunning: 2,
+      agentsWaiting: 1,
+      agentsDone: 0,
+      onlineComputerCount: 1,
+      offlineComputerCount: 0,
+      updatedAt: 721_692_800,
+      sequence: 12,
     },
   );
 
@@ -129,6 +160,14 @@ test("builds only allow-listed widget and Live Activity payloads", () => {
         computers: [{ online: true }],
       },
       event: "start",
+      activity: {
+        eventID: "11111111-1111-4111-8111-111111111111",
+        state: "waiting",
+        updatedAt: 978_307_200_000,
+        alert: true,
+        sealed: Buffer.from("ciphertext").toString("base64"),
+        computerId: "c".repeat(32),
+      },
     },
     1_800_000_000_000,
   );
@@ -138,6 +177,13 @@ test("builds only allow-listed widget and Live Activity payloads", () => {
   assert.deepEqual(start.aps.attributes, { scope: "all" });
   assert.deepEqual(start.aps["content-state"], {
     totalRunning: 1,
+    agentsRunning: 0,
+    agentsWaiting: 0,
+    agentsDone: 0,
+    recentAgentComputerID: "c".repeat(32),
+    recentAgentState: "waiting",
+    recentAgentUpdatedAt: 0,
+    recentAgentSealed: Buffer.from("ciphertext").toString("base64"),
     onlineComputerCount: 1,
     offlineComputerCount: 0,
     updatedAt: 0,
@@ -183,6 +229,68 @@ test("builds only allow-listed widget and Live Activity payloads", () => {
     () => buildApnsPayload("unknown", {}),
     /not supported/,
   );
+});
+
+test("embeds opaque agent content and alerts attention updates plus starts", () => {
+  const sealed = Buffer.from("ciphertext").toString("base64");
+  const base = {
+    state: {
+      totalRunning: 0,
+      agentsRunning: 0,
+      agentsWaiting: 1,
+      agentsDone: 0,
+      sequence: 12,
+      updatedAt: "2023-11-14T22:13:20Z",
+      computers: [{ online: true }],
+    },
+    event: "update",
+    activity: {
+      eventID: "11111111-1111-4111-8111-111111111111",
+      state: "waiting",
+      updatedAt: 1_700_000_000_000,
+      alert: true,
+      sealed,
+      computerId: "c".repeat(32),
+    },
+  };
+  const alerting = buildApnsPayload("liveactivity-update", base);
+  assert.deepEqual(alerting.aps.alert, {
+    title: "Pedals", body: "An agent needs your input",
+  });
+  assert.equal(alerting.aps.sound, undefined);
+  assert.equal(alerting.aps["content-state"].recentAgentSealed, sealed);
+  assert.ok(Buffer.byteLength(JSON.stringify(alerting)) < 4096);
+  const maximal = buildApnsPayload("liveactivity-update", {
+    ...base,
+    activity: { ...base.activity, sealed: "A".repeat(2668) },
+  });
+  assert.ok(Buffer.byteLength(JSON.stringify(maximal)) < 4096);
+
+  const silent = buildApnsPayload("liveactivity-update", {
+    ...base,
+    activity: { ...base.activity, state: "running", alert: false },
+  });
+  assert.equal(silent.aps.alert, undefined);
+
+  assert.throws(
+    () => buildApnsPayload("liveactivity-update", {
+      ...base, activity: { ...base.activity, sealed: "not base64!!" },
+    }),
+    /base64/,
+  );
+  const workingStart = buildApnsPayload("liveactivity-start", {
+    state: {
+      ...base.state,
+      agentsRunning: 1,
+      agentsWaiting: 0,
+    },
+    event: "start",
+    activity: { ...base.activity, state: "running", alert: false },
+  });
+  assert.deepEqual(workingStart.aps.alert, {
+    title: "Pedals", body: "An agent started working",
+  });
+  assert.equal(workingStart.aps.sound, undefined);
 });
 
 test("sends sandbox widget pushes with fixed topic, type and body", async () => {
@@ -255,6 +363,15 @@ test("retains Live Activity transitions while offline with event-specific expiry
     },
     { state: { ...state, totalRunning: 0, sequence: 13 }, event: "end" },
   );
+  await client.send(
+    {
+      token: "immediate-token",
+      surface: "liveactivity-update",
+      environment: "production",
+      immediate: true,
+    },
+    { state: { ...state, totalRunning: 1, sequence: 14 }, event: "update" },
+  );
 
   assert.equal(requests[0].init.headers["apns-expiration"], "1800000900");
   assert.equal(requests[0].init.headers["apns-priority"], "5");
@@ -264,6 +381,8 @@ test("retains Live Activity transitions while offline with event-specific expiry
   const endPayload = JSON.parse(requests[1].init.body);
   assert.equal(endPayload.aps["dismissal-date"], 1_800_000_000);
   assert.equal(endPayload.aps["stale-date"], 1_800_000_300);
+  assert.equal(requests[2].init.headers["apns-priority"], "10");
+  assert.equal(JSON.parse(requests[2].init.body).aps.alert, undefined);
 });
 
 test("classifies APNs responses for endpoint lifecycle and retry", () => {

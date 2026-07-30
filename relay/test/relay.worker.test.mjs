@@ -455,6 +455,7 @@ describe("Pedals v2 Worker API", () => {
         id: computer.computerId,
         name: `Mac ${computer.computerId.slice(0, 6)}`,
         runningTTYCount: 0,
+        agents: { running: 0, waiting: 0, done: 0 },
         online: false,
         updatedAt: snapshot.updatedAt,
       },
@@ -1217,6 +1218,21 @@ describe("Pedals v2 Worker API", () => {
       })).status,
     ).toBe(204);
 
+    expect(
+      (await api("/v2/clients/me/push-endpoints/liveactivity-start", {
+        method: "PUT",
+        token: replacement.statusToken,
+        body: { token: "12".repeat(32), environment: "sandbox" },
+      })).status,
+    ).toBe(200);
+    await env.DB
+      .prepare(
+        `UPDATE push_endpoints SET last_total_running = 1
+          WHERE client_id = ?1 AND surface = 'liveactivity-start'`,
+      )
+      .bind(replacement.clientId)
+      .run();
+
     for (const [token, activityId] of [
       ["cd".repeat(32), "activity-one"],
       ["ef".repeat(32), "activity-two"],
@@ -1244,17 +1260,46 @@ describe("Pedals v2 Worker API", () => {
       .bind(replacement.clientId)
       .first();
     expect(remainingActivity.activityId).toBe("activity-two");
+    let startBaseline = await env.DB
+      .prepare(
+        `SELECT last_total_running AS lastTotal
+           FROM push_endpoints
+          WHERE client_id = ?1 AND surface = 'liveactivity-start'`,
+      )
+      .bind(replacement.clientId)
+      .first();
+    expect(Number(startBaseline.lastTotal)).toBe(1);
+
+    expect(
+      (await api(
+        "/v2/clients/me/push-endpoints/liveactivity-update?activityId=activity-two",
+        { method: "DELETE", token: replacement.statusToken },
+      )).status,
+    ).toBe(204);
+    startBaseline = await env.DB
+      .prepare(
+        `SELECT last_total_running AS lastTotal
+           FROM push_endpoints
+          WHERE client_id = ?1 AND surface = 'liveactivity-start'`,
+      )
+      .bind(replacement.clientId)
+      .first();
+    expect(Number(startBaseline.lastTotal)).toBe(0);
   });
 
   test("push endpoint count is bounded in D1", async () => {
     const client = await createClient();
+    // "fb…" tokens draw a 429 from the APNs mock, so the coordinator defers
+    // the endpoints instead of ending zero-state activities and deleting
+    // them — without this, a slow runner lets the 150 ms alarm free slots
+    // between the eighth and ninth registration.
     for (let index = 0; index < 8; index += 1) {
       expect(
         (await api("/v2/clients/me/push-endpoints/liveactivity-update", {
           method: "PUT",
           token: client.statusToken,
           body: {
-            token: (0x20 + index).toString(16).repeat(32),
+            token: ("fb0" + index.toString(16)).repeat(16),
             environment: "sandbox",
             activityId: `activity-${index}`,
           },
@@ -1307,7 +1352,7 @@ describe("Pedals v2 Worker API", () => {
     expect(Number(retained.active)).toBe(8);
   });
 
-  test("first push-to-start token immediately observes an already-positive state", async () => {
+  test("ordinary positive state never consumes a push-to-start token", async () => {
     const computer = await createComputer();
     const client = await createClient();
     expect((await bind(client, computer)).status).toBe(201);
@@ -1352,8 +1397,8 @@ describe("Pedals v2 Worker API", () => {
         )
         .bind(client.clientId)
         .first();
-      expect(Number(delivered.lastSequence)).toBe(positive.sequence);
-      expect(Number(delivered.lastTotal)).toBe(3);
+      expect(Number(delivered.lastSequence)).toBe(-1);
+      expect(Number(delivered.lastTotal)).toBe(0);
 
       expect(
         (await api("/v2/clients/me/push-endpoints/liveactivity-start", {
@@ -1372,8 +1417,8 @@ describe("Pedals v2 Worker API", () => {
         .bind(client.clientId)
         .first();
       expect(rotated.token).toBe("6b".repeat(32));
-      expect(Number(rotated.lastSequence)).toBe(positive.sequence);
-      expect(Number(rotated.lastTotal)).toBe(3);
+      expect(Number(rotated.lastSequence)).toBe(-1);
+      expect(Number(rotated.lastTotal)).toBe(0);
       await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
     } finally {
       closeAll(host);
@@ -1437,10 +1482,15 @@ describe("Pedals v2 Worker API", () => {
         .bind(client.clientId)
         .all();
       expect(delivered.results).toHaveLength(4);
-      expect(delivered.results.every((row) => Number(row.lastSequence) === online.sequence)).toBe(
-        true,
+      expect(delivered.results.filter((row) => row.surface !== "liveactivity-start")
+        .every((row) => Number(row.lastSequence) === online.sequence)).toBe(true);
+      expect(delivered.results.filter((row) => row.surface !== "liveactivity-start")
+        .every((row) => Number(row.lastTotal) === 2)).toBe(true);
+      const untouchedStart = delivered.results.find(
+        (row) => row.surface === "liveactivity-start",
       );
-      expect(delivered.results.every((row) => Number(row.lastTotal) === 2)).toBe(true);
+      expect(Number(untouchedStart.lastSequence)).toBe(-1);
+      expect(Number(untouchedStart.lastTotal)).toBe(0);
       expect(delivered.results.every((row) => row.invalidatedAt === null)).toBe(true);
       while (await runDurableObjectAlarm(coordinator)) {
         // Drain any coalesced invalidation that arrived while the first alarm ran.
@@ -1466,8 +1516,8 @@ describe("Pedals v2 Worker API", () => {
         )
         .bind(client.clientId)
         .first();
-      expect(Number(startBaseline.lastSequence)).toBe(online.sequence);
-      expect(Number(startBaseline.lastTotal)).toBe(2);
+      expect(Number(startBaseline.lastSequence)).toBe(-1);
+      expect(Number(startBaseline.lastTotal)).toBe(0);
       await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
 
       host.ws.send(JSON.stringify({ type: "host-offline" }));
@@ -2654,5 +2704,441 @@ describe("relay HTTP long-poll transport", () => {
       session: sessionB,
     });
     expect(rebound.response.status).toBe(401);
+  });
+});
+
+describe("agent counts and alerts", () => {
+  function snapshotWithAgents(hostName, sessions, agents) {
+    return JSON.stringify({ type: "host-snapshot", hostName, sessions, agents });
+  }
+
+  test("agent counts flow from host snapshot to the aggregate state", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    expect((await bind(client, computer)).status).toBe(201);
+    const host = (await connect(computer.computerId, computer.hostToken)).peer;
+    try {
+      host.ws.send(
+        snapshotWithAgents("Agent Mac", runningSessions(1), {
+          running: 2,
+          waiting: 1,
+        }),
+      );
+      const online = await waitFor(async () => {
+        const snapshot = await state(client);
+        return snapshot.agentsRunning === 2 ? snapshot : null;
+      });
+      expect(online).toMatchObject({
+        totalRunning: 1,
+        agentsRunning: 2,
+        agentsWaiting: 1,
+      });
+      expect(online.computers[0].agents).toEqual({ running: 2, waiting: 1, done: 0 });
+
+      // An agents-only change (same sessions) must bump the projection.
+      host.ws.send(
+        snapshotWithAgents("Agent Mac", runningSessions(1), {
+          running: 0,
+          waiting: 0,
+        }),
+      );
+      const drained = await waitFor(async () => {
+        const snapshot = await state(client);
+        return snapshot.agentsRunning === 0 && snapshot.sequence > online.sequence
+          ? snapshot
+          : null;
+      });
+      expect(drained.agentsWaiting).toBe(0);
+
+      // Offline zeroes agent counts like it zeroes the TTY count.
+      host.ws.send(JSON.stringify({ type: "host-offline" }));
+      const offline = await waitFor(async () => {
+        const snapshot = await state(client);
+        return snapshot.computers[0]?.online === false ? snapshot : null;
+      });
+      expect(offline.computers[0].agents).toEqual({ running: 0, waiting: 0, done: 0 });
+      expect(offline.agentsWaiting).toBe(0);
+    } finally {
+      closeAll(host);
+    }
+  });
+
+  test("legacy three-key snapshots still work; malformed agent counts close the host", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    expect((await bind(client, computer)).status).toBe(201);
+    const host = (await connect(computer.computerId, computer.hostToken)).peer;
+    try {
+      host.ws.send(hostSnapshot("Legacy Mac", runningSessions(2)));
+      const online = await waitFor(async () => {
+        const snapshot = await state(client);
+        return snapshot.totalRunning === 2 ? snapshot : null;
+      });
+      expect(online.agentsRunning).toBe(0);
+
+      host.ws.send(
+        snapshotWithAgents("Legacy Mac", runningSessions(2), {
+          running: 256,
+          waiting: 0,
+        }),
+      );
+      expect((await host.nextClose()).code).toBe(1008);
+    } finally {
+      closeAll(host);
+    }
+  });
+
+  test("working agent starts the island and attention does not duplicate it", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    expect((await bind(client, computer)).status).toBe(201);
+    const host = (await connect(computer.computerId, computer.hostToken)).peer;
+    const coordinator = env.PUSH_COORDINATOR.getByName(client.clientId);
+    try {
+      expect(
+        (await api("/v2/clients/me/push-endpoints/liveactivity-start", {
+          method: "PUT",
+          token: client.statusToken,
+          body: { token: "ab".repeat(32), environment: "sandbox" },
+        })).status,
+      ).toBe(200);
+
+      host.ws.send(
+        snapshotWithAgents("Island Mac", [], { running: 1, waiting: 0, done: 0 }),
+      );
+      await waitFor(async () => ((await state(client)).agentsRunning === 1 ? true : null));
+      host.ws.send(JSON.stringify({
+        type: "agent-activity",
+        activity: {
+          eventID: "11111111-1111-4111-8111-111111111111",
+          state: "running",
+          updatedAt: Date.now(),
+          alert: false,
+          sealed: btoa("silent-ciphertext"),
+        },
+      }));
+      let endpoint = await waitFor(async () => {
+        const row = await env.DB
+          .prepare(
+            `SELECT last_sequence AS lastSequence, last_total_running AS lastTotal
+               FROM push_endpoints
+              WHERE client_id = ?1 AND surface = 'liveactivity-start'`,
+          )
+          .bind(client.clientId)
+          .first();
+        return Number(row?.lastTotal) === 1 ? row : null;
+      });
+      const workingSequence = Number(endpoint.lastSequence);
+      expect(workingSequence).toBeGreaterThanOrEqual(0);
+
+      host.ws.send(
+        snapshotWithAgents("Island Mac", [], { running: 0, waiting: 1, done: 0 }),
+      );
+      await waitFor(async () => ((await state(client)).agentsWaiting === 1 ? true : null));
+      host.ws.send(JSON.stringify({
+        type: "agent-activity",
+        activity: {
+          eventID: "22222222-2222-4222-8222-222222222222",
+          state: "waiting",
+          updatedAt: Date.now(),
+          alert: true,
+          sealed: btoa("attention-ciphertext"),
+        },
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      endpoint = await env.DB
+        .prepare(
+          `SELECT last_sequence AS lastSequence, last_total_running AS lastTotal
+             FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'liveactivity-start'`,
+        )
+        .bind(client.clientId)
+        .first();
+      expect(Number(endpoint.lastSequence)).toBe(workingSequence);
+      expect(Number(endpoint.lastTotal)).toBe(1);
+
+      expect(
+        (await api("/v2/clients/me/push-endpoints/liveactivity-update", {
+          method: "PUT",
+          token: client.statusToken,
+          body: {
+            token: "ac".repeat(32),
+            environment: "sandbox",
+            activityId: "working-agent",
+          },
+        })).status,
+      ).toBe(200);
+      host.ws.send(
+        snapshotWithAgents("Island Mac", [], { running: 0, waiting: 0, done: 0 }),
+      );
+      await waitFor(async () => {
+        const snapshot = await state(client);
+        return snapshot.agentsRunning === 0 && snapshot.agentsWaiting === 0
+          ? true
+          : null;
+      });
+      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+      const endedUpdate = await env.DB
+        .prepare(
+          `SELECT id FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
+        )
+        .bind(client.clientId)
+        .first();
+      expect(endedUpdate).toBeNull();
+      const resetStart = await env.DB
+        .prepare(
+          `SELECT last_total_running AS lastTotal
+             FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'liveactivity-start'`,
+        )
+        .bind(client.clientId)
+        .first();
+      expect(Number(resetStart.lastTotal)).toBe(0);
+    } finally {
+      closeAll(host);
+    }
+  });
+
+  test("attention activity updates an existing island without starting a duplicate", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    expect((await bind(client, computer)).status).toBe(201);
+    const host = (await connect(computer.computerId, computer.hostToken)).peer;
+    const coordinator = env.PUSH_COORDINATOR.getByName(client.clientId);
+    try {
+      expect(
+        (await api("/v2/clients/me/push-endpoints/liveactivity-start", {
+          method: "PUT",
+          token: client.statusToken,
+          body: { token: "ba".repeat(32), environment: "sandbox" },
+        })).status,
+      ).toBe(200);
+
+      host.ws.send(
+        snapshotWithAgents("Island Mac", [], { running: 0, waiting: 1, done: 0 }),
+      );
+      await waitFor(async () => ((await state(client)).agentsWaiting === 1 ? true : null));
+
+      expect(
+        (await api("/v2/clients/me/push-endpoints/liveactivity-update", {
+          method: "PUT",
+          token: client.statusToken,
+          body: {
+            token: "bb".repeat(32),
+            environment: "sandbox",
+            activityId: "already-live",
+          },
+        })).status,
+      ).toBe(200);
+      const delivered = await coordinator.fetch("https://push.internal/activity", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: client.clientId,
+          computerId: computer.computerId,
+          activity: {
+          eventID: "33333333-3333-4333-8333-333333333333",
+          state: "waiting",
+          updatedAt: Date.now(),
+          alert: true,
+          sealed: btoa("existing-island-ciphertext"),
+          },
+        }),
+      });
+      expect(delivered.status).toBe(202);
+
+      const update = await env.DB
+        .prepare(
+          `SELECT last_total_running AS lastTotal
+             FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
+        )
+        .bind(client.clientId)
+        .first();
+      expect(Number(update.lastTotal)).toBe(1);
+      const start = await env.DB
+        .prepare(
+          `SELECT last_sequence AS lastSequence, last_total_running AS lastTotal
+             FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'liveactivity-start'`,
+        )
+        .bind(client.clientId)
+        .first();
+      expect(Number(start.lastSequence)).toBe(-1);
+      expect(Number(start.lastTotal)).toBe(0);
+    } finally {
+      closeAll(host);
+    }
+  });
+
+  test("rich activity failure retains the encrypted card for a forced retry", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    expect((await bind(client, computer)).status).toBe(201);
+    const host = (await connect(computer.computerId, computer.hostToken)).peer;
+    const coordinator = env.PUSH_COORDINATOR.getByName(client.clientId);
+    try {
+      host.ws.send(
+        snapshotWithAgents("Retry Mac", [], { running: 1, waiting: 0, done: 0 }),
+      );
+      await waitFor(async () => ((await state(client)).agentsRunning === 1 ? true : null));
+      expect(
+        (await api("/v2/clients/me/push-endpoints/liveactivity-update", {
+          method: "PUT",
+          token: client.statusToken,
+          body: {
+            token: "fb".repeat(32),
+            environment: "sandbox",
+            activityId: "retry-rich-card",
+          },
+        })).status,
+      ).toBe(200);
+
+      const before = Date.now();
+      const delivered = await coordinator.fetch("https://push.internal/activity", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: client.clientId,
+          computerId: computer.computerId,
+          activity: {
+            eventID: "55555555-5555-4555-8555-555555555555",
+            state: "running",
+            updatedAt: Date.now(),
+            alert: false,
+            sealed: btoa("retryable-agent-ciphertext"),
+          },
+        }),
+      });
+      expect(delivered.status).toBe(202);
+
+      const endpoint = await env.DB
+        .prepare(
+          `SELECT retry_not_before AS retryNotBefore,
+                  failure_count AS failureCount,
+                  last_failure_reason AS lastFailureReason
+             FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
+        )
+        .bind(client.clientId)
+        .first();
+      expect(Number(endpoint.failureCount)).toBe(1);
+      expect(endpoint.lastFailureReason).toBe("TooManyRequests");
+      expect(Number(endpoint.retryNotBefore) * 1000).toBeGreaterThanOrEqual(
+        before + 3_599_000,
+      );
+
+      await runInDurableObject(coordinator, async (_instance, durableState) => {
+        const cached = await durableState.storage.get("recentAgentActivities");
+        expect(cached[computer.computerId].activity.eventID)
+          .toBe("55555555-5555-4555-8555-555555555555");
+        expect(cached[computer.computerId].highPriority).toBe(true);
+        expect(await durableState.storage.get("pendingClientIds"))
+          .toEqual([client.clientId]);
+        expect(await durableState.storage.get("forceClientIds"))
+          .toEqual([client.clientId]);
+        expect(await durableState.storage.getAlarm()).toBeLessThan(before + 1_000);
+      });
+      await runDurableObjectAlarm(coordinator);
+      await runInDurableObject(coordinator, async (_instance, durableState) => {
+        expect(await durableState.storage.getAlarm()).toBeGreaterThanOrEqual(
+          before + 3_599_000,
+        );
+        expect(await durableState.storage.get("pendingClientIds"))
+          .toEqual([client.clientId]);
+      });
+    } finally {
+      closeAll(host);
+    }
+  });
+
+  test("aggregate refresh preserves a recent agent card, then ends it", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    expect((await bind(client, computer)).status).toBe(201);
+    const host = (await connect(computer.computerId, computer.hostToken)).peer;
+    const coordinator = env.PUSH_COORDINATOR.getByName(client.clientId);
+    try {
+      host.ws.send(
+        snapshotWithAgents("Island Mac", [], { running: 0, waiting: 0, done: 1 }),
+      );
+      const completed = await waitFor(async () => {
+        const snapshot = await state(client);
+        return snapshot.agentsDone === 1 ? snapshot : null;
+      });
+      expect(
+        (await api("/v2/clients/me/push-endpoints/liveactivity-update", {
+          method: "PUT",
+          token: client.statusToken,
+          body: {
+            token: "1a".repeat(32),
+            environment: "sandbox",
+            activityId: "agent-only",
+          },
+        })).status,
+      ).toBe(200);
+      const delivered = await coordinator.fetch("https://push.internal/activity", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: client.clientId,
+          computerId: computer.computerId,
+          activity: {
+            eventID: "44444444-4444-4444-8444-444444444444",
+            state: "done",
+            updatedAt: Date.now(),
+            alert: false,
+            sealed: btoa("completed-agent-ciphertext"),
+          },
+        }),
+      });
+      expect(delivered.status).toBe(202);
+      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+
+      // A later TTY-only projection reuses the retained opaque envelope, so
+      // the terminal count advances without replacing the rich agent card.
+      host.ws.send(
+        snapshotWithAgents(
+          "Island Mac",
+          runningSessions(1),
+          { running: 0, waiting: 0, done: 1 },
+        ),
+      );
+      const terminalChanged = await waitFor(async () => {
+        const snapshot = await state(client);
+        return snapshot.totalRunning === 1 && snapshot.sequence > completed.sequence
+          ? snapshot
+          : null;
+      });
+      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+      const active = await env.DB
+        .prepare(
+          `SELECT last_sequence AS lastSequence, last_total_running AS lastTotal
+             FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
+        )
+        .bind(client.clientId)
+        .first();
+      expect(Number(active.lastSequence)).toBe(terminalChanged.sequence);
+      expect(Number(active.lastTotal)).toBe(2);
+      expect(terminalChanged.sequence).toBeGreaterThan(completed.sequence);
+
+      host.ws.send(
+        snapshotWithAgents("Island Mac", [], { running: 0, waiting: 0, done: 0 }),
+      );
+      await waitFor(async () => ((await state(client)).agentsDone === 0 ? true : null));
+      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+      const ended = await env.DB
+        .prepare(
+          `SELECT id FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
+        )
+        .bind(client.clientId)
+        .first();
+      expect(ended).toBeNull();
+      await runInDurableObject(coordinator, async (_instance, durableState) => {
+        expect(await durableState.storage.get("recentAgentActivities")).toBeUndefined();
+      });
+    } finally {
+      closeAll(host);
+    }
   });
 });

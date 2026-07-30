@@ -1,33 +1,6 @@
 {
-  "originHash" : "e3aebb8532b5f3fefd9c1f6b3ba94fd279836da4b267bc71ad577a216c4ba07b",
+  "originHash" : "9f7019c555d40bb78d49e45893980eca0a6f7cfd6d9b5ab0a8c3681ae63d66cf",
   "pins" : [
-    {
-      "identity" : "libghostty-spm",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Lakr233/libghostty-spm",
-      "state" : {
-        "revision" : "b0930320739324886590e865d571eb5dd7073912",
-        "version" : "1.3.1"
-      }
-    },
-    {
-      "identity" : "msdisplaylink",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Lakr233/MSDisplayLink.git",
-      "state" : {
-        "revision" : "1ba3e769b734e456317fa7e45321fa7f53eefb67",
-        "version" : "2.1.0"
-      }
-    },
-    {
-      "identity" : "sparkle",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/sparkle-project/Sparkle",
-      "state" : {
-        "revision" : "b6496a74a087257ef5e6da1c5b29a447a60f5bd7",
-        "version" : "2.9.4"
-      }
-    },
     {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",

@@ -21,6 +21,10 @@ public final class PTYProcess: @unchecked Sendable {
     }
 
     public let pid: pid_t
+    /// Slave tty device path ("/dev/ttys003"). Identifies this PTY for
+    /// coding-agent ownership matching (AgentMonitor): a hook whose reported
+    /// tty equals `ttyPath` runs inside this session.
+    public let ttyPath: String?
     private let masterFD: Int32
     private let queue: DispatchQueue
     private let readSource: DispatchSourceRead
@@ -103,6 +107,9 @@ public final class PTYProcess: @unchecked Sendable {
 
         pid = childPid
         masterFD = master
+        // ptsname is safe here despite its static buffer: spawns are
+        // serialized on the SessionManager queue.
+        ttyPath = ptsname(master).map { String(cString: $0) }
 
         // The master stays O_NONBLOCK for its whole life: a blocking write
         // would stall the (shared) queue whenever the child stops reading

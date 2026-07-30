@@ -43,6 +43,25 @@ final class TestVectorTests: XCTestCase {
         )
     }
 
+    /// Dedicated to Live Activity content so widget access exposes no relay traffic.
+    func testHKDFLiveActivityKeyVector() {
+        XCTAssertEqual(
+            hex(AgentActivity.activityKey(secret: secret)),
+            "aa9edd51002b92bf44e19b91f97ea7ee79f2416c460e36f25be4d0c71e2b2912"
+        )
+    }
+
+    func testAgentActivitySealRoundTripsAndBindsComputerID() throws {
+        let key = AgentActivity.activityKey(secret: secret)
+        let content = AgentActivity.Content(
+            id: "a-1", agent: "claude", state: .waiting, project: "proj",
+            message: "Waiting for your answer", sessionId: 7, updatedAt: 1_000
+        )
+        let sealed = try AgentActivity.seal(content, key: key, computerID: "c-1")
+        XCTAssertEqual(try AgentActivity.open(sealed, key: key, computerID: "c-1"), content)
+        XCTAssertThrowsError(try AgentActivity.open(sealed, key: key, computerID: "c-2"))
+    }
+
     func testSealedMessageVectorDecrypts() throws {
         let message = Data(hexString:
             "0100000000000000" // seq = 1, u64 LE

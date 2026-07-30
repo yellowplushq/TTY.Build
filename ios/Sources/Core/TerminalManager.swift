@@ -2,6 +2,15 @@ import Combine
 import Foundation
 import PedalsKit
 
+/// One observed coding-agent session, tagged with the computer it runs on
+/// (docs/AGENT_MONITORING_DESIGN.md §4).
+struct AgentRow: Equatable {
+    let computerID: String
+    let computerName: String
+    let hostOnline: Bool
+    let info: AgentInfo
+}
+
 /// One tab in the client-maintained cross-computer terminal list.
 struct Terminal: Equatable {
     let id: TerminalID
@@ -22,10 +31,10 @@ struct Terminal: Equatable {
 /// - terminals created elsewhere (other devices / CLI) are appended at the
 ///   end and do NOT steal focus.
 ///
-/// Channels connect lazily on first activation. At most `maxLiveChannels`
-/// stay open; beyond that the least recently activated terminal's socket is
-/// closed ("asleep") — the daemon keeps its PTY running, and reactivating
-/// reconnects + replays.
+/// Channels connect lazily on first activation. Only the foreground terminal
+/// keeps a data socket; switching pages closes the previous socket ("asleep")
+/// while the daemon keeps its PTY running. Reactivating reconnects + replays,
+/// so an inactive terminal consumes no stdout/render/resize work on iPhone.
 @MainActor
 final class TerminalManager {
     @Published private(set) var computers: [ComputerConnection] = []
@@ -34,6 +43,9 @@ final class TerminalManager {
     @Published private(set) var activeID: TerminalID?
     /// Data-channel phase per terminal; missing key = asleep / never opened.
     @Published private(set) var phases: [TerminalID: TerminalChannel.Phase] = [:]
+    /// Every observed coding agent from every bound computer, in computer
+    /// order (unsorted within a computer — presentation sorts).
+    @Published private(set) var agentRows: [AgentRow] = []
 
     enum Output {
         case replay(Data)
@@ -49,8 +61,11 @@ final class TerminalManager {
     let errors = PassthroughSubject<String, Never>()
     /// Transient, non-blocking app-level feedback.
     let notices = PassthroughSubject<String, Never>()
+    /// A terminal created by *this* device just became active (the `created`
+    /// echo matched one of our reqs) — the UI should switch to its page.
+    let ownCreations = PassthroughSubject<TerminalID, Never>()
 
-    static let maxLiveChannels = 6
+    static let maxLiveChannels = 1
     /// How long to hold an unidentified new session off the tab list while our
     /// own `create` is in flight (`sessions` can arrive before `created`).
     private static let placementGrace: TimeInterval = 2
@@ -64,6 +79,14 @@ final class TerminalManager {
     private var placeAsOwnWhenSeen: Set<TerminalID> = []
     /// New ids held back during `placementGrace` (see above).
     private var heldAppends: [TerminalID: SessionInfo] = [:]
+    /// Latest per-computer agent snapshot, captured from the EMISSIONS (never
+    /// read back off the connection — @Published emits during willSet).
+    private struct AgentSource {
+        var agents: [AgentInfo]
+        var hostOnline: Bool
+        var computerName: String
+    }
+    private var agentSources: [String: AgentSource] = [:]
 
     init(pairingStore: PairingStore) {
         self.pairingStore = pairingStore
@@ -151,6 +174,18 @@ final class TerminalManager {
                 self.handle(event: event, from: connection)
             }
             .store(in: &cancellables)
+        connection.$agents
+            .combineLatest(connection.$hostOnline, connection.$hostName)
+            .sink { [weak self, weak connection] agents, hostOnline, hostName in
+                guard let self, let connection else { return }
+                let name = hostName.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? "Computer \(connection.binding.computerID.prefix(6))"
+                self.agentSources[connection.id] = AgentSource(
+                    agents: agents, hostOnline: hostOnline, computerName: name
+                )
+                self.rebuildAgentRows()
+            }
+            .store(in: &cancellables)
         subscriptions[connection.id] = cancellables
         connection.start()
     }
@@ -167,6 +202,8 @@ final class TerminalManager {
         // can never open a channel or be closed.
         heldAppends = heldAppends.filter { $0.key.computerID != connection.id }
         placeAsOwnWhenSeen = placeAsOwnWhenSeen.filter { $0.computerID != connection.id }
+        agentSources.removeValue(forKey: connection.id)
+        rebuildAgentRows()
     }
 
     // MARK: - Terminal accessors
@@ -175,11 +212,50 @@ final class TerminalManager {
         terminals.first { $0.id == id }
     }
 
+    // MARK: - Agents
+
+    private func rebuildAgentRows() {
+        agentRows = computers.flatMap { connection -> [AgentRow] in
+            guard let source = agentSources[connection.id] else { return [] }
+            return source.agents.map {
+                AgentRow(
+                    computerID: connection.id,
+                    computerName: source.computerName,
+                    hostOnline: source.hostOnline,
+                    info: $0
+                )
+            }
+        }
+    }
+
+    /// The managed agent running inside terminal `id`, if any. Should several
+    /// hooks report the same PTY, the most attention-worthy (waiting > error >
+    /// running > done, then most recently updated) wins.
+    func agent(for id: TerminalID) -> AgentInfo? {
+        Self.agent(for: id, in: agentRows)
+    }
+
+    /// Static so views can resolve against *emitted* rows (a sink must never
+    /// read `agentRows` back off the manager — @Published emits during willSet).
+    static func agent(for id: TerminalID, in rows: [AgentRow]) -> AgentInfo? {
+        rows
+            .filter { $0.computerID == id.computerID && $0.info.sessionId == id.sid }
+            .map(\.info)
+            .min { lhs, rhs in
+                if lhs.state.attentionRank != rhs.state.attentionRank {
+                    return lhs.state.attentionRank < rhs.state.attentionRank
+                }
+                return lhs.updatedAt > rhs.updatedAt
+            }
+    }
+
     // MARK: - Activation + connection pool
 
     func activate(_ id: TerminalID) {
         guard terminals.contains(where: { $0.id == id }) else { return }
-        activeID = id
+        if activeID != id {
+            activeID = id
+        }
         ensureChannel(id)
     }
 
@@ -209,8 +285,8 @@ final class TerminalManager {
         evictBeyondPoolLimit()
     }
 
-    /// Put the least recently activated channels to sleep. The active terminal
-    /// is never evicted.
+    /// Put every non-active channel to sleep. With a one-channel pool, page
+    /// activation atomically moves the data plane to the foreground terminal.
     private func evictBeyondPoolLimit() {
         while channels.count > Self.maxLiveChannels {
             let victim = channels.values
@@ -223,7 +299,20 @@ final class TerminalManager {
         }
     }
 
-    /// Reconnect everything immediately (app returned to foreground).
+    /// Stop terminal data sockets without touching control connections or the
+    /// daemon PTYs. The selected terminal identity is retained so foreground
+    /// restoration can reopen exactly that channel and receive a fresh replay.
+    func sleepAllChannels() {
+        for channel in channels.values {
+            channel.stop()
+        }
+        channels.removeAll()
+        phases = [:]
+    }
+
+    /// Reconnect currently open links immediately (app returned to foreground).
+    /// A sleeping terminal is reopened by `activate`, after its page is ready
+    /// to consume the replay.
     func kickAll() {
         for computer in computers { computer.kick() }
         for channel in channels.values { channel.kick() }
@@ -260,14 +349,35 @@ final class TerminalManager {
         computer(id: id.computerID)?.closeSession(id: id.sid)
     }
 
+    /// Tab-close selection rule: prefer the preceding tab, using the next tab
+    /// only when the first tab is being removed.
+    static func replacementID(
+        afterClosing id: TerminalID,
+        in terminals: [Terminal]
+    ) -> TerminalID? {
+        guard let index = terminals.firstIndex(where: { $0.id == id }) else { return nil }
+        if index > terminals.startIndex {
+            return terminals[index - 1].id
+        }
+        return terminals.dropFirst().first?.id
+    }
+
+    /// Forwards an agent dismissal to its daemon (the Home list is
+    /// bidirectional): the record disappears for every client until the
+    /// agent's next hook event. The caller hides the row optimistically.
+    func dismissAgent(computerID: String, agentID: String) {
+        computer(id: computerID)?.dismissAgent(id: agentID)
+    }
+
     // MARK: - Terminal I/O passthrough
 
     func sendStdin(_ id: TerminalID, data: Data) {
-        guard terminal(id)?.closing != true else { return }
+        guard activeID == id, terminal(id)?.closing != true else { return }
         channels[id]?.sendStdin(data)
     }
 
     func sendResize(_ id: TerminalID, cols: UInt16, rows: UInt16) {
+        guard activeID == id else { return }
         channels[id]?.sendResize(cols: cols, rows: rows)
     }
 
@@ -387,6 +497,7 @@ final class TerminalManager {
         let terminal = Terminal(id: id, info: info, computerName: computerName)
         terminals.insert(terminal, at: insertionIndexAfterActive())
         activate(id)
+        ownCreations.send(id)
     }
 
     private func moveAfterActiveAndActivate(_ id: TerminalID) {
@@ -394,6 +505,7 @@ final class TerminalManager {
         let terminal = terminals.remove(at: from)
         terminals.insert(terminal, at: insertionIndexAfterActive())
         activate(id)
+        ownCreations.send(id)
     }
 
     private func insertionIndexAfterActive() -> Int {
@@ -415,13 +527,35 @@ final class TerminalManager {
         placeAsOwnWhenSeen.remove(id)
         heldAppends.removeValue(forKey: id)
         guard let index = terminals.firstIndex(where: { $0.id == id }) else { return }
+        let replacementID = Self.replacementID(afterClosing: id, in: terminals)
         terminals.remove(at: index)
+
         if activeID == id {
-            // Prefer the tab that took the closed one's slot, else the last.
-            let fallback = terminals.indices.contains(index)
-                ? terminals[index] : terminals.last
-            activeID = nil
-            if let fallback { activate(fallback.id) }
+            // Tab-close convention is to return to the tab immediately before
+            // the closed one. The first tab has no predecessor, so it uses the
+            // following tab instead.
+            if let replacementID {
+                activate(replacementID)
+            } else {
+                activeID = nil
+            }
         }
+    }
+}
+
+extension AgentState {
+    /// Attention order for sorting and dedup: waiting > error > running > done.
+    var attentionRank: Int {
+        switch self {
+        case .waiting: 0
+        case .error: 1
+        case .running: 2
+        case .done: 3
+        }
+    }
+
+    /// States that should pull the user in ("needs you").
+    var needsAttention: Bool {
+        self == .waiting || self == .error
     }
 }

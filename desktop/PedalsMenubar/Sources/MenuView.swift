@@ -6,7 +6,11 @@ struct MenuView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var updater: UpdaterModel
     @EnvironmentObject private var permissions: PermissionsModel
+    @Environment(\.openWindow) private var openWindow
     @State private var showingPairingCode = false
+    #if DEBUG
+    @State private var openedSettingsForTesting = false
+    #endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -40,6 +44,13 @@ struct MenuView: View {
         .tint(PedalsTheme.content)
         .onAppear {
             permissions.refresh()
+            #if DEBUG
+            if !openedSettingsForTesting,
+               ProcessInfo.processInfo.environment["PEDALS_OPEN_SETTINGS_FROM_MENU"] == "1" {
+                openedSettingsForTesting = true
+                openWindow(id: SettingsWindow.id, value: SettingsWindow.main)
+            }
+            #endif
         }
         .onDisappear {
             showingPairingCode = false
@@ -66,7 +77,9 @@ struct MenuView: View {
 
             Spacer()
 
-            SettingsLink {
+            Button {
+                openWindow(id: SettingsWindow.id, value: SettingsWindow.main)
+            } label: {
                 Image(systemName: "gearshape")
             }
             .buttonStyle(.borderless)
@@ -125,7 +138,9 @@ struct MenuView: View {
     // MARK: Permissions
 
     private var permissionsReminder: some View {
-        SettingsLink {
+        Button {
+            openWindow(id: SettingsWindow.id, value: SettingsWindow.main)
+        } label: {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(PedalsTheme.warning)

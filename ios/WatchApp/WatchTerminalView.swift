@@ -4,6 +4,7 @@ import SwiftUI
 struct WatchTerminalView: View {
     let session: WatchTerminalSession
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -36,6 +37,13 @@ struct WatchTerminalView: View {
         .ignoresSafeArea()
         .task { session.start() }
         .onDisappear { session.stop() }
+        .onChange(of: scenePhase) { _, phase in
+            // Wrist-down stops every link (WatchTerminalStore.stop()); the
+            // store's start() only revives control connections, so the open
+            // terminal reconnects itself on wake instead of sitting frozen.
+            guard phase == .active else { return }
+            session.start()
+        }
     }
 }
 

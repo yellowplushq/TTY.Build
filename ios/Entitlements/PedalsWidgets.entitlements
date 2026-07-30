@@ -8,5 +8,9 @@
 	<array>
 		<string>group.air.build.pedals</string>
 	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)air.build.pedals.shared</string>
+	</array>
 </dict>
 </plist>

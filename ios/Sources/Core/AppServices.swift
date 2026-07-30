@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 import GhosttyTerminal
 import PedalsKit
@@ -39,6 +40,17 @@ final class AppServices {
                 self?.scheduleStatusRefresh()
             }
             .store(in: &statusSubscriptions)
+        terminals.$agentRows
+            .dropFirst()
+            .sink { [weak self] rows in
+                self?.scheduleStatusRefresh()
+                // Use the value emitted by TerminalManager. Reading
+                // ComputerConnection.agents here sees the pre-willSet value
+                // and is why Home could be specific while the island stayed
+                // generic.
+                self?.synchronizeLatestAgentActivity(rows: rows)
+            }
+            .store(in: &statusSubscriptions)
     }
 
     func startSystemSurfaces() {
@@ -49,6 +61,11 @@ final class AppServices {
         }
         IOSWatchConnectivityBridge.shared.activate()
         TTYLiveActivityController.shared.startObservingPushTokens()
+        #if DEBUG
+        if let spec = ProcessInfo.processInfo.environment["PEDALS_LA_FIXTURE"] {
+            TTYLiveActivityController.shared.startFixtureActivity(spec: spec)
+        }
+        #endif
         PushEndpointRegistrar.requestFlush()
         installSharedCredential()
         reconcileBindings()
@@ -138,6 +155,19 @@ final class AppServices {
         synchronizeWatchTerminalContext()
     }
 
+    /// Mirrors per-computer content keys into the widget App Group, with a
+    /// shared-Keychain compatibility copy. Derived keys only — the root
+    /// computer secrets never leave the app's own Keychain group.
+    private func synchronizeActivityKeys(bindings: [ComputerBinding]) {
+        var keys: [String: Data] = [:]
+        for binding in bindings {
+            keys[binding.computerID] = AgentActivity
+                .activityKey(secret: binding.secret)
+                .withUnsafeBytes { Data($0) }
+        }
+        AgentActivityKeyStore.setKeys(keys)
+    }
+
     private func synchronizeWatchTerminalContext() {
         watchTerminalSyncTask?.cancel()
         let source: ClientIdentity
@@ -153,6 +183,7 @@ final class AppServices {
             }
             source = identity
             bindings = try pairingStore.loadAll()
+            synchronizeActivityKeys(bindings: bindings)
         } catch {
             // Transient Keychain failure: keep the Watch's last-known-good
             // credential. The relay is the enforcement point for anything the
@@ -189,6 +220,19 @@ final class AppServices {
         }
     }
 
+    private func synchronizeLatestAgentActivity(rows: [AgentRow]? = nil) {
+        let recent = (rows ?? terminals.agentRows)
+            .max { $0.info.updatedAt < $1.info.updatedAt }
+        let binding = recent.flatMap {
+            terminals.computer(id: $0.computerID)?.binding
+        }
+        Task {
+            await TTYLiveActivityController.shared.synchronizeRecentAgent(
+                recent?.info, binding: binding
+            )
+        }
+    }
+
     private func scheduleStatusRefresh(immediate: Bool = false) {
         statusRefreshTask?.cancel()
         statusRefreshTask = Task { @MainActor [weak self] in
@@ -201,6 +245,7 @@ final class AppServices {
             do {
                 let snapshot = try await PedalsStatusRuntime.refreshState()
                 try await TTYLiveActivityController.shared.synchronize(with: snapshot)
+                self?.synchronizeLatestAgentActivity()
                 WidgetCenter.shared.reloadTimelines(
                     ofKind: PedalsStatusConstants.phoneWidgetKind
                 )

@@ -419,8 +419,15 @@ public enum StatusSharedStore {
                     )
                 }
             } catch {
-                logger.error("Cannot decode shared push state: \(error.localizedDescription)")
-                return nil
+                // Self-heal instead of bricking the queue: a state written
+                // by an older build (e.g. a since-renamed surface value)
+                // must not block registration forever. The credential is
+                // re-installed on the next app launch and every endpoint
+                // re-registers from its own token source.
+                logger.error(
+                    "Resetting undecodable shared push state: \(error.localizedDescription)"
+                )
+                state = PushMutationState()
             }
         }
         let (result, changed) = body(&state)

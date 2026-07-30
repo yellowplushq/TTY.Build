@@ -101,9 +101,28 @@ private struct WatchTTYCountView: View {
                     .font(.title2.bold())
                     .monospacedDigit()
                     .contentTransition(.numericText())
-                Text("TTY")
-                    .font(.caption2)
-                    .foregroundStyle(PedalsTheme.secondaryContent)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("TTY")
+                        .font(.caption2)
+                        .foregroundStyle(PedalsTheme.secondaryContent)
+                    if entry.snapshot.agentsWaiting > 0 {
+                        Label(
+                            "\(entry.snapshot.agentsWaiting) waiting",
+                            systemImage: "sparkles"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(PedalsTheme.warning)
+                        .lineLimit(1)
+                    } else if entry.snapshot.agentsRunning > 0 {
+                        Label(
+                            "\(entry.snapshot.agentsRunning) agents",
+                            systemImage: "sparkles"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(PedalsTheme.secondaryContent)
+                        .lineLimit(1)
+                    }
+                }
                 Spacer(minLength: 0)
             }
 

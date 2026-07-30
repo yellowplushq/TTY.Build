@@ -1,4 +1,5 @@
 import Combine
+import PedalsKit
 import UIKit
 
 /// Grouped inset settings: bound computers (status, unbind, add), font size,
@@ -40,6 +41,7 @@ final class SettingsViewController: UITableViewController {
                 reloadComputers()
             }
             .store(in: &cancellables)
+
     }
 
     /// Live per-computer state (name, link state, RTT) → refresh the section.

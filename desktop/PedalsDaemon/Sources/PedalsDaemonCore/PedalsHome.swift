@@ -25,6 +25,10 @@ public struct PedalsHome: Sendable {
     public var identityLockURL: URL { directory.appendingPathComponent("identity.lock") }
     public var socketPath: String { directory.appendingPathComponent("pedals.sock").path }
     public var sessionCounterURL: URL { directory.appendingPathComponent("session-counter") }
+    /// Binaries shipped into the home directory (the pedals-hook reporter),
+    /// so installed hooks survive daemon rebuilds and relocations.
+    public var binDirectory: URL { directory.appendingPathComponent("bin", isDirectory: true) }
+    public var hookReporterURL: URL { binDirectory.appendingPathComponent("pedals-hook") }
 
     public func ensureDirectoryExists() throws {
         try FileManager.default.createDirectory(

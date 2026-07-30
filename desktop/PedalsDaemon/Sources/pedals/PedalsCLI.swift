@@ -10,7 +10,10 @@ struct PedalsCLI: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "pedals",
         abstract: "Pedals desktop daemon — remote terminal host.",
-        subcommands: [Serve.self, Ls.self, New.self, Kill.self, Pair.self, Status.self]
+        subcommands: [
+            Serve.self, Ls.self, New.self, Kill.self, Pair.self, Status.self,
+            Agents.self, Hooks.self,
+        ]
     )
 }
 
@@ -138,6 +141,146 @@ struct Status: ParsableCommand {
         print("computer: \(reply["computer"] as? String ?? "?")")
         print("client: \(reply["client"] as? String ?? "none")")
         print("uptime: \(Int(reply["uptime"] as? Double ?? 0))s")
+    }
+}
+
+struct Agents: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Dump observed coding-agent sessions as JSON."
+    )
+
+    func run() throws {
+        let reply = try roundTripOrFail(["cmd": "agents"])
+        let list = reply["agents"] as? [Any] ?? []
+        let data = try JSONSerialization.data(
+            withJSONObject: list,
+            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        )
+        print(String(decoding: data, as: UTF8.self))
+    }
+}
+
+// MARK: - hooks
+
+struct Hooks: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Manage coding-agent activity hooks.",
+        subcommands: [HooksInstall.self, HooksUninstall.self, HooksStatus.self]
+    )
+}
+
+private let hookedAgentSlugs = HookInstaller.HookedAgent.allCases
+    .map(\.rawValue).joined(separator: ", ")
+
+private func hookedAgent(_ slug: String) -> HookInstaller.HookedAgent {
+    guard let agent = HookInstaller.HookedAgent(rawValue: slug) else {
+        fail("unsupported agent \"\(slug)\" (supported: \(hookedAgentSlugs))")
+    }
+    return agent
+}
+
+/// The freshly built reporter next to this executable, for `hooks install`.
+private func builtReporterURL() -> URL {
+    let executable = Bundle.main.executableURL
+        ?? URL(fileURLWithPath: CommandLine.arguments[0])
+    return executable.resolvingSymlinksInPath()
+        .deletingLastPathComponent()
+        .appendingPathComponent("pedals-hook")
+}
+
+struct HooksInstall: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "install",
+        abstract: "Copy the reporter to ~/.pedals/bin and write agent hook settings."
+    )
+
+    @Argument(help: "Agent slug (\(HookInstaller.HookedAgent.allCases.map(\.rawValue).joined(separator: "|"))).")
+    var agent: String
+
+    func run() throws {
+        let agent = hookedAgent(self.agent)
+        let home = PedalsHome()
+        let source = builtReporterURL()
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            fail("reporter binary not found at \(source.path) — build pedals-hook first")
+        }
+        do {
+            try HookInstaller.installReporterBinary(from: source, to: home.hookReporterURL)
+            try HookInstaller.install(for: agent, reporterPath: home.hookReporterURL.path)
+        } catch {
+            fail("\(error)")
+        }
+        print("installed \(self.agent) hooks → \(HookInstaller.settingsPath(for: agent))")
+        print("reporter: \(home.hookReporterURL.path)")
+    }
+}
+
+struct HooksUninstall: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "uninstall",
+        abstract: "Remove pedals-managed hook entries from agent settings."
+    )
+
+    @Argument(help: "Agent slug (\(HookInstaller.HookedAgent.allCases.map(\.rawValue).joined(separator: "|"))).")
+    var agent: String
+
+    func run() throws {
+        let agent = hookedAgent(self.agent)
+        do {
+            try HookInstaller.uninstall(for: agent)
+        } catch {
+            fail("\(error)")
+        }
+        print("removed \(self.agent) hooks from \(HookInstaller.settingsPath(for: agent))")
+    }
+}
+
+struct HooksStatus: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "status",
+        abstract: "Report whether pedals-managed hooks are installed."
+    )
+
+    @Argument(help: "Agent slug; omit to list every supported agent.")
+    var agent: String?
+
+    func run() throws {
+        let home = PedalsHome()
+        guard let slug = agent else {
+            for agent in HookInstaller.HookedAgent.allCases {
+                let text: String
+                do {
+                    text = switch try HookInstaller.state(
+                        for: agent, reporterPath: home.hookReporterURL.path
+                    ) {
+                    case .installed: "installed"
+                    case .notInstalled: "not installed"
+                    case .outdated: "outdated"
+                    }
+                } catch {
+                    text = "error: \(error)"
+                }
+                let padded = agent.rawValue.padding(
+                    toLength: 10, withPad: " ", startingAt: 0
+                )
+                print("\(padded) \(text)")
+            }
+            return
+        }
+        let agent = hookedAgent(slug)
+        let state: HookInstaller.State
+        do {
+            state = try HookInstaller.state(
+                for: agent, reporterPath: home.hookReporterURL.path
+            )
+        } catch {
+            fail("\(error)")
+        }
+        switch state {
+        case .installed: print("installed")
+        case .notInstalled: print("not installed")
+        case .outdated: print("outdated — run `pedals hooks install \(slug)`")
+        }
     }
 }
 

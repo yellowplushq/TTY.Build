@@ -31,6 +31,70 @@ public struct SessionInfo: Codable, Equatable, Sendable {
     }
 }
 
+/// Coding-agent session state, reported by daemon-installed hooks
+/// (docs/AGENT_MONITORING_DESIGN.md). Unknown wire values decode as
+/// `.running` so newer daemons stay renderable on older clients.
+public enum AgentState: String, Codable, Sendable {
+    case running
+    case waiting
+    /// The turn ended on an agent-side failure (e.g. an API error). Sticky
+    /// until a new prompt or session start; needs the user's attention.
+    case error
+    case done
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = AgentState(rawValue: raw) ?? .running
+    }
+}
+
+/// One entry of the `agents` list: a coding-agent session observed via hooks.
+/// Rich content (session name, cwd, action, message, prompt) is E2EE-only —
+/// it must never appear in relay metadata or D1.
+public struct AgentInfo: Codable, Equatable, Sendable {
+    /// Hook-reported session id, unique per agent process session.
+    public var id: String
+    /// Agent kind slug: "claude", "codex", …
+    public var agent: String
+    public var state: AgentState
+    /// User-facing session title. For daemon-owned terminals this is the live
+    /// terminal session title; unmanaged agents may report their own title.
+    public var sessionName: String?
+    /// The agent's working directory (project path).
+    public var cwd: String
+    /// One-line current action while running, e.g. "Bash: git status".
+    public var action: String?
+    /// The agent's last message (waiting/done), truncated by the daemon.
+    public var message: String?
+    /// The user's last prompt, truncated by the daemon.
+    public var prompt: String?
+    /// Daemon session id when the agent runs inside a daemon-owned PTY;
+    /// nil ⇒ unmanaged (rendered in the standalone Agents section).
+    public var sessionId: Int?
+    /// Terminal app name for unmanaged agents (e.g. "iTerm2"), best-effort.
+    public var term: String?
+    /// Unix epoch seconds of the last state change.
+    public var updatedAt: Double
+
+    public init(id: String, agent: String, state: AgentState,
+                sessionName: String? = nil, cwd: String,
+                action: String? = nil, message: String? = nil,
+                prompt: String? = nil, sessionId: Int? = nil,
+                term: String? = nil, updatedAt: Double) {
+        self.id = id
+        self.agent = agent
+        self.state = state
+        self.sessionName = sessionName
+        self.cwd = cwd
+        self.action = action
+        self.message = message
+        self.prompt = prompt
+        self.sessionId = sessionId
+        self.term = term
+        self.updatedAt = updatedAt
+    }
+}
+
 /// ctl JSON messages (PROTOCOL.md §5). Wire form is `{"t":"<kind>", ...}`.
 ///
 /// ctl only flows on the control channel. Data channels (one WebSocket per
@@ -54,6 +118,9 @@ public enum ControlMessage: Equatable, Sendable {
     case requestReplay
     /// host→client: private descriptors for the DO directory's session IDs.
     case sessions(list: [SessionInfo])
+    /// host→client: full snapshot of observed coding-agent sessions,
+    /// broadcast on change (debounced) and on client hello.
+    case agents(list: [AgentInfo])
     /// client→host: create a session. `cwd` nil ⇒ JSON null (daemon: home).
     /// `req` is a client-chosen random tag echoed back in `created`.
     case create(cwd: String?, cols: Int, rows: Int, req: UInt32?)
@@ -63,6 +130,11 @@ public enum ControlMessage: Equatable, Sendable {
     case created(id: Int, req: UInt32?)
     /// client→host: close a session.
     case close(id: Int)
+    /// client→host: remove an observed agent from the registry (the Home
+    /// list is bidirectional — a dismissed agent disappears for every
+    /// client until its next hook event recreates the record). `agentId`
+    /// is the hook session id from `AgentInfo.id`.
+    case dismissAgent(agentId: String)
     /// host→client: session title changed.
     case title(id: Int, title: String)
     /// host→client: session process exited.
@@ -75,7 +147,7 @@ public enum ControlMessage: Equatable, Sendable {
 
 extension ControlMessage: Codable {
     private enum CodingKeys: String, CodingKey {
-        case t, who, principal, connEpoch, nonce, ver, host, echoNonce, list, cwd, cols, rows, id, title, code, msg, req
+        case t, who, principal, connEpoch, nonce, ver, host, echoNonce, list, cwd, cols, rows, id, title, code, msg, req, agents, agentId
     }
 
     private var kind: String {
@@ -84,9 +156,11 @@ extension ControlMessage: Codable {
         case .ready: "ready"
         case .requestReplay: "requestReplay"
         case .sessions: "sessions"
+        case .agents: "agents"
         case .create: "create"
         case .created: "created"
         case .close: "close"
+        case .dismissAgent: "dismiss-agent"
         case .title: "title"
         case .exit: "exit"
         case .err: "err"
@@ -111,6 +185,8 @@ extension ControlMessage: Codable {
             break
         case let .sessions(list):
             try container.encode(list, forKey: .list)
+        case let .agents(list):
+            try container.encode(list, forKey: .agents)
         case let .create(cwd, cols, rows, req):
             try container.encode(cwd, forKey: .cwd) // nil encodes as JSON null per spec
             try container.encode(cols, forKey: .cols)
@@ -121,6 +197,8 @@ extension ControlMessage: Codable {
             try container.encodeIfPresent(req, forKey: .req)
         case let .close(id):
             try container.encode(id, forKey: .id)
+        case let .dismissAgent(agentId):
+            try container.encode(agentId, forKey: .agentId)
         case let .title(id, title):
             try container.encode(id, forKey: .id)
             try container.encode(title, forKey: .title)
@@ -155,6 +233,8 @@ extension ControlMessage: Codable {
             self = .requestReplay
         case "sessions":
             self = .sessions(list: try container.decode([SessionInfo].self, forKey: .list))
+        case "agents":
+            self = .agents(list: try container.decode([AgentInfo].self, forKey: .agents))
         case "create":
             self = .create(
                 cwd: try container.decodeIfPresent(String.self, forKey: .cwd),
@@ -169,6 +249,8 @@ extension ControlMessage: Codable {
             )
         case "close":
             self = .close(id: try container.decode(Int.self, forKey: .id))
+        case "dismiss-agent":
+            self = .dismissAgent(agentId: try container.decode(String.self, forKey: .agentId))
         case "title":
             self = .title(
                 id: try container.decode(Int.self, forKey: .id),

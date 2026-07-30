@@ -15,15 +15,36 @@ private enum TerminalKeyboardPagingHintMemory {
     }
 }
 
+enum TerminalFocusPolicy {
+    static func shouldFocus(
+        applicationActive: Bool,
+        restoreFocus: Bool,
+        pageChanged: Bool,
+        hasBeenFocused: Bool,
+        isFirstResponder: Bool
+    ) -> Bool {
+        applicationActive
+            && !isFirstResponder
+            && (restoreFocus || pageChanged || !hasBeenFocused)
+    }
+}
+
 /// Safari-style main screen: floating glass tab strip on top, the active
-/// terminal filling the screen beneath it, and a persistent glass input
-/// toolbar at the bottom that rides above the keyboard. Terminals can live on
-/// different computers; every computer's full session list is shown as tabs.
-/// Horizontal pans page between terminals, with the tab strip following.
+/// page filling the screen beneath it, and a persistent glass input toolbar
+/// at the bottom that rides above the keyboard while a terminal is visible.
+/// Page 0 is the Home overview; one terminal page follows per session
+/// (terminals can live on different computers). Horizontal pans page between
+/// them, with the tab strip following.
 @MainActor
 final class MainViewController: UIViewController {
     private let services: AppServices
     private var manager: TerminalManager { services.terminals }
+
+    /// Identity of one horizontally pageable screen.
+    enum PageID: Hashable {
+        case home
+        case terminal(TerminalID)
+    }
 
     /// One page per terminal: the Ghostty host plus its freeze/loading mask,
     /// wrapped in a container that the pan gesture slides around.
@@ -44,13 +65,33 @@ final class MainViewController: UIViewController {
             overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             overlay.frame = container.bounds
             container.addSubview(overlay)
+            // Standalone TerminalHost instances are interactive by default for
+            // previews/tests. A pageable host starts asleep until this
+            // controller explicitly presents it.
+            host.setActive(false)
         }
     }
 
     private let pagesContainer = UIView()
     private var pages: [TerminalID: Page] = [:]
     private var orderedIds: [TerminalID] = []
-    private var visibleId: TerminalID?
+    /// Cold launch lands on Home; terminal activation never steals it (only
+    /// explicit navigation — taps, pans, own creations — switches pages).
+    private var visiblePage: PageID = .home
+    /// The page whose visibility/focus lifecycle was last committed. Animated
+    /// navigation updates `visiblePage` before settling; keeping this separate
+    /// lets completion transfer first responder from the genuinely old page.
+    private var presentedPage: PageID = .home
+    private var isApplicationActive = UIApplication.shared.applicationState == .active
+    private var visibleId: TerminalID? {
+        if case .terminal(let id) = visiblePage { return id }
+        return nil
+    }
+
+    private lazy var homeController = HomeViewController(manager: services.terminals)
+    private var homeView: UIView { homeController.view }
+    /// Home first, then the terminals in tab order.
+    private var pageOrder: [PageID] { [.home] + orderedIds.map(PageID.terminal) }
 
     private let tabStrip = TabStripView()
     private let toastView = TerminalToastView()
@@ -63,8 +104,17 @@ final class MainViewController: UIViewController {
     private var pagesBottomToViewConstraint: NSLayoutConstraint!
 
     private let unpairedView = UnpairedStateView()
-    private let noSessionsView = UIView()
-    private weak var noSessionsCreateButton: UIButton?
+
+    /// Lets the existing Home agent fixture be captured on a clean simulator
+    /// without manufacturing a pairing identity. Release builds always show
+    /// the real unpaired state.
+    private var hidesUnpairedStateForAgentFixture: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["PEDALS_HOME_AGENTS_FIXTURE"] == "1"
+        #else
+        false
+        #endif
+    }
 
     /// Bound computer count, taken from the `$computers` EMISSION — never read
     /// `manager.computers` inside a sink (@Published emits during willSet, so
@@ -108,6 +158,18 @@ final class MainViewController: UIViewController {
         pagesContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(pagesContainer)
 
+        // Home: the leftmost, always-existing page.
+        addChild(homeController)
+        homeView.translatesAutoresizingMaskIntoConstraints = true
+        homeView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        homeView.frame = pagesContainer.bounds
+        pagesContainer.addSubview(homeView)
+        homeController.didMove(toParent: self)
+        homeController.onSettings = { [weak self] in self?.presentSettings() }
+        homeController.onSelectTerminal = { [weak self] id in
+            self?.switchTo(.terminal(id), animated: true)
+        }
+
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         toolbar.onKey = { [weak self] key in
             self?.sendToolbarKey(key)
@@ -128,20 +190,17 @@ final class MainViewController: UIViewController {
         }
 
         tabStrip.translatesAutoresizingMaskIntoConstraints = false
-        tabStrip.onSelect = { [weak self] id in self?.manager.activate(id) }
-        tabStrip.onClose = { [weak self] id in self?.manager.closeTerminal(id) }
-        tabStrip.onSettings = { [weak self] in self?.presentSettings() }
+        tabStrip.onSelect = { [weak self] id in self?.showTerminal(id) }
+        tabStrip.onClose = { [weak self] id in self?.closeTerminal(id) }
+        tabStrip.onHome = { [weak self] in self?.switchTo(.home, animated: true) }
         tabStrip.onCreate = { [weak self] in self?.createOnOnlyComputer() }
+        tabStrip.setHomeSelected(true)
         view.addSubview(tabStrip)
 
         toastView.translatesAutoresizingMaskIntoConstraints = false
         toastView.alpha = 0
         toastView.transform = CGAffineTransform(translationX: 0, y: -10)
         view.addSubview(toastView)
-
-        noSessionsView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(noSessionsView)
-        buildNoSessionsHint()
 
         unpairedView.translatesAutoresizingMaskIntoConstraints = false
         unpairedView.onEnterCode = { [weak self] in self?.presentPairingCode() }
@@ -190,9 +249,6 @@ final class MainViewController: UIViewController {
             toolbarBottomConstraint,
             toolbar.heightAnchor.constraint(equalToConstant: TerminalToolbar.height),
 
-            noSessionsView.centerXAnchor.constraint(equalTo: pagesContainer.centerXAnchor),
-            noSessionsView.centerYAnchor.constraint(equalTo: pagesContainer.centerYAnchor),
-
             unpairedView.topAnchor.constraint(equalTo: view.topAnchor),
             unpairedView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             unpairedView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -208,47 +264,20 @@ final class MainViewController: UIViewController {
         pagesContainer.addGestureRecognizer(panGesture)
     }
 
-    private func buildNoSessionsHint() {
-        let label = UILabel()
-        label.text = "No terminals"
-        label.font = .preferredFont(forTextStyle: .headline)
-        label.textColor = .secondaryLabel
-        label.textAlignment = .center
-
-        var config = UIButton.Configuration.bordered()
-        config.title = "New Terminal"
-        config.image = UIImage(systemName: "plus")
-        config.imagePadding = 6
-        config.baseForegroundColor = PedalsTheme.uiContent
-        let button = UIButton(configuration: config)
-        button.addAction(
-            UIAction { [weak self] _ in self?.createOnOnlyComputer() }, for: .touchUpInside
-        )
-        // With several computers bound this button carries the same picker menu
-        // as the tab strip's + (installed by the $computers sink).
-        noSessionsCreateButton = button
-
-        let stack = UIStackView(arrangedSubviews: [label, button])
-        stack.axis = .vertical
-        stack.alignment = .center
-        stack.spacing = 12
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        noSessionsView.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: noSessionsView.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: noSessionsView.bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: noSessionsView.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: noSessionsView.trailingAnchor),
-        ])
-    }
-
     // MARK: - Bindings
 
     private func bind() {
-        manager.$terminals
-            .combineLatest(manager.$activeID)
-            .sink { [weak self] terminals, activeId in
-                self?.apply(terminals: terminals, activeId: activeId)
+        Publishers.CombineLatest3(
+            manager.$terminals,
+            manager.$activeID,
+            manager.$agentRows
+        )
+            .sink { [weak self] terminals, activeId, agentRows in
+                self?.apply(
+                    terminals: terminals,
+                    activeId: activeId,
+                    agentRows: agentRows
+                )
             }
             .store(in: &cancellables)
 
@@ -276,19 +305,21 @@ final class MainViewController: UIViewController {
             .sink { [weak self] count in
                 guard let self else { return }
                 computerCount = count
-                let unpaired = count == 0
+                let unpaired = count == 0 && !hidesUnpairedStateForAgentFixture
                 unpairedView.isHidden = !unpaired
                 tabStrip.isHidden = unpaired
-                let menu = count > 1 ? makeCreateMenu() : nil
-                tabStrip.setCreateMenu(menu)
-                noSessionsCreateButton?.menu = menu
-                noSessionsCreateButton?.showsMenuAsPrimaryAction = menu != nil
-                noSessionsView.isHidden = !(manager.terminals.isEmpty && !unpaired)
+                tabStrip.setCreateMenu(count > 1 ? makeCreateMenu() : nil)
                 // The tab-title "machine · " prefix depends on the computer
                 // count; refresh titles when it crosses the 1↔many boundary
                 // even if no session changed (e.g. binding an idle computer).
                 apply(terminals: manager.terminals, activeId: manager.activeID)
             }
+            .store(in: &cancellables)
+
+        // A terminal this device just created: switch to its page (from Home
+        // too — creating is explicit navigation).
+        manager.ownCreations
+            .sink { [weak self] id in self?.showTerminal(id) }
             .store(in: &cancellables)
 
         manager.errors
@@ -299,9 +330,14 @@ final class MainViewController: UIViewController {
             .sink { [weak self] message in self?.showToast(message) }
             .store(in: &cancellables)
 
-        NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+        NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.manager.kickAll() }
+            .sink { [weak self] _ in self?.suspendTerminalPresentation() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.resumeTerminalPresentation() }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(
@@ -394,13 +430,19 @@ final class MainViewController: UIViewController {
 
     // MARK: - Terminal/page reconciliation
 
-    private func apply(terminals: [Terminal], activeId: TerminalID?) {
+    private func apply(
+        terminals: [Terminal],
+        activeId: TerminalID?,
+        agentRows emittedAgentRows: [AgentRow]? = nil
+    ) {
         // A pan drives page frames/visibility by hand; a mid-gesture rebuild
         // would hide the page being dragged. Re-run once the gesture settles.
         if isPanning {
             deferredApply = true
             return
         }
+        let agentRows = emittedAgentRows ?? manager.agentRows
+        let previousOrderedIds = orderedIds
         let ids = Set(terminals.map(\.id))
         orderedIds = terminals.map(\.id)
 
@@ -410,7 +452,6 @@ final class MainViewController: UIViewController {
             }
             page.container.removeFromSuperview()
             pages.removeValue(forKey: id)
-            if visibleId == id { visibleId = nil }
         }
 
         for terminal in terminals where pages[terminal.id] == nil {
@@ -428,7 +469,7 @@ final class MainViewController: UIViewController {
                 terminalKeyboard.setModifierState(state)
             }
             page.host.onFocusChange = { [weak self] focused in
-                guard let self, !focused, visibleId == id else { return }
+                guard let self, isApplicationActive, !focused, visibleId == id else { return }
                 exitTerminalKeyboardMode()
             }
             pages[id] = page
@@ -447,52 +488,222 @@ final class MainViewController: UIViewController {
             }
         }
 
-        setVisiblePage(activeId)
+        // The visible terminal vanished (closed / computer offline): fall back
+        // to its closest surviving predecessor, then successor, before using
+        // the manager's active terminal. Home itself is never yanked away by
+        // data changes.
+        if case .terminal(let id) = visiblePage, pages[id] == nil {
+            let oldIndex = previousOrderedIds.firstIndex(of: id)
+            let predecessor = oldIndex.flatMap { index in
+                previousOrderedIds[..<index].reversed().first { pages[$0] != nil }
+            }
+            let successor = oldIndex.flatMap { index in
+                previousOrderedIds.dropFirst(index + 1).first { pages[$0] != nil }
+            }
+            if let replacement = predecessor ?? successor {
+                visiblePage = .terminal(replacement)
+            } else if let activeId, pages[activeId] != nil {
+                visiblePage = .terminal(activeId)
+            } else {
+                visiblePage = .home
+            }
+        }
+        setVisiblePage(visiblePage)
         updateOverlays(terminals: terminals, phases: manager.phases)
 
         let showComputer = computerCount > 1
         tabStrip.update(
             tabs: terminals.map {
-                .init(
+                let agent = TerminalManager.agent(for: $0.id, in: agentRows)
+                return .init(
                     id: $0.id,
                     title: showComputer ? "\($0.computerName) · \($0.info.title)" : $0.info.title,
-                    alive: $0.info.alive && !$0.closing
+                    alive: $0.info.alive && !$0.closing,
+                    agent: agent?.agent,
+                    agentState: agent?.state
                 )
             },
-            activeId: activeId
+            activeId: visibleId
         )
-        noSessionsView.isHidden = !(terminals.isEmpty && computerCount > 0)
-        updateTerminalChromeVisibility(hasTerminals: !terminals.isEmpty)
     }
 
-    /// Idempotent on purpose: activeID can update BEFORE the terminal list
-    /// does (create flow), so the first call may record an id whose page
-    /// doesn't exist yet — the re-run after page creation must still unhide it.
-    private func setVisiblePage(_ id: TerminalID?) {
-        let previousVisibleId = visibleId
-        visibleId = id
-        for (pageId, page) in pages {
-            page.container.isHidden = pageId != id
-            page.container.frame = pagesContainer.bounds
+    private func container(for page: PageID) -> UIView? {
+        switch page {
+        case .home: homeView
+        case .terminal(let id): pages[id]?.container
         }
-        if let id, let page = pages[id] {
-            page.host.setReplacementInputView(
+    }
+
+    /// Idempotent on purpose: a `created` echo can arrive BEFORE the terminal
+    /// list does (create flow), so the first call may record a page that
+    /// doesn't exist yet — the re-run after page creation must still unhide it.
+    private func setVisiblePage(
+        _ page: PageID,
+        restoreFocus: Bool = false
+    ) {
+        let previousPage = presentedPage
+        visiblePage = page
+        homeView.isHidden = page != .home
+        homeView.frame = pagesContainer.bounds
+        for (pageId, terminalPage) in pages {
+            let isPresented = PageID.terminal(pageId) == page && isApplicationActive
+            terminalPage.host.setActive(isPresented)
+            terminalPage.container.isHidden = PageID.terminal(pageId) != page
+            terminalPage.container.frame = pagesContainer.bounds
+        }
+        if case .terminal(let id) = page, let terminalPage = pages[id] {
+            if isApplicationActive {
+                // The page is ready before opening its one live data channel,
+                // so the reconnect replay cannot be dropped into a sleeping
+                // renderer.
+                manager.activate(id)
+            } else {
+                manager.sleepAllChannels()
+            }
+            terminalPage.host.setReplacementInputView(
                 isTerminalKeyboardEnabled ? terminalKeyboard : nil
             )
-            toolbar.setModifierState(page.host.modifierState)
-            terminalKeyboard.setModifierState(page.host.modifierState)
-            if (previousVisibleId != id || !page.hasBeenFocused)
-                && !page.host.view.isFirstResponder
-            {
-                page.host.view.becomeFirstResponder()
+            toolbar.setModifierState(terminalPage.host.modifierState)
+            terminalKeyboard.setModifierState(terminalPage.host.modifierState)
+            if TerminalFocusPolicy.shouldFocus(
+                applicationActive: isApplicationActive,
+                restoreFocus: restoreFocus,
+                pageChanged: previousPage != page,
+                hasBeenFocused: terminalPage.hasBeenFocused,
+                isFirstResponder: terminalPage.host.view.isFirstResponder
+            ) {
+                terminalPage.host.view.becomeFirstResponder()
             }
-            page.hasBeenFocused = true
+            terminalPage.hasBeenFocused = true
             // Unhiding does not fire didMoveToWindow, so nothing else
             // repaints output that arrived while the view was hidden.
-            page.host.kickRender()
+            if isApplicationActive {
+                terminalPage.host.kickRender()
+                if previousPage != page || restoreFocus {
+                    manager.requestReplay(id)
+                }
+            }
         } else {
+            manager.sleepAllChannels()
             toolbar.setModifierState(TerminalModifierState())
             terminalKeyboard.setModifierState(TerminalModifierState())
+            if page == .home {
+                // Neither the system keyboard nor the terminal keyboard may
+                // cover Home.
+                exitTerminalKeyboardMode()
+                view.endEditing(true)
+            }
+        }
+        presentedPage = page
+        updateTerminalChromeVisibility()
+        tabStrip.setHomeSelected(page == .home)
+    }
+
+    private func suspendTerminalPresentation() {
+        guard isApplicationActive else { return }
+        isApplicationActive = false
+        for page in pages.values {
+            page.host.setActive(false)
+        }
+        manager.sleepAllChannels()
+    }
+
+    private func resumeTerminalPresentation() {
+        guard !isApplicationActive else {
+            manager.kickAll()
+            return
+        }
+        isApplicationActive = true
+        manager.kickAll()
+        // Reattach the foreground renderer before its data channel, force a
+        // replay to cover everything produced while asleep, and restore input
+        // ownership to the terminal the user can actually see.
+        setVisiblePage(visiblePage, restoreFocus: visibleId != nil)
+    }
+
+    // MARK: - Page navigation
+
+    /// Closing the visible tab commits its replacement immediately, before
+    /// the daemon asynchronously confirms removal. Besides feeling direct,
+    /// this prevents the removal emission from ever presenting Home between
+    /// the old and replacement terminal pages.
+    private func closeTerminal(_ id: TerminalID) {
+        guard manager.terminal(id)?.closing == false else { return }
+        if visibleId == id {
+            if let replacementID = TerminalManager.replacementID(
+                afterClosing: id,
+                in: manager.terminals
+            ) {
+                showTerminal(replacementID)
+            } else {
+                setVisiblePage(.home)
+                tabStrip.update(tabs: tabStrip.tabs, activeId: nil)
+            }
+        }
+        manager.closeTerminal(id)
+    }
+
+    /// Instant switch (tab strip tap, own-create echo).
+    private func showTerminal(_ id: TerminalID) {
+        manager.activate(id)
+        if isPanning {
+            // A pan/slide owns the page frames; the deferred apply() will
+            // reconcile visibility to `visiblePage` once it settles.
+            visiblePage = .terminal(id)
+            deferredApply = true
+            return
+        }
+        setVisiblePage(.terminal(id))
+        tabStrip.update(tabs: tabStrip.tabs, activeId: id)
+    }
+
+    /// Animated slide (home pill, Home terminal rows).
+    private func switchTo(_ page: PageID, animated: Bool) {
+        guard page != visiblePage else { return }
+        guard animated, !isPanning,
+              let fromIndex = pageOrder.firstIndex(of: visiblePage),
+              let toIndex = pageOrder.firstIndex(of: page),
+              let fromView = container(for: visiblePage),
+              let toView = container(for: page),
+              pagesContainer.bounds.width > 0
+        else {
+            if case .terminal(let id) = page {
+                showTerminal(id)
+            } else {
+                setVisiblePage(page)
+                tabStrip.update(tabs: tabStrip.tabs, activeId: nil)
+            }
+            return
+        }
+
+        // Defer apply() for the whole slide, exactly like a pan settle;
+        // commit the model first so any activate-driven emission reconciles
+        // toward the target page.
+        isPanning = true
+        visiblePage = page
+        if case .terminal(let id) = page {
+            manager.activate(id)
+        }
+        let width = pagesContainer.bounds.width
+        let direction: CGFloat = toIndex > fromIndex ? 1 : -1
+        toView.isHidden = false
+        toView.frame = pagesContainer.bounds.offsetBy(dx: direction * width, dy: 0)
+        UIView.animate(
+            withDuration: 0.42, delay: 0,
+            usingSpringWithDamping: 0.86, initialSpringVelocity: 0.3,
+            options: [.allowUserInteraction, .beginFromCurrentState]
+        ) {
+            fromView.frame = self.pagesContainer.bounds.offsetBy(dx: -direction * width, dy: 0)
+            toView.frame = self.pagesContainer.bounds
+        } completion: { _ in
+            self.isPanning = false
+            let missedApply = self.deferredApply
+            self.deferredApply = false
+            self.setVisiblePage(page)
+            self.tabStrip.update(tabs: self.tabStrip.tabs, activeId: self.visibleId)
+            if missedApply {
+                self.apply(terminals: self.manager.terminals, activeId: self.manager.activeID)
+            }
         }
     }
 
@@ -529,8 +740,10 @@ final class MainViewController: UIViewController {
         page.host.setReplacementInputView(nil)
     }
 
-    private func updateTerminalChromeVisibility(hasTerminals: Bool) {
-        let shouldShow = hasTerminals && computerCount > 0
+    /// Terminal chrome (bottom toolbar + terminal keyboard) exists only while
+    /// a terminal page is visible; Home is chrome-free.
+    private func updateTerminalChromeVisibility() {
+        let shouldShow = visibleId != nil && computerCount > 0
         toolbar.isHidden = !shouldShow
 
         if shouldShow {
@@ -646,46 +859,52 @@ final class MainViewController: UIViewController {
         ])
     }
 
-    // MARK: - Horizontal pan between terminals
+    // MARK: - Horizontal pan between pages (Home + terminals)
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        guard let activeId = visibleId,
-              let activeIndex = orderedIds.firstIndex(of: activeId),
-              let activePage = pages[activeId]
+        let order = pageOrder
+        guard let activeIndex = order.firstIndex(of: visiblePage),
+              let activeView = container(for: visiblePage)
         else { return }
 
         let width = pagesContainer.bounds.width
         let tx = gesture.translation(in: pagesContainer).x
-        // Dragging left (tx < 0) reveals the NEXT terminal, and vice versa.
+        // Dragging left (tx < 0) reveals the NEXT page, and vice versa.
         let direction = tx < 0 ? 1 : -1
         let targetIndex = activeIndex + direction
-        let hasTarget = orderedIds.indices.contains(targetIndex)
-        let targetPage = hasTarget ? pages[orderedIds[targetIndex]] : nil
+        let hasTarget = order.indices.contains(targetIndex)
+        let targetView = hasTarget ? container(for: order[targetIndex]) : nil
+        // The strip only mirrors terminal↔terminal moves (Home has no
+        // scrolling pill); page index N is tab index N-1.
+        let stripTracks = activeIndex > 0 && targetIndex > 0
 
         switch gesture.state {
         case .changed:
             isPanning = true
             // Rubber-band when there is no neighbor on that side.
             let effectiveTx = hasTarget ? tx : tx / 3
-            activePage.container.frame.origin.x = effectiveTx
+            activeView.frame.origin.x = effectiveTx
 
-            if let targetPage, hasTarget {
+            if let targetView, hasTarget {
                 if panTarget != targetIndex {
                     // Direction changed mid-gesture: hide the old candidate.
-                    if let old = panTarget, orderedIds.indices.contains(old),
-                       old != targetIndex, let oldPage = pages[orderedIds[old]]
+                    if let old = panTarget, order.indices.contains(old),
+                       old != targetIndex, let oldView = container(for: order[old])
                     {
-                        oldPage.container.isHidden = true
+                        oldView.isHidden = true
                     }
                     panTarget = targetIndex
-                    targetPage.container.isHidden = false
+                    targetView.isHidden = false
                 }
-                targetPage.container.frame = pagesContainer.bounds.offsetBy(
+                targetView.frame = pagesContainer.bounds.offsetBy(
                     dx: effectiveTx + CGFloat(direction) * width, dy: 0
                 )
-                tabStrip.setSwitchProgress(
-                    from: activeIndex, to: targetIndex, progress: abs(effectiveTx) / width
-                )
+                if stripTracks {
+                    tabStrip.setSwitchProgress(
+                        from: activeIndex - 1, to: targetIndex - 1,
+                        progress: abs(effectiveTx) / width
+                    )
+                }
             }
 
         case .ended, .cancelled:
@@ -697,36 +916,43 @@ final class MainViewController: UIViewController {
                 && (abs(tx) > width * 0.35 || abs(velocity) > 700)
                 && (velocity == 0 || (velocity < 0) == (direction == 1))
 
-            if commit, let targetPage, gesture.state == .ended {
-                let targetId = orderedIds[targetIndex]
+            if commit, let targetView, gesture.state == .ended {
+                let targetPage = order[targetIndex]
                 // Settle the tab strip in parallel with the page slide (same
                 // spring) so they track; the completion's model update then
                 // re-animates nothing.
-                tabStrip.commitSwitch(
-                    to: targetIndex,
-                    duration: 0.42, damping: 0.86,
-                    initialVelocity: abs(velocity) / width
-                )
+                if stripTracks {
+                    tabStrip.commitSwitch(
+                        to: targetIndex - 1,
+                        duration: 0.42, damping: 0.86,
+                        initialVelocity: abs(velocity) / width
+                    )
+                }
                 UIView.animate(
                     withDuration: 0.42, delay: 0,
                     usingSpringWithDamping: 0.86,
                     initialSpringVelocity: abs(velocity) / width,
                     options: [.allowUserInteraction, .beginFromCurrentState]
                 ) {
-                    activePage.container.frame = self.pagesContainer.bounds.offsetBy(
+                    activeView.frame = self.pagesContainer.bounds.offsetBy(
                         dx: CGFloat(-direction) * width, dy: 0
                     )
-                    targetPage.container.frame = self.pagesContainer.bounds
+                    targetView.frame = self.pagesContainer.bounds
                 } completion: { _ in
                     self.panTarget = nil
                     self.isPanning = false
                     let missedApply = self.deferredApply
                     self.deferredApply = false
-                    // Drives setVisiblePage + tab strip settle via the binding.
-                    self.manager.activate(targetId)
-                    // activate() no-ops if the target was removed mid-gesture
-                    // (its reconcile was deferred above) — nothing would emit,
-                    // so run the skipped apply explicitly.
+                    // Commit the model before activate() so its emission
+                    // reconciles toward the page under the finger, then
+                    // re-assert visibility ourselves (activate() no-ops if
+                    // the target was removed mid-gesture).
+                    self.visiblePage = targetPage
+                    if case .terminal(let id) = targetPage {
+                        self.manager.activate(id)
+                    }
+                    self.setVisiblePage(targetPage)
+                    self.tabStrip.update(tabs: self.tabStrip.tabs, activeId: self.visibleId)
                     if missedApply {
                         self.apply(terminals: self.manager.terminals, activeId: self.manager.activeID)
                     }
@@ -737,18 +963,19 @@ final class MainViewController: UIViewController {
                     usingSpringWithDamping: 0.85, initialSpringVelocity: 0.3,
                     options: [.allowUserInteraction, .beginFromCurrentState]
                 ) {
-                    activePage.container.frame = self.pagesContainer.bounds
-                    if let targetPage, hasTarget {
-                        targetPage.container.frame = self.pagesContainer.bounds.offsetBy(
+                    activeView.frame = self.pagesContainer.bounds
+                    if let targetView, hasTarget {
+                        targetView.frame = self.pagesContainer.bounds.offsetBy(
                             dx: CGFloat(direction) * width, dy: 0
                         )
                     }
                 } completion: { _ in
+                    let order = self.pageOrder
                     if let target = self.panTarget,
-                       self.orderedIds.indices.contains(target),
-                       self.orderedIds[target] != self.visibleId
+                       order.indices.contains(target),
+                       order[target] != self.visiblePage
                     {
-                        self.pages[self.orderedIds[target]]?.container.isHidden = true
+                        self.container(for: order[target])?.isHidden = true
                     }
                     self.panTarget = nil
                     self.isPanning = false
@@ -849,16 +1076,17 @@ extension MainViewController: UIGestureRecognizerDelegate {
     /// terminal (vertical scrollback, taps, long-press selection).
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer === panGesture else { return true }
-        guard let id = visibleId,
-              let index = orderedIds.firstIndex(of: id),
-              let page = pages[id]
-        else { return false }
+        guard let index = pageOrder.firstIndex(of: visiblePage) else { return false }
+        let selectionActive: Bool = {
+            guard let id = visibleId, let page = pages[id] else { return false }
+            return page.host.isTextSelectionActive
+        }()
         let velocity = panGesture.velocity(in: pagesContainer)
         return TerminalPagingIntent.shouldBegin(
             velocity: velocity,
             currentIndex: index,
-            pageCount: orderedIds.count,
-            selectionActive: page.host.isTextSelectionActive
+            pageCount: pageOrder.count,
+            selectionActive: selectionActive
         )
     }
 

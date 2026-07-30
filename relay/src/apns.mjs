@@ -40,6 +40,13 @@ export const APNS_SURFACES = Object.freeze({
   }),
 });
 
+const AGENT_ACTIVITY_ALERTS = Object.freeze({
+  running: "An agent started working",
+  waiting: "An agent needs your input",
+  error: "An agent hit an error",
+  done: "An agent finished its task",
+});
+
 const INVALID_DEVICE_REASONS = new Set([
   "BadDeviceToken",
   "DeviceTokenNotForTopic",
@@ -219,7 +226,7 @@ function rejectUnknownKeys(value, allowed, name) {
 
 function liveActivityPayload(surface, value, now) {
   const payload = plainObject(value, "payload");
-  rejectUnknownKeys(payload, new Set(["state", "event"]), "payload");
+  rejectUnknownKeys(payload, new Set(["state", "event", "activity"]), "payload");
   const state = plainObject(payload.state, "payload.state");
   if (!Number.isSafeInteger(state.totalRunning) || state.totalRunning < 0) {
     throw new TypeError("payload.state.totalRunning must be a non-negative safe integer");
@@ -248,12 +255,23 @@ function liveActivityPayload(surface, value, now) {
     throw new TypeError(`payload.event is not valid for ${surface}`);
   }
 
+  const agentCount = (value, name) => {
+    if (value === undefined) return 0;
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new TypeError(`${name} must be a non-negative safe integer`);
+    }
+    return value;
+  };
+
   const aps = {
     timestamp: Math.floor(now / 1000),
     event: payload.event,
     "stale-date": Math.floor(updatedAtMilliseconds / 1000) + LIVE_ACTIVITY_STALE_SECONDS,
     "content-state": {
       totalRunning: state.totalRunning,
+      agentsRunning: agentCount(state.agentsRunning, "payload.state.agentsRunning"),
+      agentsWaiting: agentCount(state.agentsWaiting, "payload.state.agentsWaiting"),
+      agentsDone: agentCount(state.agentsDone, "payload.state.agentsDone"),
       onlineComputerCount,
       offlineComputerCount: state.computers.length - onlineComputerCount,
       updatedAt: updatedAtMilliseconds / 1000 - APPLE_REFERENCE_DATE_UNIX_SECONDS,
@@ -261,17 +279,53 @@ function liveActivityPayload(surface, value, now) {
     },
   };
 
+  if (payload.activity !== undefined) {
+    const activity = plainObject(payload.activity, "payload.activity");
+    rejectUnknownKeys(
+      activity,
+      new Set(["eventID", "state", "updatedAt", "alert", "sealed", "computerId"]),
+      "payload.activity",
+    );
+    if (!Object.hasOwn(AGENT_ACTIVITY_ALERTS, activity.state)) {
+      if (activity.state !== "running") {
+        throw new TypeError("payload.activity.state is invalid");
+      }
+    }
+    if (!Number.isSafeInteger(activity.updatedAt) || activity.updatedAt < 0) {
+      throw new TypeError("payload.activity.updatedAt must be a non-negative safe integer");
+    }
+    if (typeof activity.alert !== "boolean") {
+      throw new TypeError("payload.activity.alert must be boolean");
+    }
+    const computerId = requiredString(activity.computerId, "payload.activity.computerId");
+    const sealed = requiredString(activity.sealed, "payload.activity.sealed");
+    if (sealed.length > 2700 || !/^[A-Za-z0-9+/]+={0,2}$/.test(sealed)) {
+      throw new TypeError("payload.activity.sealed must be base64");
+    }
+    Object.assign(aps["content-state"], {
+      recentAgentComputerID: computerId,
+      recentAgentState: activity.state,
+      recentAgentUpdatedAt:
+        activity.updatedAt / 1000 - APPLE_REFERENCE_DATE_UNIX_SECONDS,
+      recentAgentSealed: sealed,
+    });
+    // Apple requires every remote Live Activity start to include an alert.
+    // A running agent uses that alert only for its first push-to-start; later
+    // running updates remain silent because `activity.alert` stays false.
+    if (activity.alert || surface === "liveactivity-start") {
+      const body = AGENT_ACTIVITY_ALERTS[activity.state];
+      if (!body) throw new TypeError("agent activity state cannot alert");
+      aps.alert = { title: "Pedals", body };
+    }
+  }
+
   if (surface === "liveactivity-start") {
     aps["input-push-token"] = 1;
     aps["attributes-type"] = LIVE_ACTIVITY_ATTRIBUTES_TYPE;
     aps.attributes = { scope: "all" };
-    aps.alert = {
-      title: "Pedals",
-      body:
-        state.totalRunning === 1
-          ? "1 terminal is running"
-          : `${state.totalRunning} terminals are running`,
-    };
+    if (!aps.alert) {
+      throw new TypeError("liveactivity-start requires an alert");
+    }
   }
   if (payload.event === "end") {
     aps["dismissal-date"] = Math.floor(now / 1000);
@@ -383,7 +437,12 @@ export function createApnsClient(
         "apns-push-type": config.pushType,
         "apns-topic": config.topic,
         "apns-priority":
-          surface === "liveactivity-update" && payload?.event === "end"
+          surface === "liveactivity-update" &&
+          (
+            payload?.event === "end" ||
+            payload?.activity?.alert === true ||
+            value.immediate === true
+          )
             ? "10"
             : config.priority,
         // Non-zero expiration lets APNs retain ActivityKit transitions while

@@ -47,7 +47,7 @@ export default defineConfig({
               headers: { "content-type": "application/json" },
             });
           }
-          if (token === "fb".repeat(32)) {
+          if (token.startsWith("fb")) {
             return new Response(JSON.stringify({ reason: "TooManyRequests" }), {
               status: 429,
               headers: {

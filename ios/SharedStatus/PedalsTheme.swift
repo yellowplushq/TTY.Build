@@ -16,6 +16,7 @@ enum PedalsTheme {
 
     static let warning = Color.orange
     static let critical = Color.red
+    static let success = Color.green
 }
 
 #if os(iOS)
@@ -57,5 +58,6 @@ extension PedalsTheme {
 
     static let uiWarning = UIColor.systemOrange
     static let uiCritical = UIColor.systemRed
+    static let uiSuccess = UIColor.systemGreen
 }
 #endif

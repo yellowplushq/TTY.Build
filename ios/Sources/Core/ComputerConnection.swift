@@ -29,6 +29,9 @@ final class ComputerConnection {
     /// True only when the Durable Object's terminal directory is online.
     @Published private(set) var hostOnline = false
     @Published private(set) var sessions: [SessionInfo] = []
+    /// Latest coding-agent snapshot from the daemon's hooks; cleared with the
+    /// session list when the host goes offline.
+    @Published private(set) var agents: [AgentInfo] = []
     @Published private(set) var roundTripTime: TimeInterval?
 
     let events = PassthroughSubject<Event, Never>()
@@ -37,6 +40,9 @@ final class ComputerConnection {
     private var directoryRevision: UInt64?
     private var directoryEntries: [Int: Bool] = [:]
     private var peerSessions: [SessionInfo] = []
+    /// Raw agent list from the daemon, held so a snapshot that arrives before
+    /// the directory reports online still applies once it does.
+    private var peerAgents: [AgentInfo] = []
 
     var displayName: String {
         hostName ?? "Computer \(binding.computerID.prefix(6))"
@@ -98,6 +104,12 @@ final class ComputerConnection {
         control.send(.close(id: id))
     }
 
+    /// Removes an observed agent from the daemon's registry (bidirectional
+    /// list; the record reappears on the agent's next hook event).
+    func dismissAgent(id: String) {
+        control.send(.dismissAgent(agentId: id))
+    }
+
     /// A fresh (not yet started) data link for one of this computer's sessions.
     func makeSessionLink(sid: Int) -> RelayLink {
         RelayLink(
@@ -120,6 +132,9 @@ final class ComputerConnection {
         case .sessions(let list):
             peerSessions = list
             applyDirectory()
+        case .agents(let list):
+            peerAgents = list
+            agents = hostOnline ? list : []
         case .created(let id, let req):
             events.send(.created(id: id, req: req))
         case .title(let id, let title):
@@ -136,7 +151,7 @@ final class ComputerConnection {
             events.send(.exit(id: id, code: code))
         case .err(let msg, let req):
             events.send(.error(msg: msg, req: req))
-        case .create, .close, .ready, .requestReplay:
+        case .create, .close, .dismissAgent, .ready, .requestReplay:
             break // client→host only; ignore if mirrored back
         }
     }
@@ -156,9 +171,12 @@ final class ComputerConnection {
 
         if directory.online {
             applyDirectory()
+            agents = peerAgents
         } else {
             peerSessions.removeAll(keepingCapacity: true)
+            peerAgents.removeAll(keepingCapacity: true)
             sessions = []
+            agents = []
             if wasOnline {
                 events.send(.offline(removedTerminalCount: removedCount))
             }

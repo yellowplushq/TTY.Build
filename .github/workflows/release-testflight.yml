@@ -33,11 +33,12 @@ jobs:
   release:
     name: Validate, sign, and publish
     runs-on: macos-26
-    timeout-minutes: 75
+    timeout-minutes: 150
     env:
       ASC_APP_ID: "6792312114"
       ASC_BYPASS_KEYCHAIN: "true"
       ASC_STRICT_AUTH: "true"
+      ASC_TIMEOUT: "120s"
       ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
       ASC_PRIVATE_KEY_B64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
@@ -142,8 +143,10 @@ jobs:
             ios/Pedals.xcodeproj/project.pbxproj)"
           version_count="$(rg -c "MARKETING_VERSION = $release_version;" \
             ios/Pedals.xcodeproj/project.pbxproj)"
-          [[ "$build_count" == "8" ]]
-          [[ "$version_count" == "8" ]]
+          source_build_count="$(rg -c 'CURRENT_PROJECT_VERSION:' ios/project.yml)"
+          source_version_count="$(rg -c 'MARKETING_VERSION:' ios/project.yml)"
+          [[ "$build_count" == "$((source_build_count * 2))" ]]
+          [[ "$version_count" == "$((source_version_count * 2))" ]]
           git diff --check
 
       - name: Run protocol and service tests
@@ -191,6 +194,7 @@ jobs:
             -scheme Pedals \
             -destination "platform=iOS Simulator,id=$simulator" \
             -derivedDataPath "$PEDALS_RELEASE_DIR/derived-data-tests" \
+            -parallel-testing-enabled NO \
             test
 
       - name: Import iOS Distribution certificate
@@ -246,6 +250,7 @@ jobs:
             local name="$1"
             local application_identifier="$2"
             local requires_apns="$3"
+            local requires_shared_keychain="$4"
             local count profile_id mobileprovision decoded uuid
             count="$(jq --arg name "$name" \
               '[.data[] | select(.attributes.name == $name)] | length' \
@@ -272,6 +277,15 @@ jobs:
               [[ "$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:aps-environment' "$decoded")" \
                 == "production" ]]
             fi
+            if [[ "$requires_shared_keychain" == "true" ]]; then
+              plutil -extract Entitlements.keychain-access-groups json \
+                -o "$profile_dir/keychain-groups.json" "$decoded"
+              jq -e \
+                --arg exact "$PEDALS_TEAM_ID.air.build.pedals.shared" \
+                --arg wildcard "$PEDALS_TEAM_ID.*" \
+                'index($exact) != null or index($wildcard) != null' \
+                "$profile_dir/keychain-groups.json" >/dev/null
+            fi
             uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$decoded")"
             cp "$mobileprovision" "$install_dir/$uuid.mobileprovision"
           }
@@ -279,19 +293,23 @@ jobs:
           install_profile \
             "Pedals YellowPlus App Store" \
             "$PEDALS_TEAM_ID.air.build.pedals" \
+            true \
             true
           install_profile \
             "Pedals Widgets YellowPlus App Store" \
             "$PEDALS_TEAM_ID.air.build.pedals.widgets" \
+            true \
             true
           install_profile \
             "Pedals Watch YellowPlus App Store" \
             "$PEDALS_TEAM_ID.air.build.pedals.watchapp" \
+            false \
             false
           install_profile \
             "Pedals Watch Widgets YellowPlus App Store" \
             "$PEDALS_TEAM_ID.air.build.pedals.watchapp.widgets" \
-            true
+            true \
+            false
 
       - name: Create export options
         shell: bash
@@ -344,6 +362,7 @@ jobs:
             local bundle_id="$2"
             local profile_name="$3"
             local requires_apns="$4"
+            local requires_shared_keychain="$5"
             local entitlements profile bundle_name
             bundle_name="$(basename "$bundle")"
             entitlements="$RUNNER_TEMP/$bundle_name.entitlements.xml"
@@ -368,28 +387,41 @@ jobs:
               [[ "$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$entitlements")" \
                 == "production" ]]
             fi
+            if [[ "$requires_shared_keychain" == "true" ]]; then
+              plutil -extract keychain-access-groups json \
+                -o "$RUNNER_TEMP/$bundle_name.keychain-groups.json" \
+                "$entitlements"
+              jq -e \
+                --arg group "$PEDALS_TEAM_ID.air.build.pedals.shared" \
+                'index($group) != null' \
+                "$RUNNER_TEMP/$bundle_name.keychain-groups.json" >/dev/null
+            fi
           }
 
           verify_bundle \
             "$app" \
             air.build.pedals \
             "Pedals YellowPlus App Store" \
+            true \
             true
           verify_bundle \
             "$app/PlugIns/PedalsWidgets.appex" \
             air.build.pedals.widgets \
             "Pedals Widgets YellowPlus App Store" \
+            true \
             true
           verify_bundle \
             "$app/Watch/PedalsWatch.app" \
             air.build.pedals.watchapp \
             "Pedals Watch YellowPlus App Store" \
+            false \
             false
           verify_bundle \
             "$app/Watch/PedalsWatch.app/PlugIns/PedalsWatchWidgets.appex" \
             air.build.pedals.watchapp.widgets \
             "Pedals Watch Widgets YellowPlus App Store" \
-            true
+            true \
+            false
 
       - name: Export IPA
         shell: bash
@@ -409,32 +441,77 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          asc publish testflight \
+          asc builds upload \
             --app "$ASC_APP_ID" \
             --ipa "$PEDALS_RELEASE_DIR/Pedals.ipa" \
             --version "$PEDALS_RELEASE_VERSION" \
             --build-number "$PEDALS_RELEASE_BUILD" \
-            --group "$PEDALS_INTERNAL_GROUP_ID" \
-            --test-notes "$PEDALS_TEST_NOTES" \
-            --locale en-US \
-            --wait \
-            --timeout 45m \
-            --poll-interval 30s \
-            --notify \
             --output json \
-            --pretty | tee "$PEDALS_RELEASE_DIR/internal-publish.json"
+            --pretty | tee "$PEDALS_RELEASE_DIR/upload.json"
 
-          jq -e '.processingState == "VALID" and .uploaded == true' \
-            "$PEDALS_RELEASE_DIR/internal-publish.json" >/dev/null
-          build_id="$(jq -er '.buildId' "$PEDALS_RELEASE_DIR/internal-publish.json")"
+          asc builds wait \
+            --app "$ASC_APP_ID" \
+            --build-number "$PEDALS_RELEASE_BUILD" \
+            --version "$PEDALS_RELEASE_VERSION" \
+            --platform IOS \
+            --timeout 90m \
+            --poll-interval 30s \
+            --fail-on-invalid \
+            --output json \
+            --pretty | tee "$PEDALS_RELEASE_DIR/build-wait.json"
+
+          jq -e '.data.attributes.processingState == "VALID"' \
+            "$PEDALS_RELEASE_DIR/build-wait.json" >/dev/null
+          build_id="$(jq -er '.data.id' "$PEDALS_RELEASE_DIR/build-wait.json")"
           echo "PEDALS_BUILD_ID=$build_id" >> "$GITHUB_ENV"
+
+          asc builds test-notes list \
+            --build-id "$build_id" \
+            --output json > "$PEDALS_RELEASE_DIR/test-notes.json"
+          if jq -e 'any(.data[]; .attributes.locale == "en-US")' \
+            "$PEDALS_RELEASE_DIR/test-notes.json" >/dev/null; then
+            asc builds test-notes update \
+              --build-id "$build_id" \
+              --locale en-US \
+              --whats-new "$PEDALS_TEST_NOTES"
+          else
+            asc builds test-notes create \
+              --build-id "$build_id" \
+              --locale en-US \
+              --whats-new "$PEDALS_TEST_NOTES"
+          fi
+
           asc testflight groups links view \
             --group-id "$PEDALS_INTERNAL_GROUP_ID" \
             --type builds \
             --paginate \
             --output json > "$PEDALS_RELEASE_DIR/internal-group-builds.json"
+          if ! jq -e --arg build "$build_id" 'any(.data[]; .id == $build)' \
+            "$PEDALS_RELEASE_DIR/internal-group-builds.json" >/dev/null; then
+            asc builds add-groups \
+              --build-id "$build_id" \
+              --group "$PEDALS_INTERNAL_GROUP_ID"
+            asc testflight groups links view \
+              --group-id "$PEDALS_INTERNAL_GROUP_ID" \
+              --type builds \
+              --paginate \
+              --output json > "$PEDALS_RELEASE_DIR/internal-group-builds.json"
+          fi
           jq -e --arg build "$build_id" 'any(.data[]; .id == $build)' \
             "$PEDALS_RELEASE_DIR/internal-group-builds.json" >/dev/null
+          notification_log="$PEDALS_RELEASE_DIR/internal-notification.log"
+          if asc testflight notifications send \
+            --build-id "$build_id" \
+            --output json \
+            --pretty > "$notification_log" 2>&1; then
+            sed -n '1,120p' "$notification_log"
+          elif rg -q 'auto-notify is already enabled' "$notification_log"; then
+            sed -n '1,120p' "$notification_log"
+            echo "Internal group auto-notify already covers this build."
+          else
+            sed -n '1,120p' "$notification_log" >&2
+            exit 1
+          fi
 
       - name: Publish to external TestFlight
         if: inputs.distribute_external

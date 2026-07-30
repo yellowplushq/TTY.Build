@@ -119,6 +119,20 @@ final class FrameCodecTests: XCTestCase {
             .requestReplay,
             .sessions(list: [session]),
             .sessions(list: []),
+            .agents(list: [
+                AgentInfo(
+                    id: "abc-123", agent: "claude", state: .waiting,
+                    cwd: "/Users/x/dev", action: "Bash: git status",
+                    message: "Need permission to run git push",
+                    prompt: "fix the auth bug", sessionId: 7,
+                    term: "iTerm2", updatedAt: 1_752_700_100
+                ),
+                AgentInfo(
+                    id: "def-456", agent: "claude", state: .running,
+                    cwd: "/tmp", updatedAt: 1_752_700_200
+                ),
+            ]),
+            .agents(list: []),
             .create(cwd: "/tmp", cols: 80, rows: 24, req: 0xCAFE),
             .create(cwd: nil, cols: 120, rows: 40, req: nil),
             .created(id: 3, req: 0xCAFE),
@@ -135,6 +149,14 @@ final class FrameCodecTests: XCTestCase {
             let decoded = try Frame.decode(frame.encoded())
             XCTAssertEqual(try decoded.controlMessage(), message, "round trip failed for \(message)")
         }
+    }
+
+    func testAgentStateUnknownValueDecodesAsRunning() throws {
+        let json = Data(#"{"t":"agents","agents":[{"id":"x","agent":"claude","state":"pondering","cwd":"/tmp","updatedAt":1}]}"#.utf8)
+        guard case let .agents(list) = try ControlMessage(jsonData: json) else {
+            return XCTFail("expected agents message")
+        }
+        XCTAssertEqual(list.first?.state, .running)
     }
 
     func testControlMessageWireShape() throws {
