@@ -465,11 +465,12 @@ describe("Pedals v2 Worker API", () => {
     expect((await bind(first, computer, freshInvite)).status).toBe(200);
     expect((await bind(second, computer, freshInvite)).status).toBe(400);
     expect(
-      (await api(`/v2/clients/me/bindings/${computer.computerId}`, {
-        method: "DELETE",
+      (await api("/v2/clients/me/bindings", {
+        method: "PUT",
         token: first.clientToken,
+        body: { computerIds: [] },
       })).status,
-    ).toBe(204);
+    ).toBe(200);
     expect((await bind(first, computer, freshInvite)).status).toBe(400);
   });
 
@@ -608,7 +609,7 @@ describe("Pedals v2 Worker API", () => {
     }
   });
 
-  test("binding deletion is idempotent and revokes relay access", async () => {
+  test("binding reconcile is idempotent and revokes relay access", async () => {
     const computer = await createComputer();
     const client = await createClient();
     expect((await bind(client, computer)).status).toBe(201);
@@ -617,11 +618,13 @@ describe("Pedals v2 Worker API", () => {
     expect(control.response.status).toBe(101);
     expect(session.response.status).toBe(101);
 
-    const removed = await api(`/v2/clients/me/bindings/${computer.computerId}`, {
-      method: "DELETE",
+    const removed = await apiJson("/v2/clients/me/bindings", {
+      method: "PUT",
       token: client.clientToken,
+      body: { computerIds: [] },
     });
-    expect(removed.status).toBe(204);
+    expect(removed.response.status).toBe(200);
+    expect(removed.value).toEqual({ computerIds: [] });
     expect((await control.peer.nextClose()).code).toBe(4003);
     expect((await session.peer.nextClose()).code).toBe(4003);
     expect(
@@ -636,12 +639,13 @@ describe("Pedals v2 Worker API", () => {
           .first("count"),
       ),
     ).toBe(0);
-    expect(
-      (await api(`/v2/clients/me/bindings/${computer.computerId}`, {
-        method: "DELETE",
-        token: client.clientToken,
-      })).status,
-    ).toBe(204);
+    const repeated = await apiJson("/v2/clients/me/bindings", {
+      method: "PUT",
+      token: client.clientToken,
+      body: { computerIds: [] },
+    });
+    expect(repeated.response.status).toBe(200);
+    expect(repeated.value).toEqual({ computerIds: [] });
     expect(
       Number(
         await env.DB
@@ -655,6 +659,39 @@ describe("Pedals v2 Worker API", () => {
       ),
     ).toBe(0);
     expect((await connect(computer.computerId, client.clientToken)).response.status).toBe(401);
+  });
+
+  test("binding reconcile never creates an edge and rejects invalid lists", async () => {
+    const computer = await createComputer();
+    const other = await createComputer();
+    const client = await createClient();
+    expect((await bind(client, computer)).status).toBe(201);
+
+    const declared = await apiJson("/v2/clients/me/bindings", {
+      method: "PUT",
+      token: client.clientToken,
+      body: { computerIds: [computer.computerId, other.computerId] },
+    });
+    expect(declared.response.status).toBe(200);
+    expect(declared.value).toEqual({ computerIds: [computer.computerId] });
+    expect((await connect(other.computerId, client.clientToken)).response.status).toBe(401);
+    expect((await connect(computer.computerId, client.clientToken)).response.status).toBe(101);
+
+    for (const computerIds of [
+      "not-a-list",
+      [computer.computerId, computer.computerId],
+      ["not-an-id"],
+      Array.from({ length: 33 }, (_, index) =>
+        index.toString(16).padStart(32, "0")),
+    ]) {
+      const rejected = await apiJson("/v2/clients/me/bindings", {
+        method: "PUT",
+        token: client.clientToken,
+        body: { computerIds },
+      });
+      expect(rejected.response.status).toBe(400);
+      expect(rejected.value.error.code).toBe("invalid_bindings");
+    }
   });
 
   test("a delegated client receives exactly the source bindings", async () => {
@@ -707,10 +744,11 @@ describe("Pedals v2 Worker API", () => {
       ).bind(source.clientId).first("delegateClientId"),
     ).toBe(delegated.clientId);
 
-    expect((await api(`/v2/clients/me/bindings/${firstComputer.computerId}`, {
-      method: "DELETE",
+    expect((await api("/v2/clients/me/bindings", {
+      method: "PUT",
       token: source.clientToken,
-    })).status).toBe(204);
+      body: { computerIds: [secondComputer.computerId] },
+    })).status).toBe(200);
     expect((await firstControl.peer.nextClose()).code).toBe(4003);
     expect((await connect(firstComputer.computerId, source.clientToken)).response.status).toBe(401);
     expect((await connect(firstComputer.computerId, delegated.clientToken)).response.status).toBe(401);
@@ -825,10 +863,14 @@ describe("Pedals v2 Worker API", () => {
     };
     const pending = [];
     const request = new Request(
-      `https://relay.test/v2/clients/me/bindings/${computer.computerId}`,
+      "https://relay.test/v2/clients/me/bindings",
       {
-        method: "DELETE",
-        headers: { authorization: `Bearer ${client.clientToken}` },
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${client.clientToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ computerIds: [] }),
       },
     );
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -838,7 +880,7 @@ describe("Pedals v2 Worker API", () => {
           pending.push(promise);
         },
       }, new URL(request.url));
-      expect(removed.status).toBe(204);
+      expect(removed.status).toBe(200);
       await Promise.all(pending);
       expect(errorSpy).toHaveBeenCalledWith(
         "client socket revocation failed",
@@ -2650,11 +2692,12 @@ describe("relay HTTP long-poll transport", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const removed = await api(`/v2/clients/me/bindings/${computer.computerId}`, {
-      method: "DELETE",
+    const removed = await api("/v2/clients/me/bindings", {
+      method: "PUT",
       token: client.clientToken,
+      body: { computerIds: [] },
     });
-    expect(removed.status).toBe(204);
+    expect(removed.status).toBe(200);
     expect((await parked).status).toBe(401);
 
     const rebound = await poll(computer.computerId, client.clientToken, {

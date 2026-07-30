@@ -6,7 +6,11 @@ import Security
 protocol PairingServiceClient: AnyObject {
     func createClient() async throws -> ClientIdentity
     func pair(code: PairingCode, as client: ClientIdentity) async throws -> ComputerBinding
-    func unbind(computerID: String, as client: ClientIdentity) async throws
+    @discardableResult
+    func reconcileBindings(
+        computerIDs: [String],
+        as client: ClientIdentity
+    ) async throws -> [String]
 }
 
 extension PedalsServiceAPI: PairingServiceClient {}
@@ -15,12 +19,16 @@ extension PedalsServiceAPI: PairingServiceClient {}
 /// Keychain value. A single value is important here: replacing a stale client
 /// identity must never leave bindings that belong to the previous identity.
 /// Pairing codes and ephemeral agreement keys are intentionally never stored.
+///
+/// This Keychain value is the authoritative client-side binding list. Edge
+/// creation still requires the pairing ceremony, but removal commits locally
+/// first; the service converges to the declared list afterwards (delete-only)
+/// and every `reconcile()` retries any convergence that has not landed yet.
 @MainActor
 final class PairingStore {
     enum StoreError: Error, LocalizedError {
         case serviceMismatch
         case missingClientIdentity
-        case compensationFailed(primary: any Error, compensation: any Error)
 
         var errorDescription: String? {
             switch self {
@@ -28,8 +36,6 @@ final class PairingStore {
                 "This Pedals installation is already registered with another service."
             case .missingClientIdentity:
                 "The Pedals client identity is missing. Pair this device again."
-            case .compensationFailed(let primary, let compensation):
-                "Could not roll back a failed pairing commit (commit: \(primary.localizedDescription); rollback: \(compensation.localizedDescription))."
             }
         }
     }
@@ -112,11 +118,10 @@ final class PairingStore {
             }
             do {
                 let binding = try await api.pair(code: code, as: previousState.identity)
-                return try await commitBinding(
+                return try commitBinding(
                     binding,
                     identity: previousState.identity,
-                    previousState: previousState,
-                    api: api
+                    previousState: previousState
                 )
             } catch {
                 guard Self.isUnauthorized(error) else { throw error }
@@ -134,36 +139,16 @@ final class PairingStore {
     private func commitBinding(
         _ binding: ComputerBinding,
         identity: ClientIdentity,
-        previousState: PersistentState,
-        api: any PairingServiceClient
-    ) async throws -> (ComputerBinding, ClientIdentity) {
+        previousState: PersistentState
+    ) throws -> (ComputerBinding, ClientIdentity) {
         var bindings = previousState.bindings.filter {
             $0.computerID != binding.computerID
         }
         bindings.append(binding)
 
-        do {
-            try saveState(PersistentState(identity: identity, bindings: bindings))
-        } catch {
-            // Re-pairing an existing edge must retain that edge if the local
-            // key cannot be replaced. A newly-created edge is compensated.
-            if !previousState.bindings.contains(where: {
-                $0.computerID == binding.computerID
-            }) {
-                do {
-                    try await api.unbind(
-                        computerID: binding.computerID,
-                        as: identity
-                    )
-                } catch let compensation {
-                    throw StoreError.compensationFailed(
-                        primary: error,
-                        compensation: compensation
-                    )
-                }
-            }
-            throw error
-        }
+        // A failed local commit leaves a server edge the local list does not
+        // declare; the identity is persisted, so the next reconcile removes it.
+        try saveState(PersistentState(identity: identity, bindings: bindings))
         return (binding, identity)
     }
 
@@ -180,17 +165,10 @@ final class PairingStore {
                 bindings: [binding]
             ))
         } catch {
-            do {
-                try await api.unbind(
-                    computerID: binding.computerID,
-                    as: identity
-                )
-            } catch let compensation {
-                throw StoreError.compensationFailed(
-                    primary: error,
-                    compensation: compensation
-                )
-            }
+            // The replacement identity was never persisted, so no future
+            // reconcile will speak for it; one best-effort convergence with an
+            // empty list is the only chance to remove its server edge.
+            try? await api.reconcileBindings(computerIDs: [], as: identity)
             throw error
         }
         return (binding, identity)
@@ -211,12 +189,37 @@ final class PairingStore {
         guard let state = try loadState() else {
             throw StoreError.missingClientIdentity
         }
-        let api = apiFactory(state.identity.serviceURL)
-        try await api.unbind(computerID: computerID, as: state.identity)
+        // Local-first: the Keychain commit is the success criterion. Server
+        // convergence is attempted immediately but a failure is not an unbind
+        // failure; the next reconcile() retries with the same declared list.
+        let remaining = state.bindings.filter { $0.computerID != computerID }
         try saveState(PersistentState(
             identity: state.identity,
-            bindings: state.bindings.filter { $0.computerID != computerID }
+            bindings: remaining
         ))
+        let api = apiFactory(state.identity.serviceURL)
+        try? await api.reconcileBindings(
+            computerIDs: remaining.map(\.computerID),
+            as: state.identity
+        )
+    }
+
+    /// Pushes the local binding list to the service so server-side edges for
+    /// this client (and its delegated Watch) converge to the Keychain state.
+    /// Delete-only and idempotent; safe to call on foreground or after any
+    /// mutation. Failures are silent — the next call retries.
+    func reconcile() async {
+        await acquireMutation()
+        guard let state = try? loadState() else {
+            releaseMutation()
+            return
+        }
+        let api = apiFactory(state.identity.serviceURL)
+        try? await api.reconcileBindings(
+            computerIDs: state.bindings.map(\.computerID),
+            as: state.identity
+        )
+        releaseMutation()
     }
 
     /// MainActor reentrancy means a second code can arrive while the

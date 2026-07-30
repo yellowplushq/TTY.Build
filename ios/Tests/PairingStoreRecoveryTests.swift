@@ -30,17 +30,17 @@ final class PairingStoreRecoveryTests: XCTestCase {
             let clientID: String
         }
 
-        struct UnbindCall: Equatable {
-            let computerID: String
+        struct ReconcileCall: Equatable {
+            let computerIDs: [String]
             let clientID: String
         }
 
         var identities: [ClientIdentity]
         var bindErrors: [(any Error)?] = []
-        var unbindError: (any Error)?
+        var reconcileError: (any Error)?
         private(set) var createCalls = 0
         private(set) var bindCalls: [BindCall] = []
-        private(set) var unbindCalls: [UnbindCall] = []
+        private(set) var reconcileCalls: [ReconcileCall] = []
 
         init(identities: [ClientIdentity]) {
             self.identities = identities
@@ -80,9 +80,16 @@ final class PairingStoreRecoveryTests: XCTestCase {
             )
         }
 
-        func unbind(computerID: String, as client: ClientIdentity) async throws {
-            unbindCalls.append(.init(computerID: computerID, clientID: client.clientID))
-            if let unbindError { throw unbindError }
+        func reconcileBindings(
+            computerIDs: [String],
+            as client: ClientIdentity
+        ) async throws -> [String] {
+            reconcileCalls.append(.init(
+                computerIDs: computerIDs,
+                clientID: client.clientID
+            ))
+            if let reconcileError { throw reconcileError }
+            return computerIDs
         }
     }
 
@@ -100,7 +107,7 @@ final class PairingStoreRecoveryTests: XCTestCase {
         XCTAssertEqual(fixture.api.bindCalls.map(\.clientID), [
             oldClientID, oldClientID, replacementClientID,
         ])
-        XCTAssertEqual(fixture.api.unbindCalls, [])
+        XCTAssertEqual(fixture.api.reconcileCalls, [])
     }
 
     func testOnlyUnauthorizedTriggersIdentityRecovery() async throws {
@@ -143,7 +150,7 @@ final class PairingStoreRecoveryTests: XCTestCase {
 
         XCTAssertEqual(try fixture.store.loadClientIdentity()?.clientID, oldClientID)
         XCTAssertEqual(try fixture.store.loadAll().map(\.computerID), [repeating("1")])
-        XCTAssertEqual(fixture.api.unbindCalls, [])
+        XCTAssertEqual(fixture.api.reconcileCalls, [])
     }
 
     func testCorruptStateIsNotTreatedAsAnEmptyInstallation() async throws {
@@ -162,10 +169,12 @@ final class PairingStoreRecoveryTests: XCTestCase {
         XCTAssertEqual(memory.data, Data("not-json".utf8))
     }
 
-    func testCommitFailureIsCompensatedAndRollbackFailureIsSurfaced() async throws {
+    func testReplacementCommitFailureConvergesTheOrphanIdentityBestEffort() async throws {
         let fixture = try await seededFixture()
         fixture.api.bindErrors = [unauthorized(), nil]
-        fixture.api.unbindError = RollbackFailure.unavailable
+        // The convergence itself failing must not mask the commit error: the
+        // orphan identity was never persisted, so nothing can retry for it.
+        fixture.api.reconcileError = RollbackFailure.unavailable
         fixture.memory.failNextWrite = true
 
         do {
@@ -173,14 +182,50 @@ final class PairingStoreRecoveryTests: XCTestCase {
                 code: pairingCode("2"), serviceURL: serviceURL
             )
             XCTFail("Expected local commit to fail")
-        } catch PairingStore.StoreError.compensationFailed {
-            // Both the commit and failed rollback are intentionally visible.
-        }
+        } catch is StorageFailure {}
 
         XCTAssertEqual(try fixture.store.loadClientIdentity()?.clientID, oldClientID)
         XCTAssertEqual(try fixture.store.loadAll().map(\.computerID), [repeating("1")])
-        XCTAssertEqual(fixture.api.unbindCalls, [
-            .init(computerID: repeating("2"), clientID: replacementClientID),
+        XCTAssertEqual(fixture.api.reconcileCalls, [
+            .init(computerIDs: [], clientID: replacementClientID),
+        ])
+    }
+
+    func testUnbindCommitsLocallyEvenWhenTheServiceIsUnreachable() async throws {
+        let fixture = try await seededFixture()
+        fixture.api.reconcileError = URLError(.cannotConnectToHost)
+
+        try await fixture.store.unbind(computerID: repeating("1"))
+
+        XCTAssertEqual(try fixture.store.loadAll().map(\.computerID), [])
+        XCTAssertEqual(fixture.api.reconcileCalls, [
+            .init(computerIDs: [], clientID: oldClientID),
+        ])
+    }
+
+    func testUnbindDeclaresTheRemainingListToTheService() async throws {
+        let fixture = try await seededFixture()
+        _ = try await fixture.store.bind(code: pairingCode("2"), serviceURL: serviceURL)
+
+        try await fixture.store.unbind(computerID: repeating("1"))
+
+        XCTAssertEqual(try fixture.store.loadAll().map(\.computerID), [repeating("2")])
+        XCTAssertEqual(fixture.api.reconcileCalls, [
+            .init(computerIDs: [repeating("2")], clientID: oldClientID),
+        ])
+    }
+
+    func testReconcileRetriesTheLocalListAfterAFailedConvergence() async throws {
+        let fixture = try await seededFixture()
+        fixture.api.reconcileError = URLError(.cannotConnectToHost)
+        try await fixture.store.unbind(computerID: repeating("1"))
+
+        fixture.api.reconcileError = nil
+        await fixture.store.reconcile()
+
+        XCTAssertEqual(fixture.api.reconcileCalls, [
+            .init(computerIDs: [], clientID: oldClientID),
+            .init(computerIDs: [], clientID: oldClientID),
         ])
     }
 

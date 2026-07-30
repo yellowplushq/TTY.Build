@@ -87,11 +87,29 @@ stores the `ComputerBinding` in the Keychain, and acknowledges the session so
 the Worker deletes it.
 
 The eight-digit code is therefore only a short-lived rendezvous handle, not
-encryption key material. `DELETE
-/v2/clients/me/bindings/:computerId` atomically deletes the binding and commits
-a client-targeted socket-revocation outbox row before the local key is removed.
-The Worker attempts closure immediately and cron retries transient Durable
-Object failures, so established sockets cannot outlive an unbind indefinitely.
+encryption key material.
+
+The phone's Keychain list is the authoritative client-side binding set, and
+unbinding commits there first. The client then declares its full remaining set
+through:
+
+```http
+PUT /v2/clients/me/bindings
+Authorization: Bearer <clientToken>
+Content-Type: application/json
+
+{"computerIds":["<computerId>", ...]}
+```
+
+The Worker converges delete-only: every edge of the client (and its delegated
+Watch) absent from the declared list is removed, and each removal commits a
+client-targeted socket-revocation outbox row in the same D1 transaction. A
+declared id without an existing edge is ignored — the ceremony above remains
+the only way to create one, so a cloned credential cannot self-authorize a
+computer. The Worker attempts socket closure immediately and cron retries
+transient Durable Object failures, so established sockets cannot outlive an
+unbind indefinitely. The declaration is idempotent; the client repeats it (for
+example on foreground) until the service confirms convergence.
 
 For terminal viewing, the iPhone registers an independent Watch client and
 reconciles its server-side edges through:
@@ -108,7 +126,8 @@ The Worker verifies both opaque client credentials, rejects self-delegation,
 records one `watch-terminal` child relationship, and makes the Watch client's
 binding set exactly equal to the iPhone client's current set. Removed edges
 commit client-targeted socket revocations in the same transaction. A later
-iPhone unbind removes the same computer edge from both principals atomically.
+iPhone binding declaration removes each dropped computer edge from both
+principals atomically.
 Replacing a lost Watch identity revokes the prior identity and its sockets.
 The request contains no computer secret. After it succeeds,
 the iPhone transfers the independent Watch identity and its locally held E2EE

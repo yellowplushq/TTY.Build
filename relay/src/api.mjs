@@ -422,9 +422,25 @@ async function requireStatusClient(request, env) {
   return client;
 }
 
-async function unbindComputer(request, env, ctx, computerId) {
+async function reconcileBindings(request, env, ctx) {
   const client = await requireControlClient(request, env);
-  await limitAuthenticated(request, env, "MUTATION_LIMITER", "unbind", client.id);
+  await limitAuthenticated(request, env, "MUTATION_LIMITER", "bindings", client.id);
+  const body = await readJson(request);
+  requireBodyShape(body, ["computerIds"]);
+  const declared = body.computerIds;
+  if (
+    !Array.isArray(declared) ||
+    declared.length > MAX_BINDINGS_PER_CLIENT ||
+    !declared.every((value) => isId(value)) ||
+    new Set(declared).size !== declared.length
+  ) {
+    throw new ApiFailure(
+      400,
+      "invalid_bindings",
+      `computerIds must be at most ${MAX_BINDINGS_PER_CLIENT} unique computer ids`,
+    );
+  }
+  const declaredSet = new Set(declared);
   const delegates = await env.DB.prepare(
     `SELECT delegate_client_id AS clientId
        FROM client_delegates
@@ -432,40 +448,54 @@ async function unbindComputer(request, env, ctx, computerId) {
       ORDER BY delegate_client_id`,
   ).bind(client.id).all();
   const principalIds = [client.id, ...delegates.results.map((row) => row.clientId)];
+  const principalMarks = principalIds.map(() => "?").join(", ");
+  const current = await env.DB.prepare(
+    `SELECT DISTINCT computer_id AS computerId
+       FROM client_computers
+      WHERE client_id IN (${principalMarks})
+      ORDER BY computer_id`,
+  ).bind(...principalIds).all();
+  const currentIds = (current.results ?? []).map((row) => row.computerId);
+  // Delete-only convergence: the declared list can never create an edge, so a
+  // cloned credential cannot self-authorize a computer. Edges created by a
+  // concurrent pairing completion are outside the removal set and survive.
+  const removedIds = currentIds.filter((computerId) => !declaredSet.has(computerId));
+  const remaining = currentIds.filter((computerId) => declaredSet.has(computerId));
+  if (removedIds.length === 0) {
+    return json({ computerIds: remaining });
+  }
   const now = nowSeconds();
+  const removalMarks = removedIds.map(() => "?").join(", ");
   const deliveryStatements = principalIds.map((clientId) => env.DB.prepare(
       `UPDATE client_delivery_state
           SET sequence = sequence + 1,
               last_fingerprint = NULL
-        WHERE client_id = ?1
+        WHERE client_id = ?
           AND EXISTS (
                 SELECT 1 FROM client_computers
-                 WHERE client_id = ?1 AND computer_id = ?2
+                 WHERE client_id = ? AND computer_id IN (${removalMarks})
               )`,
-    ).bind(clientId, computerId));
-  const revocationStatements = principalIds.map((clientId) =>
-    clientRevocationStatement(env, computerId, clientId, now));
+    ).bind(clientId, clientId, ...removedIds));
+  const revocationStatements = principalIds.flatMap((clientId) =>
+    removedIds.map((computerId) =>
+      clientRevocationStatement(env, computerId, clientId, now)));
   const deleteStatements = principalIds.map((clientId) => env.DB.prepare(
       `DELETE FROM client_computers
-        WHERE client_id = ?1 AND computer_id = ?2`,
-    ).bind(clientId, computerId));
+        WHERE client_id = ? AND computer_id IN (${removalMarks})`,
+    ).bind(clientId, ...removedIds));
   const results = await env.DB.batch([
     ...deliveryStatements,
     ...revocationStatements,
     ...deleteStatements,
     env.DB.prepare(
-      `SELECT id AS revocationId, principal_id AS clientId
+      `SELECT id AS revocationId, computer_id AS computerId,
+              principal_id AS clientId
          FROM relay_revocation_outbox
-        WHERE kind = 'client' AND computer_id = ?1
-          AND principal_id IN (
-                SELECT ?2
-                UNION ALL
-                SELECT delegate_client_id
-                  FROM client_delegates
-                 WHERE parent_client_id = ?2
-              )
-        ORDER BY principal_id`,
-    ).bind(computerId, client.id),
+        WHERE kind = 'client'
+          AND principal_id IN (${principalMarks})
+          AND computer_id IN (${removalMarks})
+        ORDER BY principal_id, computer_id`,
+    ).bind(...principalIds, ...removedIds),
   ]);
   const deleteStart = deliveryStatements.length + revocationStatements.length;
   const removed = results.slice(deleteStart, deleteStart + deleteStatements.length)
@@ -478,7 +508,7 @@ async function unbindComputer(request, env, ctx, computerId) {
     try {
       await deliverClientRelayRevocation(
         env,
-        computerId,
+        revocation.computerId,
         revocation.clientId,
         revocation.revocationId,
       );
@@ -490,9 +520,9 @@ async function unbindComputer(request, env, ctx, computerId) {
     }
   }
   if (removed) {
-    background(ctx, notifyPushCoordinator(env, principalIds), "unbind push notify failed");
+    background(ctx, notifyPushCoordinator(env, principalIds), "binding reconcile push notify failed");
   }
-  return new Response(null, { status: 204 });
+  return json({ computerIds: remaining });
 }
 
 async function synchronizeDelegatedBindings(request, env, ctx) {
@@ -1003,10 +1033,9 @@ export async function handleApi(request, env, ctx, url) {
     return acknowledgeClientPairingSession(request, env, match[1]);
   }
 
-  match = /^\/v2\/clients\/me\/bindings\/([0-9a-f]{32})$/.exec(pathname);
-  if (request.method === "DELETE" && match) {
+  if (request.method === "PUT" && pathname === "/v2/clients/me/bindings") {
     requireQueryShape(url);
-    return unbindComputer(request, env, ctx, match[1]);
+    return reconcileBindings(request, env, ctx);
   }
   if (request.method === "PUT" && pathname === "/v2/clients/me/delegated-bindings") {
     requireQueryShape(url);

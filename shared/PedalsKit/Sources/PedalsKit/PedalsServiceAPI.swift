@@ -35,6 +35,14 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         let statusToken: String
     }
 
+    private struct ReconcileBindingsRequest: Encodable {
+        let computerIds: [String]
+    }
+
+    private struct ReconcileBindingsResponse: Decodable {
+        let computerIds: [String]
+    }
+
     private struct SynchronizeDelegatedBindingsRequest: Encodable {
         let clientId: String
         let clientToken: String
@@ -281,13 +289,23 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         )
     }
 
-    public func unbind(computerID: String, as client: ClientIdentity) async throws {
+    /// Declares the client's authoritative binding set. The service converges
+    /// by deleting its own edges (and the delegated Watch's) that are absent
+    /// from the list; it never creates an edge, so pairing remains the only
+    /// way to add one. Returns the server-side set after convergence.
+    @discardableResult
+    public func reconcileBindings(
+        computerIDs: [String],
+        as client: ClientIdentity
+    ) async throws -> [String] {
         guard client.serviceURL == serviceURL else { throw APIError.serviceMismatch }
-        let _: EmptyResponse = try await send(
-            method: "DELETE",
-            path: "/v2/clients/me/bindings/\(computerID)",
-            bearer: client.clientToken
+        let response: ReconcileBindingsResponse = try await send(
+            method: "PUT",
+            path: "/v2/clients/me/bindings",
+            bearer: client.clientToken,
+            body: ReconcileBindingsRequest(computerIds: computerIDs)
         )
+        return response.computerIds
     }
 
     /// Makes a second client principal (for example, a paired Watch) inherit

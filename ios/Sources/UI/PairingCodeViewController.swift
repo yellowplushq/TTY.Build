@@ -425,8 +425,6 @@ enum PairingErrorPresentation {
                 return "This installation has pairing data from another Pedals service. Restart the app and try again."
             case .missingClientIdentity:
                 return "Pairing data is incomplete. Restart Pedals and try again."
-            case .compensationFailed:
-                return "Pairing couldn’t be saved securely. Try again."
             }
         }
 

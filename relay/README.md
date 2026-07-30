@@ -101,16 +101,22 @@ and cron retries with bounded backoff until the per-computer RelayChannel
 acknowledges it, so a transient Durable Object failure cannot strand access
 after reset.
 
-### `DELETE /v2/clients/me/bindings/:computerId`
+### `PUT /v2/clients/me/bindings`
 
-Client control bearer required. The binding deletion and a client-targeted
-relay revocation outbox row commit in one D1 transaction. The Worker closes
-that client's existing control/session sockets immediately when possible with
-code `4003`; a handshake racing the deletion is re-authorized inside the same
-actor and cannot survive. Cron retries transient Durable Object failures until
-the RelayChannel acknowledges closure. Repeating the deletion is idempotent. A
-later successful rebind clears any stale retry row before new relay access is
-authorized.
+Client control bearer required. Body: `{"computerIds":[...]}` — the client's
+declared authoritative binding set (at most 32 unique computer ids). The
+service converges by deleting its own edges, and the delegated Watch's, that
+are absent from the list; it never creates an edge, so a declared unknown id is
+ignored and pairing remains the only way to add a binding. Returns
+`{"computerIds":[...]}`, the server-side set after convergence.
+
+Each removal and a client-targeted relay revocation outbox row commit in one
+D1 transaction. The Worker closes the affected control/session sockets
+immediately when possible with code `4003`; a handshake racing the deletion is
+re-authorized inside the same actor and cannot survive. Cron retries transient
+Durable Object failures until the RelayChannel acknowledges closure. Repeating
+the declaration is idempotent. A later successful rebind clears any stale
+retry row before new relay access is authorized.
 
 ### `POST /v2/clients`
 

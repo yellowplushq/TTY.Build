@@ -103,7 +103,7 @@ cd ../../desktop/PedalsDaemon
 swift test
 ```
 
-The expected suites currently contain 24 Node tests, 49 Worker tests, 86
+The expected suites currently contain 24 Node tests, 50 Worker tests, 86
 PedalsKit tests, and 41 daemon tests. A changed count is not automatically a
 failure, but every discovered test must pass.
 
