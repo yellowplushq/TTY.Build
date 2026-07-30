@@ -1,11 +1,17 @@
 import Foundation
 
-/// The newest agent-authored message in a running transcript.
+/// The newest agent-authored message (and, for Claude, session title) in a
+/// running transcript.
 public struct AgentTranscriptActivity: Equatable, Sendable {
-    public var detail: String
+    public var detail: String?
+    /// Claude's own title for the session. The hook payloads carry only
+    /// user-set custom titles, so the AI-generated title is recoverable from
+    /// transcript lines alone.
+    public var sessionTitle: String?
 
-    public init(detail: String) {
+    public init(detail: String? = nil, sessionTitle: String? = nil) {
         self.detail = detail
+        self.sessionTitle = sessionTitle
     }
 }
 
@@ -75,10 +81,14 @@ public enum AgentTranscriptSampler {
     private static func latestClaudeActivity(
         _ lines: [Data]
     ) -> AgentTranscriptActivity? {
-        var latest: AgentTranscriptActivity?
+        var detail: String?
+        var titles = ClaudeTranscriptTitles()
         for line in lines {
             guard
-                let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any]
+            else { continue }
+            titles.take(object)
+            guard
                 object["type"] as? String == "assistant",
                 let message = object["message"] as? [String: Any],
                 let content = message["content"] as? [Any]
@@ -91,10 +101,11 @@ public enum AgentTranscriptSampler {
                 return part["text"] as? String
             }.joined()
             if let text = cleaned(text, cap: HookFieldCaps.message) {
-                latest = AgentTranscriptActivity(detail: text)
+                detail = text
             }
         }
-        return latest
+        guard detail != nil || titles.best != nil else { return nil }
+        return AgentTranscriptActivity(detail: detail, sessionTitle: titles.best)
     }
 
     private static func latestCodexActivity(

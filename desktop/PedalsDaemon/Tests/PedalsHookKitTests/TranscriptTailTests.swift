@@ -51,6 +51,36 @@ final class TranscriptTailTests: XCTestCase {
         let summary = TranscriptTail.scan(path: fixtureURL.path, sessionId: "s-1")
         XCTAssertEqual(summary.lastMessage, "All done.")
         XCTAssertFalse(summary.isError)
+        XCTAssertNil(summary.sessionTitle)
+    }
+
+    func testSessionTitleFromAiTitleLine() throws {
+        try write(lines: [
+            ["type": "ai-title", "aiTitle": "Old title", "sessionId": "s-1"],
+            assistant("working"),
+            ["type": "ai-title", "aiTitle": "Investigate push status", "sessionId": "s-1"],
+        ])
+        let summary = TranscriptTail.scan(path: fixtureURL.path, sessionId: "s-1")
+        XCTAssertEqual(summary.sessionTitle, "Investigate push status")
+    }
+
+    func testCustomTitleOutranksNewerAiTitle() throws {
+        try write(lines: [
+            ["type": "custom-title", "customTitle": "My release plan"],
+            ["type": "ai-title", "aiTitle": "Ship the release"],
+        ])
+        let summary = TranscriptTail.scan(path: fixtureURL.path, sessionId: "s-1")
+        XCTAssertEqual(summary.sessionTitle, "My release plan")
+    }
+
+    func testEmptyOrMalformedTitleLinesIgnored() throws {
+        try write(lines: [
+            ["type": "ai-title", "aiTitle": "   "],
+            ["type": "custom-title", "aiTitle": "wrong key"],
+            ["type": "ai-title", "aiTitle": 7],
+        ])
+        let summary = TranscriptTail.scan(path: fixtureURL.path, sessionId: "s-1")
+        XCTAssertNil(summary.sessionTitle)
     }
 
     func testConcatenatesTextParts() throws {

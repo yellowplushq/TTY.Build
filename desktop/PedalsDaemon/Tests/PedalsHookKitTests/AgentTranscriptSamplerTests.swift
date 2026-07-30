@@ -113,6 +113,34 @@ final class AgentTranscriptSamplerTests: XCTestCase {
         )
     }
 
+    func testClaudeSessionTitlePickedUpAlongsideMessage() throws {
+        let url = try write([
+            ["type": "ai-title", "aiTitle": "Investigate push status"],
+            [
+                "type": "assistant",
+                "message": ["content": [["type": "text", "text": "On it."]]],
+            ],
+        ], agentDirectory: ".claude")
+        XCTAssertEqual(
+            AgentTranscriptSampler.latestActivity(
+                agent: "claude", path: url.path, environment: [:], home: home
+            ),
+            .init(detail: "On it.", sessionTitle: "Investigate push status")
+        )
+    }
+
+    func testClaudeTitleOnlyTranscriptStillReturnsActivity() throws {
+        let url = try write([
+            ["type": "custom-title", "customTitle": "Release prep"],
+        ], agentDirectory: ".claude")
+        XCTAssertEqual(
+            AgentTranscriptSampler.latestActivity(
+                agent: "claude", path: url.path, environment: [:], home: home
+            ),
+            .init(detail: nil, sessionTitle: "Release prep")
+        )
+    }
+
     func testCodexLatestAgentMessageIgnoresTools() throws {
         let messageURL = try write([
             [

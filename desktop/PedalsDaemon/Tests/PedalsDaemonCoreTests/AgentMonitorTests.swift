@@ -446,6 +446,30 @@ final class AgentMonitorTests: XCTestCase {
         XCTAssertNil(info.action)
     }
 
+    func testTranscriptSamplingAppliesClaudeSessionTitle() throws {
+        var tuning = AgentMonitor.Tuning()
+        tuning.sweepInterval = 3600
+        tuning.transcriptSampleInterval = 0
+        let samplingMonitor = AgentMonitor(
+            tuning: tuning,
+            transcriptSampler: { _, _ in
+                .init(sessionTitle: "Investigate push status")
+            },
+            matchTargets: { [] }
+        )
+        samplingMonitor.ingest(event(
+            "tool", action: "Bash: swift test",
+            transcriptPath: "/safe/session.jsonl"
+        ))
+        samplingMonitor.sweepNow()
+        let info = try XCTUnwrap(samplingMonitor.list().first)
+        XCTAssertEqual(info.sessionName, "Investigate push status")
+        XCTAssertEqual(
+            info.action, "Bash: swift test",
+            "a title-only sample must not clear the live action"
+        )
+    }
+
     func testTranscriptSamplingNeverChangesAttentionState() throws {
         var tuning = AgentMonitor.Tuning()
         tuning.sweepInterval = 3600

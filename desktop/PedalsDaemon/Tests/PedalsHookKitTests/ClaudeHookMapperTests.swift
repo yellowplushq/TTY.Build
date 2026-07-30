@@ -114,6 +114,82 @@ final class ClaudeHookMapperTests: XCTestCase {
         XCTAssertNil(report?.message)
     }
 
+    func testStopPrefersStdinLastAssistantMessage() throws {
+        // The transcript's own last line lags the turn: at hook time it still
+        // ends on the previous message, so the stdin field must win.
+        let path = try makeTranscript(lines: [
+            assistantLine(text: "second-to-last message", sessionId: "s-1")
+        ])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        var object = base("Stop")
+        object["transcript_path"] = path
+        object["last_assistant_message"] = "the real final message"
+        let report = map(object)
+        XCTAssertEqual(report?.message, "the real final message")
+        XCTAssertEqual(report?.agentError, false)
+    }
+
+    func testStopFallsBackToTranscriptWhenStdinMessageMissingOrEmpty() throws {
+        let path = try makeTranscript(lines: [
+            assistantLine(text: "from the transcript", sessionId: "s-1")
+        ])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        var object = base("Stop")
+        object["transcript_path"] = path
+        XCTAssertEqual(map(object)?.message, "from the transcript")
+
+        object["last_assistant_message"] = "   "
+        XCTAssertEqual(map(object)?.message, "from the transcript")
+    }
+
+    func testStopStdinMessageCappedAndErrorFlagStillFromTranscript() throws {
+        let path = try makeTranscript(lines: [
+            assistantLine(text: "old message", sessionId: "s-1"),
+            #"{"type":"user","isApiErrorMessage":true,"sessionId":"s-1"}"#,
+        ])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        var object = base("Stop")
+        object["transcript_path"] = path
+        object["last_assistant_message"] = String(repeating: "m", count: 400)
+        let report = map(object)
+        XCTAssertEqual(report?.message?.count, 300)
+        XCTAssertEqual(report?.agentError, true)
+    }
+
+    func testStopPicksUpAiTitleFromTranscript() throws {
+        let path = try makeTranscript(lines: [
+            #"{"type":"ai-title","aiTitle":"Investigate push status","sessionId":"s-1"}"#,
+            assistantLine(text: "done", sessionId: "s-1"),
+        ])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        var object = base("Stop")
+        object["transcript_path"] = path
+        XCTAssertEqual(map(object)?.sessionName, "Investigate push status")
+
+        // A stdin custom title outranks the transcript's AI title.
+        object["session_title"] = "My custom name"
+        XCTAssertEqual(map(object)?.sessionName, "My custom name")
+    }
+
+    func testStopWithoutTranscriptStillCarriesStdinMessage() {
+        var object = base("Stop")
+        object["last_assistant_message"] = "done, all tests green"
+        let report = map(object)
+        XCTAssertEqual(report?.message, "done, all tests green")
+        XCTAssertEqual(report?.agentError, false)
+    }
+
+    private func makeTranscript(lines: [String]) throws -> String {
+        let path = NSTemporaryDirectory() + "claude-mapper-test-\(UUID().uuidString).jsonl"
+        try lines.joined(separator: "\n").appending("\n")
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        return path
+    }
+
+    private func assistantLine(text: String, sessionId: String) -> String {
+        #"{"type":"assistant","sessionId":"\#(sessionId)","message":{"content":[{"type":"text","text":"\#(text)"}]}}"#
+    }
+
     func testMalformedStdin() {
         XCTAssertNil(ClaudeHookMapper.report(stdinData: Data("not json".utf8)))
         XCTAssertNil(ClaudeHookMapper.report(stdinData: Data()))

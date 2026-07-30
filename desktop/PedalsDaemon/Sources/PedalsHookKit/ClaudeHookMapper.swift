@@ -53,11 +53,28 @@ public enum ClaudeHookMapper {
             report.event = "compact"
         case "Stop":
             report.event = "stop"
+            // Claude appends the final assistant message to the transcript
+            // only after this hook runs, so a transcript scan reliably sees
+            // the previous message. The stdin field is taken from the
+            // in-memory turn and is the only source that has the real one;
+            // the scan stays as the message fallback for older Claude builds
+            // and as the sole error-flag source either way.
+            let stdinMessage = (object["last_assistant_message"] as? String)
+                .flatMap { value -> String? in
+                    let cleaned = sanitizeHookText(value, cap: HookFieldCaps.message)
+                    return cleaned.isEmpty ? nil : cleaned
+                }
             if let path = report.transcriptPath {
                 let summary = TranscriptTail.scan(path: path, sessionId: sessionId)
-                report.message = summary.lastMessage
+                report.message = stdinMessage ?? summary.lastMessage
                 report.agentError = summary.isError
+                // The stdin `session_title` (a user-set custom title) wins;
+                // the AI-generated title only exists as transcript lines.
+                if report.sessionName == nil {
+                    report.sessionName = summary.sessionTitle
+                }
             } else {
+                report.message = stdinMessage
                 report.agentError = false
             }
         case "SessionEnd":

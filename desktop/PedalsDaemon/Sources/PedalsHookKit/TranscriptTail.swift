@@ -6,10 +6,44 @@ public struct TranscriptSummary: Equatable, Sendable {
     public var lastMessage: String?
     /// The turn died on an API error (no later user/assistant line followed).
     public var isError: Bool
+    /// Claude's own session title (custom over AI-generated); hook payloads
+    /// only carry user-set custom titles, so this is the sole source for the
+    /// usual AI-generated one.
+    public var sessionTitle: String?
 
-    public init(lastMessage: String? = nil, isError: Bool = false) {
+    public init(
+        lastMessage: String? = nil, isError: Bool = false,
+        sessionTitle: String? = nil
+    ) {
         self.lastMessage = lastMessage
         self.isError = isError
+        self.sessionTitle = sessionTitle
+    }
+}
+
+/// Claude session-title transcript lines. The newest custom title outranks
+/// the newest AI title, mirroring Claude's own session-resume logic.
+struct ClaudeTranscriptTitles {
+    private var custom: String?
+    private var ai: String?
+
+    var best: String? { custom ?? ai }
+
+    mutating func take(_ object: [String: Any]) {
+        switch object["type"] as? String {
+        case "custom-title":
+            if let title = Self.cleaned(object["customTitle"]) { custom = title }
+        case "ai-title":
+            if let title = Self.cleaned(object["aiTitle"]) { ai = title }
+        default:
+            break
+        }
+    }
+
+    private static func cleaned(_ value: Any?) -> String? {
+        guard let value = value as? String else { return nil }
+        let cleaned = sanitizeHookText(value, cap: HookFieldCaps.sessionName)
+        return cleaned.isEmpty ? nil : cleaned
     }
 }
 
@@ -25,6 +59,7 @@ public enum TranscriptTail {
 
         var lastMessage: String?
         var isError = false
+        var titles = ClaudeTranscriptTitles()
         for line in lines {
             guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any]
             else { continue }
@@ -39,8 +74,11 @@ public enum TranscriptTail {
             if type == "assistant", let text = assistantText(object), !text.isEmpty {
                 lastMessage = text
             }
+            titles.take(object)
         }
-        return TranscriptSummary(lastMessage: lastMessage, isError: isError)
+        return TranscriptSummary(
+            lastMessage: lastMessage, isError: isError, sessionTitle: titles.best
+        )
     }
 
     /// Shared bounded JSONL reader for stop-time summaries and live sampling.

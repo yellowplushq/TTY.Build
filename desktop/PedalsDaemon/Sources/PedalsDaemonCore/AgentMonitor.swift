@@ -513,10 +513,14 @@ public final class AgentMonitor: @unchecked Sendable {
                    activity != record.lastTranscriptActivity
                 {
                     record.lastTranscriptActivity = activity
-                    record.message = Self.sanitize(
-                        activity.detail, cap: Self.messageCap
-                    )
-                    record.action = nil
+                    if let detail = activity.detail {
+                        record.message = Self.sanitize(detail, cap: Self.messageCap)
+                        record.action = nil
+                    }
+                    if let title = activity.sessionTitle {
+                        let cleaned = Self.sanitize(title, cap: Self.sessionNameCap)
+                        if !cleaned.isEmpty { record.reportedSessionName = cleaned }
+                    }
                     record.updatedAt = now
                     changed = true
                 }
