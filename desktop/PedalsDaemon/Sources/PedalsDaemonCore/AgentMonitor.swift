@@ -168,11 +168,11 @@ public final class AgentMonitor: @unchecked Sendable {
     }
     private var _onChange: (@Sendable ([AgentInfo]) -> Void)?
 
-    /// Fired on the monitor's serial queue when an agent transitions INTO a
-    /// user-facing state (waiting/error/done) — edge-triggered, so repeated
-    /// events in the same state (Claude's ask followed by its Notification
-    /// hook) collapse to one attention event. Not debounced: transitions are
-    /// rare and each deserves a visible Live Activity update.
+    /// Fired on the monitor's serial queue only when a working agent enters a
+    /// user-facing state (waiting/error/done). Repeated events in the same
+    /// state and transitions among non-working states never alert. Not
+    /// debounced: each qualifying edge deserves a visible Live Activity
+    /// update.
     public var onAttention: (@Sendable (AgentInfo, AgentActivity.Attention) -> Void)? {
         get { queue.sync { _onAttention } }
         set { queue.sync { _onAttention = newValue } }
@@ -227,15 +227,21 @@ public final class AgentMonitor: @unchecked Sendable {
             guard Self.knownEvents.contains(event.event) else { return }
 
             let record: Record
-            if let existing = records[id] {
-                record = existing
-            } else {
-                record = Record(id: id, agent: agent)
-                records[id] = record
-            }
             var enrichedEvent = event
             if agent == "codex" {
                 let metadata = codexMetadataResolver(id)
+                // Codex runs ambient/background work as ephemeral threads it
+                // deliberately keeps out of its own threads table (and never
+                // writes a rollout for). If Codex does not consider it a
+                // session, neither does Pedals: drop the event, and remove a
+                // record that slipped in while the database was unreadable.
+                if metadata.threadRecorded == false {
+                    pendingDoneAttention.removeValue(forKey: id)?.cancel()
+                    if records.removeValue(forKey: id) != nil {
+                        schedulePublishLocked()
+                    }
+                    return
+                }
                 // The reporter installed by an older Pedals build may not
                 // know Codex's state database yet. Resolve again in the
                 // daemon so an app update fixes existing managed hooks
@@ -247,6 +253,12 @@ public final class AgentMonitor: @unchecked Sendable {
                     enrichedEvent.transcriptPath = metadata.transcriptPath
                 }
             }
+            if let existing = records[id] {
+                record = existing
+            } else {
+                record = Record(id: id, agent: agent)
+                records[id] = record
+            }
             let oldState = record.state
             apply(enrichedEvent, to: record)
             applyLineage(enrichedEvent.lineage, to: record)
@@ -256,7 +268,9 @@ public final class AgentMonitor: @unchecked Sendable {
                 // Any state edge supersedes held-back completion attention: the park
                 // resumed (running), or something more urgent replaced it.
                 pendingDoneAttention.removeValue(forKey: id)?.cancel()
-                if let attention = Self.attention(record.state) {
+                if oldState == .running,
+                   let attention = Self.attention(record.state)
+                {
                     if attention == .done {
                         scheduleDoneAttentionLocked(id: id)
                     } else {
@@ -349,7 +363,10 @@ public final class AgentMonitor: @unchecked Sendable {
             record.message = nil
         case "prompt":
             record.state = .running
-            record.prompt = event.prompt.map { Self.sanitize($0, cap: Self.promptCap) }
+            let providedPrompt = event.prompt.map {
+                Self.sanitize($0, cap: Self.promptCap)
+            }
+            record.prompt = providedPrompt
             if event.agent == "codex", record.reportedSessionName == nil,
                let prompt = record.prompt,
                let title = Self.sessionTitle(from: prompt)
@@ -357,10 +374,12 @@ public final class AgentMonitor: @unchecked Sendable {
                 record.reportedSessionName = title
             }
             record.action = nil
-            // The row detail is the newest agent-authored message, even
-            // across turns. Until this turn produces a newer assistant
-            // message, keep the previous one instead of falling back to the
-            // new user prompt.
+            // The prompt is now the newest conversational message. Clear the
+            // previous turn's assistant text so every surface shows this user
+            // message until a newer assistant message arrives.
+            if providedPrompt?.isEmpty == false {
+                record.message = nil
+            }
         case "busy":
             // Turn-start signal from agents that carry no prompt text: back
             // to running (clearing error stickiness). Agents with a live

@@ -287,11 +287,16 @@ public final class RelayHostClient: @unchecked Sendable {
     /// bare numbers only, the rich list stays E2EE.
     public func broadcastAgents(_ list: [AgentInfo]) {
         queue.async { [self] in
+            let previous = lastAgents
             lastAgents = list
             guard started else { return }
             control?.send(.agents(list: list))
             reportDirectoryLocked(force: false)
-            scheduleAgentActivityLocked(list.first)
+            let recent = list.first
+            scheduleAgentActivityLocked(
+                recent,
+                forceImmediate: Self.enteredRunning(recent, from: previous)
+            )
         }
     }
 
@@ -338,7 +343,19 @@ public final class RelayHostClient: @unchecked Sendable {
         )
     }
 
-    private func scheduleAgentActivityLocked(_ recent: AgentInfo?) {
+    /// A user-submitted prompt moves an existing waiting/done/error session
+    /// back to running. That edge must reach ActivityKit immediately; the
+    /// ordinary running-message refresh floor applies only after it.
+    static func enteredRunning(
+        _ recent: AgentInfo?, from previous: [AgentInfo]
+    ) -> Bool {
+        guard let recent, recent.state == .running else { return false }
+        return previous.first(where: { $0.id == recent.id })?.state != .running
+    }
+
+    private func scheduleAgentActivityLocked(
+        _ recent: AgentInfo?, forceImmediate: Bool = false
+    ) {
         pendingActivityReport?.cancel()
         pendingActivityReport = nil
         guard let recent else {
@@ -349,7 +366,7 @@ public final class RelayHostClient: @unchecked Sendable {
         let content = AgentActivity.Content(info: recent)
         guard content != lastReportedActivity else { return }
         let elapsed = Date().timeIntervalSince(lastActivitySentAt)
-        if recent.state != .running || lastReportedActivity == nil
+        if forceImmediate || recent.state != .running || lastReportedActivity == nil
             || elapsed >= Self.runningActivityUpdateFloor
         {
             sendAgentActivityLocked(recent, alert: false)

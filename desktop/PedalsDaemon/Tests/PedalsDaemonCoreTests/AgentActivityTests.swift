@@ -59,4 +59,16 @@ final class AgentActivityTests: XCTestCase {
         )
         XCTAssertEqual(RelayHostClient.agentCounts(of: [], now: now), .zero)
     }
+
+    func testOnlyRunningStateEdgesBypassTheRefreshFloor() {
+        let done = info(id: "resumed", state: .done)
+        let running = info(id: "resumed", state: .running, updatedAt: 1_001)
+        XCTAssertTrue(RelayHostClient.enteredRunning(running, from: [done]))
+
+        let alreadyRunning = info(id: "resumed", state: .running)
+        XCTAssertFalse(RelayHostClient.enteredRunning(running, from: [alreadyRunning]))
+        XCTAssertFalse(
+            RelayHostClient.enteredRunning(info(id: "resumed", state: .waiting), from: [done])
+        )
+    }
 }

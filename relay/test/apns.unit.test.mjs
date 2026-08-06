@@ -372,6 +372,25 @@ test("retains Live Activity transitions while offline with event-specific expiry
     },
     { state: { ...state, totalRunning: 1, sequence: 14 }, event: "update" },
   );
+  await client.send(
+    {
+      token: "attention-token",
+      surface: "liveactivity-update",
+      environment: "production",
+    },
+    {
+      state: { ...state, totalRunning: 1, sequence: 15 },
+      event: "update",
+      activity: {
+        eventID: "99999999-9999-4999-8999-999999999999",
+        state: "waiting",
+        updatedAt: now,
+        alert: true,
+        sealed: Buffer.from("attention-ciphertext").toString("base64"),
+        computerId: "c".repeat(32),
+      },
+    },
+  );
 
   assert.equal(requests[0].init.headers["apns-expiration"], "1800000900");
   assert.equal(requests[0].init.headers["apns-priority"], "5");
@@ -383,6 +402,8 @@ test("retains Live Activity transitions while offline with event-specific expiry
   assert.equal(endPayload.aps["stale-date"], 1_800_000_300);
   assert.equal(requests[2].init.headers["apns-priority"], "10");
   assert.equal(JSON.parse(requests[2].init.body).aps.alert, undefined);
+  assert.equal(requests[3].init.headers["apns-priority"], "10");
+  assert.equal(typeof JSON.parse(requests[3].init.body).aps.alert.body, "string");
 });
 
 test("classifies APNs responses for endpoint lifecycle and retry", () => {

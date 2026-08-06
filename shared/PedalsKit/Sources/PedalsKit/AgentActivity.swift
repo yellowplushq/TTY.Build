@@ -89,10 +89,11 @@ public enum AgentActivity {
         }
     }
 
-    /// Shared display semantics for every agent surface. The title identifies
-    /// the session; the detail is the last agent message, falling back to the
-    /// last user prompt. Agent brand and state remain separate visual
-    /// information; implementation-level tool activity is never displayed.
+    /// Shared display semantics for every agent surface. The monitor clears
+    /// `message` when a newer user prompt arrives, so preferring `message`
+    /// here selects the newest user-or-agent conversational message. Agent
+    /// brand and state remain separate visual information; implementation-
+    /// level tool activity is never displayed.
     public struct Presentation: Equatable, Sendable {
         public var title: String
         public var detail: String

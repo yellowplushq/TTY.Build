@@ -86,7 +86,7 @@ func hookActionLine(tool: String, input: [String: Any]?) -> String {
     detail = detail.trimmingCharacters(in: .whitespaces)
     if tool.isEmpty { return detail }
     // A bare tool name is not meaningful user-facing progress. Returning
-    // empty lets the monitor keep showing the last agent message.
+    // empty lets the monitor keep showing the latest conversational detail.
     return detail.isEmpty ? "" : "\(tool): \(detail)"
 }
 

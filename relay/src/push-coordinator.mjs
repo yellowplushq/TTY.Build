@@ -103,17 +103,26 @@ export class PushCoordinator extends DurableObject {
   }
 
   async cacheAgentActivity(computerId, activity, highPriority) {
-    await this.ctx.blockConcurrencyWhile(async () => {
+    return this.ctx.blockConcurrencyWhile(async () => {
       const cached = await this.ctx.storage.get(RECENT_AGENT_ACTIVITIES_KEY);
       const activities = cached && typeof cached === "object" && !Array.isArray(cached)
         ? cached
         : {};
+      // Aggregate active count does not change for done/waiting -> running,
+      // but this is the user-driven resume edge and must not use APNs's
+      // delayable priority. Repeated working-text refreshes remain low
+      // priority so they stay within ActivityKit's update budget.
+      const resumedWorking = activity.state === "running"
+        && activities[computerId]?.activity?.state !== "running";
+      const priority = highPriority === true || resumedWorking
+        || activities[computerId]?.highPriority === true;
       activities[computerId] = {
         computerId,
         activity,
-        highPriority: highPriority === true,
+        highPriority: priority,
       };
       await this.ctx.storage.put(RECENT_AGENT_ACTIVITIES_KEY, activities);
+      return priority;
     });
   }
 
@@ -158,10 +167,15 @@ export class PushCoordinator extends DurableObject {
     await this.ctx.blockConcurrencyWhile(async () => {
       const cached = await this.ctx.storage.get(RECENT_AGENT_ACTIVITIES_KEY);
       const entry = cached?.[computerId];
-      if (!entry || entry.activity?.eventID !== eventID || entry.highPriority !== true) return;
+      if (!entry || entry.activity?.eventID !== eventID) return;
+      if (entry.highPriority !== true && entry.activity?.alert !== true) return;
       await this.ctx.storage.put(RECENT_AGENT_ACTIVITIES_KEY, {
         ...cached,
-        [computerId]: { ...entry, highPriority: false },
+        [computerId]: {
+          ...entry,
+          activity: { ...entry.activity, alert: false },
+          highPriority: false,
+        },
       });
     });
   }
@@ -273,9 +287,10 @@ export class PushCoordinator extends DurableObject {
   /// only while that computer has an active agent. This lets the normal
   /// sequence/retry queue re-attach the card after a terminal count change
   /// without storing agent content in D1.
-  /// A working edge may consume a push-to-start token so an agent appears even
-  /// while the phone app is backgrounded. Later working refreshes are silent;
-  /// waiting/error/done retain their attention alerts.
+  /// Working updates are always silent. Because ActivityKit requires a visible
+  /// alert for every remote push-to-start, only an explicit waiting/error/done
+  /// attention edge may consume that token. An existing activity can still
+  /// receive working updates immediately.
   async handleActivity(request) {
     let body;
     try {
@@ -329,13 +344,17 @@ export class PushCoordinator extends DurableObject {
     const hasUpdateEndpoint = endpoints.some(
       (endpoint) => endpoint.surface === "liveactivity-update",
     );
-    const mayStartActivity = activity.state === "running" || activity.alert;
-    const highPriority = endpoints.some(
+    const mayStartActivity = activity.alert;
+    const aggregateChanged = endpoints.some(
       (endpoint) =>
         endpoint.surface === "liveactivity-update" &&
         Number(endpoint.lastTotalRunning ?? 0) !== totalActive,
     );
-    await this.cacheAgentActivity(computerId, activity, highPriority);
+    const highPriority = await this.cacheAgentActivity(
+      computerId,
+      activity,
+      aggregateChanged,
+    );
     let earliestRetryAt = null;
     let deliveredRichActivity = false;
 
@@ -480,7 +499,7 @@ export class PushCoordinator extends DurableObject {
           hasUpdateEndpoint ||
           totalActive === 0 ||
           Number(endpoint.lastTotalRunning ?? 0) > 0 ||
-          (recentAgent.activity.state !== "running" && recentAgent.activity.alert !== true)
+          recentAgent.activity.alert !== true
         ) continue;
         payload = {
           state,
