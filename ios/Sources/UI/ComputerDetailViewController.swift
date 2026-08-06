@@ -69,15 +69,18 @@ final class ComputerDetailViewController: UITableViewController {
             .sink { [weak self] event in self?.handle(event: event) }
             .store(in: &cancellables)
 
-        // Re-request whenever the host (re)appears; pop when unbound.
+        // Re-request only on an offline→online transition (the initial load
+        // is viewWillAppear's job); pop when unbound.
         if let computer {
+            var wasOnline = computer.hostOnline
             computer.$hostOnline
                 .combineLatest(computer.$hostName)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] online, name in
                     guard let self else { return }
                     if let name, !name.isEmpty { title = name }
-                    if online { refreshRemoteState() }
+                    if online, !wasOnline { refreshRemoteState() }
+                    wasOnline = online
                     reloadSections(.computer)
                 }
                 .store(in: &cancellables)
@@ -408,7 +411,7 @@ final class ComputerDetailViewController: UITableViewController {
     private func confirmInstallUpdate() {
         let alert = UIAlertController(
             title: "Install Update on \(computer?.displayName ?? "this Mac")?",
-            message: "The Mac downloads the update with Sparkle and Pedals restarts there. Sessions keep running.",
+            message: "Installing the update restarts Pedals on the Mac and closes every open terminal session there.",
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))

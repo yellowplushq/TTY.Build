@@ -6,7 +6,7 @@ import Sparkle
 /// land here and are forwarded into `UpdaterModel`'s MainActor state.
 private final class UpdaterProbeDelegate: NSObject, SPUUpdaterDelegate {
     var onFound: @MainActor (SUAppcastItem) -> Void = { _ in }
-    var onCycleFinished: @MainActor () -> Void = {}
+    var onCycleFinished: @MainActor ((any Error)?) -> Void = { _ in }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         let onFound = onFound
@@ -19,7 +19,7 @@ private final class UpdaterProbeDelegate: NSObject, SPUUpdaterDelegate {
         error: (any Error)?
     ) {
         let onCycleFinished = onCycleFinished
-        Task { await onCycleFinished() }
+        Task { await onCycleFinished(error) }
     }
 }
 
@@ -35,7 +35,9 @@ final class UpdaterModel: ObservableObject {
     /// Result of the in-flight `checkForUpdateInformation` probe, delivered
     /// to the pending continuation by `didFinishUpdateCycleForUpdateCheck`.
     private var probeItem: SUAppcastItem?
-    private var probeContinuation: CheckedContinuation<SUAppcastItem?, Never>?
+    private var probeContinuation: CheckedContinuation<
+        (item: SUAppcastItem?, error: (any Error)?), Never
+    >?
 
     init() {
         let probeDelegate = UpdaterProbeDelegate()
@@ -51,12 +53,12 @@ final class UpdaterModel: ObservableObject {
         probeDelegate.onFound = { [weak self] item in
             self?.probeItem = item
         }
-        probeDelegate.onCycleFinished = { [weak self] in
+        probeDelegate.onCycleFinished = { [weak self] error in
             guard let self, let continuation = self.probeContinuation else { return }
             self.probeContinuation = nil
             let item = self.probeItem
             self.probeItem = nil
-            continuation.resume(returning: item)
+            continuation.resume(returning: (item, error))
         }
 
         updater.publisher(for: \.canCheckForUpdates)
@@ -84,11 +86,17 @@ final class UpdaterModel: ObservableObject {
                 detail: "an update session is already in progress"
             )
         }
-        let item: SUAppcastItem? = await withCheckedContinuation { continuation in
+        let probe: (item: SUAppcastItem?, error: (any Error)?) = await withCheckedContinuation { continuation in
             probeContinuation = continuation
             updater.checkForUpdateInformation()
         }
-        if let item {
+        if let error = probe.error {
+            return RemoteManagement.UpdateStatus(
+                current: current, updateAvailable: false,
+                detail: "update check failed: \(error.localizedDescription)"
+            )
+        }
+        if let item = probe.item {
             return RemoteManagement.UpdateStatus(
                 current: current, latest: item.displayVersionString,
                 updateAvailable: true

@@ -98,8 +98,10 @@ public struct AgentInfo: Codable, Equatable, Sendable {
 /// One entry of the `hooks-status` list: install state of one coding-agent
 /// hook on the host, as managed by the daemon's HookInstaller. `agent` is the
 /// agent slug ("claude", "codex", …); `state` is "installed",
-/// "notInstalled", or "outdated" (on-disk content differs from what the
-/// current desktop build would write — updating means reinstalling).
+/// "notInstalled", "outdated" (on-disk content differs from what the current
+/// desktop build would write — updating means reinstalling), or "unknown"
+/// (the daemon could not determine the state, e.g. an unreadable settings
+/// file or an unavailable probe).
 public struct HookStateInfo: Codable, Equatable, Sendable {
     public var agent: String
     public var state: String

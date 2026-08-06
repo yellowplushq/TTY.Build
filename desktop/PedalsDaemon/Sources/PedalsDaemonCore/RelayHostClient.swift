@@ -14,6 +14,10 @@ public final class RelayHostClient: @unchecked Sendable {
     }
 
     private let queue = DispatchQueue(label: "air.build.pedals.relay")
+    /// Hook install/uninstall/state work runs off the relay queue but must
+    /// not overlap: concurrent mutations would race on the reporter binary
+    /// and the agents' settings files. Serial per host.
+    private let hookQueue = DispatchQueue(label: "air.build.pedals.hooks")
     private let sessions: SessionManager
     private let hostName: String
     private let home: PedalsHome
@@ -254,13 +258,13 @@ public final class RelayHostClient: @unchecked Sendable {
         case .hooksStatus(let list, let req):
             guard list == nil else { break } // reply form is host→client only
             let reporterPath = home.hookReporterURL.path
-            DispatchQueue.global().async { [weak self] in
+            hookQueue.async { [weak self] in
                 let states = RemoteManagement.hookStates(reporterPath: reporterPath)
                 self?.sendOnQueue(.hooksStatus(list: states, req: req))
             }
         case .hookInstall(let agent, let req):
             let destination = home.hookReporterURL
-            DispatchQueue.global().async { [weak self] in
+            hookQueue.async { [weak self] in
                 do {
                     try RemoteManagement.installHook(
                         agent: agent, reporterDestination: destination
@@ -275,7 +279,7 @@ public final class RelayHostClient: @unchecked Sendable {
             }
         case .hookUninstall(let agent, let req):
             let reporterPath = home.hookReporterURL.path
-            DispatchQueue.global().async { [weak self] in
+            hookQueue.async { [weak self] in
                 do {
                     try RemoteManagement.uninstallHook(agent: agent)
                     let states = RemoteManagement.hookStates(reporterPath: reporterPath)
