@@ -130,6 +130,7 @@ final class SettingsViewController: UITableViewController {
         content.imageProperties.tintColor = computer.hostOnline
             ? PedalsTheme.uiContent : .secondaryLabel
         cell.contentConfiguration = content
+        cell.accessoryType = .disclosureIndicator
         cell.selectionStyle = .default
         return cell
     }
@@ -212,7 +213,12 @@ final class SettingsViewController: UITableViewController {
             if indexPath.row == computers.count {
                 presentPairingCode()
             } else {
-                presentComputerActions(computers[indexPath.row])
+                navigationController?.pushViewController(
+                    ComputerDetailViewController(
+                        services: services, computerID: computers[indexPath.row].id
+                    ),
+                    animated: true
+                )
             }
         case .appearance where indexPath.row == 1:
             navigationController?.pushViewController(
@@ -243,26 +249,6 @@ final class SettingsViewController: UITableViewController {
         _ tableView: UITableView, canEditRowAt indexPath: IndexPath
     ) -> Bool {
         indexPath.section == Section.computers.rawValue && indexPath.row < computers.count
-    }
-
-    private func presentComputerActions(_ computer: ComputerConnection) {
-        // The destructive action sheet IS the confirmation — no second alert
-        // (swipe-to-delete keeps its own single confirm in confirmUnbind).
-        let sheet = UIAlertController(
-            title: computer.displayName,
-            message: """
-            \(statusText(for: computer))
-
-            Unbinding removes its terminals from this device and the stored \
-            key. Sessions keep running on the computer.
-            """,
-            preferredStyle: .actionSheet
-        )
-        sheet.addAction(UIAlertAction(title: "Unbind", style: .destructive) { [weak self] _ in
-            self?.unbind(computer)
-        })
-        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        present(sheet, animated: true)
     }
 
     private func confirmUnbind(_ computer: ComputerConnection) {

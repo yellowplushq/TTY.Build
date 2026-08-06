@@ -434,7 +434,8 @@ private final class WatchTerminalComputerConnection {
             dismissed = dismissed.filter { id, state in
                 list.contains { $0.id == id && $0.state == state }
             }
-        case .ready, .requestReplay, .create, .created, .close, .dismissAgent, .err:
+        case .ready, .requestReplay, .create, .created, .close, .dismissAgent, .err,
+             .hooksStatus, .hookInstall, .hookUninstall, .updateStatus, .updateInstall:
             break
         }
         onChange?()

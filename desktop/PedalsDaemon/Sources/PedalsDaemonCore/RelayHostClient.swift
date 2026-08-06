@@ -16,6 +16,7 @@ public final class RelayHostClient: @unchecked Sendable {
     private let queue = DispatchQueue(label: "air.build.pedals.relay")
     private let sessions: SessionManager
     private let hostName: String
+    private let home: PedalsHome
 
     private var identity: HostIdentity
     private var started = false
@@ -38,6 +39,11 @@ public final class RelayHostClient: @unchecked Sendable {
     private var lastAgents: [AgentInfo] = []
     /// Client-requested agent dismissal, forwarded to the AgentMonitor.
     public var onDismissAgent: (@Sendable (String) -> Void)?
+    /// Host-app update handlers (Sparkle in the menu bar app), read on
+    /// `queue`; nil on a headless daemon, whose update requests then fail
+    /// with an explanatory error. Set via `setUpdateHandlers`.
+    private var updateStatusHandler: RemoteManagement.UpdateHandler?
+    private var updateInstallHandler: RemoteManagement.UpdateHandler?
 
     private var _state: State = .stopped
     /// A client hello arrived on the current control connection.
@@ -48,12 +54,25 @@ public final class RelayHostClient: @unchecked Sendable {
     public var computerID: String { queue.sync { identity.computer.computerID } }
     public var serviceURL: URL { queue.sync { identity.computer.serviceURL } }
 
-    public init(identity: HostIdentity, sessions: SessionManager) {
+    public init(identity: HostIdentity, sessions: SessionManager, home: PedalsHome) {
         self.identity = identity
         self.sessions = sessions
+        self.home = home
         self.hostName = Self.sanitizedHostName(
             Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         )
+    }
+
+    /// Wires the host app's updater into client-triggered `update-status` /
+    /// `update-install` requests. Safe to call after `start()`.
+    public func setUpdateHandlers(
+        status: RemoteManagement.UpdateHandler?,
+        install: RemoteManagement.UpdateHandler?
+    ) {
+        queue.async { [self] in
+            updateStatusHandler = status
+            updateInstallHandler = install
+        }
     }
 
     private static func sanitizedHostName(_ value: String) -> String {
@@ -232,10 +251,74 @@ public final class RelayHostClient: @unchecked Sendable {
             }
         case .dismissAgent(let agentId):
             onDismissAgent?(agentId)
+        case .hooksStatus(let list, let req):
+            guard list == nil else { break } // reply form is host→client only
+            let reporterPath = home.hookReporterURL.path
+            DispatchQueue.global().async { [weak self] in
+                let states = RemoteManagement.hookStates(reporterPath: reporterPath)
+                self?.sendOnQueue(.hooksStatus(list: states, req: req))
+            }
+        case .hookInstall(let agent, let req):
+            let destination = home.hookReporterURL
+            DispatchQueue.global().async { [weak self] in
+                do {
+                    try RemoteManagement.installHook(
+                        agent: agent, reporterDestination: destination
+                    )
+                    let states = RemoteManagement.hookStates(
+                        reporterPath: destination.path
+                    )
+                    self?.sendOnQueue(.hooksStatus(list: states, req: req))
+                } catch {
+                    self?.sendOnQueue(.err(msg: "hook install failed: \(error)", req: req))
+                }
+            }
+        case .hookUninstall(let agent, let req):
+            let reporterPath = home.hookReporterURL.path
+            DispatchQueue.global().async { [weak self] in
+                do {
+                    try RemoteManagement.uninstallHook(agent: agent)
+                    let states = RemoteManagement.hookStates(reporterPath: reporterPath)
+                    self?.sendOnQueue(.hooksStatus(list: states, req: req))
+                } catch {
+                    self?.sendOnQueue(.err(msg: "hook uninstall failed: \(error)", req: req))
+                }
+            }
+        case .updateStatus(let info, let req):
+            guard info == nil else { break } // reply form is host→client only
+            guard let handler = updateStatusHandler else {
+                control?.send(.err(
+                    msg: "updates require the Pedals menu bar app", req: req
+                ))
+                break
+            }
+            Task { [weak self] in
+                let status = await handler()
+                self?.sendOnQueue(.updateStatus(info: status.info, req: req))
+            }
+        case .updateInstall(let req):
+            guard let handler = updateInstallHandler else {
+                control?.send(.err(
+                    msg: "updates require the Pedals menu bar app", req: req
+                ))
+                break
+            }
+            Task { [weak self] in
+                let status = await handler()
+                self?.sendOnQueue(.updateStatus(info: status.info, req: req))
+            }
         case .sessions, .agents, .created, .title, .exit, .ready, .requestReplay:
             break // host→client only; ignore if mirrored back
         case .err(let msg, _):
             FileHandle.standardError.write(Data("client error: \(msg)\n".utf8))
+        }
+    }
+
+    /// Replies hop back onto `queue`: every other `control?.send` in this
+    /// class happens there, and hook/update work runs off-queue.
+    private func sendOnQueue(_ message: ControlMessage) {
+        queue.async { [weak self] in
+            self?.control?.send(message)
         }
     }
 

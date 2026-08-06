@@ -421,6 +421,33 @@ After `ready` promotes the tag, the control channel accepts:
 - `close {id}`, `title {id,title}`, `exit {id,code}`
 - `err {msg,req?}`
 
+Remote hook and desktop-update management (the iPhone computer detail page)
+adds five request/reply kinds. Every request carries a client-chosen `req`
+that the reply echoes; like `created`, replies are broadcast to every control
+client, and a client ignores replies whose `req` is not its own. Failures
+answer with `err {msg,req?}`. Daemons older than these kinds silently drop
+the unknown requests, so clients must time out and treat that as "update the
+desktop app".
+
+- `hooks-status {req?}` — client to host: request the install state of every
+  coding-agent hook. The host answers
+  `hooks-status {list:[{agent,state}],req?}` where `state` is
+  `installed|notInstalled|outdated|unknown` (`outdated` means the on-disk
+  hook content differs from what the running desktop build would write).
+- `hook-install {agent,req?}` / `hook-uninstall {agent,req?}` — client to
+  host: install (also the update path for `outdated`) or remove one agent's
+  hook. On success the host answers with a fresh full `hooks-status` echoing
+  `req`.
+- `update-status {req?}` — client to host: request the desktop update state.
+  The host answers
+  `update-status {info:{current?,latest?,updateAvailable,canInstall,detail?},req?}`.
+  `canInstall` is true only when the host runs the menu bar app (which owns
+  the Sparkle updater); a headless daemon has no update handlers and answers
+  `err` instead.
+- `update-install {req?}` — client to host: start the desktop's standard
+  Sparkle update flow (it may present UI and relaunch the app on the Mac).
+  The host answers with a fresh `update-status` echoing `req`.
+
 An active session channel accepts `requestReplay {}` from client to host as a
 ctl frame with `sessionId = 0`. The host answers with a current `replay` frame;
 this is how a reconnect recovers output because the relay never queues it.

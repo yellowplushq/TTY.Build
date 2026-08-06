@@ -141,6 +141,26 @@ final class FrameCodecTests: XCTestCase {
             .title(id: 4, title: "vim — notes.md"),
             .exit(id: 5, code: 130),
             .err(msg: "boom"),
+            .hooksStatus(list: nil, req: 0xBEEF),
+            .hooksStatus(list: [
+                HookStateInfo(agent: "claude", state: "installed"),
+                HookStateInfo(agent: "codex", state: "outdated"),
+                HookStateInfo(agent: "kimi", state: "notInstalled"),
+            ], req: 0xBEEF),
+            .hooksStatus(list: [], req: nil),
+            .hookInstall(agent: "claude", req: 7),
+            .hookUninstall(agent: "codex", req: nil),
+            .updateStatus(info: nil, req: 9),
+            .updateStatus(info: UpdateStatusInfo(
+                current: "1.5.0", latest: "1.6.0",
+                updateAvailable: true, canInstall: true
+            ), req: 9),
+            .updateStatus(info: UpdateStatusInfo(
+                updateAvailable: false, canInstall: false,
+                detail: "updates require the Pedals menu bar app"
+            ), req: nil),
+            .updateInstall(req: 11),
+            .updateInstall(req: nil),
         ]
         for message in messages {
             let frame = try Frame.control(message)
@@ -252,6 +272,65 @@ final class FrameCodecTests: XCTestCase {
 
     func testUnknownControlKindThrows() {
         XCTAssertThrowsError(try ControlMessage(jsonData: Data(#"{"t":"nope"}"#.utf8)))
+    }
+
+    func testHooksAndUpdateWireShapes() throws {
+        let request = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: ControlMessage.hooksStatus(list: nil, req: 3).jsonData()
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(request["t"] as? String, "hooks-status")
+        XCTAssertEqual(request["req"] as? Int, 3)
+        XCTAssertNil(request["list"], "request form must omit the list")
+
+        let reply = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: ControlMessage.hooksStatus(
+                    list: [HookStateInfo(agent: "claude", state: "installed")],
+                    req: 3
+                ).jsonData()
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(reply["t"] as? String, "hooks-status")
+        let list = try XCTUnwrap(reply["list"] as? [[String: Any]])
+        XCTAssertEqual(list.first?["agent"] as? String, "claude")
+        XCTAssertEqual(list.first?["state"] as? String, "installed")
+
+        let install = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: ControlMessage.hookInstall(agent: "kimi", req: 4).jsonData()
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(install["t"] as? String, "hook-install")
+        XCTAssertEqual(install["agent"] as? String, "kimi")
+
+        let update = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: ControlMessage.updateStatus(
+                    info: UpdateStatusInfo(
+                        current: "1.5.0", latest: nil,
+                        updateAvailable: false, canInstall: true
+                    ),
+                    req: 5
+                ).jsonData()
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(update["t"] as? String, "update-status")
+        let info = try XCTUnwrap(update["info"] as? [String: Any])
+        XCTAssertEqual(info["current"] as? String, "1.5.0")
+        XCTAssertNil(info["latest"], "nil latest must be omitted")
+        XCTAssertEqual(info["updateAvailable"] as? Bool, false)
+        XCTAssertEqual(info["canInstall"] as? Bool, true)
+
+        let updateInstall = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: ControlMessage.updateInstall(req: 6).jsonData()
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(updateInstall["t"] as? String, "update-install")
+        XCTAssertEqual(updateInstall["req"] as? Int, 6)
+        XCTAssertEqual(updateInstall.count, 2)
     }
 
     func testControlMessageOnNonCtlFrameThrows() {

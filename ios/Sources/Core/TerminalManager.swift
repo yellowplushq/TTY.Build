@@ -418,6 +418,11 @@ final class TerminalManager {
             guard removedTerminalCount > 0 else { break }
             let suffix = removedTerminalCount == 1 ? "terminal was" : "terminals were"
             notices.send("\(connection.displayName) went offline. \(removedTerminalCount) \(suffix) hidden.")
+        case .hooksStatus, .updateStatus:
+            // Request/reply traffic for the computer detail page; subscribers
+            // (e.g. ComputerDetailViewController) observe the connection's
+            // events directly.
+            break
         }
     }
 
