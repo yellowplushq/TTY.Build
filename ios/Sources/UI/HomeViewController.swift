@@ -5,7 +5,8 @@ import UIKit
 /// The leftmost page of the main screen: a calm black/white overview of every
 /// terminal and every observed coding agent across all bound computers
 /// (docs/AGENT_MONITORING_DESIGN.md §4). Terminal rows open their terminal;
-/// agent rows are glanceable only. An agent renders in exactly one place:
+/// standalone Codex and Claude rows open their corresponding iOS app. Other
+/// agent rows remain glanceable only. An agent renders in exactly one place:
 /// inside its terminal row when its daemon PTY is a live tab, in the Agents
 /// section otherwise.
 @MainActor
@@ -243,6 +244,17 @@ final class HomeViewController: UIViewController {
             let section = Section(rawValue: indexPath.section) ?? .terminals
             let area = section == .terminals ? "terminals" : "agents"
             cell.accessibilityIdentifier = "pedals.home.\(area).row.\(indexPath.item)"
+            cell.accessibilityTraits.remove(.button)
+            cell.accessibilityHint = nil
+            if case .terminal = item {
+                cell.accessibilityTraits.insert(.button)
+            } else if case .agent(let key) = item,
+                      let row = agentRow(for: key),
+                      let appName = Self.agentAppName(for: row.info.agent)
+            {
+                cell.accessibilityTraits.insert(.button)
+                cell.accessibilityHint = "Opens \(appName)"
+            }
         }
         let hintRegistration = UICollectionView.CellRegistration<HomeHintCell, Item> {
             cell, _, item in
@@ -519,6 +531,43 @@ final class HomeViewController: UIViewController {
         render()
     }
 
+    // MARK: - Agent app shortcuts
+
+    private func agentRow(for key: AgentKey) -> AgentRow? {
+        lastUnmanaged.first {
+            $0.computerID == key.computerID && $0.info.id == key.agentID
+        }
+    }
+
+    /// HTTPS universal links avoid undocumented custom URL schemes. Passing
+    /// `universalLinksOnly` when opening means an uninstalled target app is a
+    /// silent no-op instead of falling back to Safari.
+    static func agentAppURL(for slug: String) -> URL? {
+        switch slug {
+        case "codex": URL(string: "https://chatgpt.com/#native")
+        case "claude": URL(string: "https://claude.ai/new")
+        default: nil
+        }
+    }
+
+    private static func agentAppName(for slug: String) -> String? {
+        switch slug {
+        case "codex": "ChatGPT"
+        case "claude": "Claude"
+        default: nil
+        }
+    }
+
+    private func openAgentApp(for key: AgentKey) {
+        guard let row = agentRow(for: key),
+              let url = Self.agentAppURL(for: row.info.agent)
+        else { return }
+        UIApplication.shared.open(
+            url,
+            options: [.universalLinksOnly: true]
+        )
+    }
+
     // MARK: - Text helpers
 
     static func agentOneLiner(_ agent: AgentInfo) -> String {
@@ -576,16 +625,31 @@ extension HomeViewController: UICollectionViewDelegate {
     func collectionView(
         _ collectionView: UICollectionView, shouldHighlightItemAt indexPath: IndexPath
     ) -> Bool {
-        if case .terminal = dataSource.itemIdentifier(for: indexPath) { return true }
-        return false
+        guard let item = dataSource.itemIdentifier(for: indexPath) else { return false }
+        switch item {
+        case .terminal:
+            return true
+        case .agent(let key):
+            guard let row = agentRow(for: key) else { return false }
+            return Self.agentAppURL(for: row.info.agent) != nil
+        case .terminalsEmpty, .agentsEmpty:
+            return false
+        }
     }
 
     func collectionView(
         _ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath
     ) {
         collectionView.deselectItem(at: indexPath, animated: true)
-        guard case .terminal(let id) = dataSource.itemIdentifier(for: indexPath) else { return }
-        onSelectTerminal?(id)
+        guard let item = dataSource.itemIdentifier(for: indexPath) else { return }
+        switch item {
+        case .terminal(let id):
+            onSelectTerminal?(id)
+        case .agent(let key):
+            openAgentApp(for: key)
+        case .terminalsEmpty, .agentsEmpty:
+            break
+        }
     }
 }
 
@@ -613,8 +677,8 @@ struct HomeRowContent: Equatable {
     var time: String?
     /// Offline computer or dead tty: whole row at reduced alpha.
     var dimmed: Bool
-    /// Plain list row (no surface card background): the glanceable Agents
-    /// section, visually distinct from the tappable terminal cards.
+    /// Plain list row (no surface card background): the Agents section,
+    /// visually distinct from the terminal cards.
     var flat = false
 }
 
@@ -741,9 +805,9 @@ private final class HomeRowCell: UICollectionViewListCell {
 
     override var isHighlighted: Bool {
         didSet {
-            guard !isFlat else { return }
             contentView.backgroundColor = isHighlighted
-                ? PedalsTheme.uiSelection : PedalsTheme.uiSurface
+                ? PedalsTheme.uiSelection
+                : (isFlat ? .clear : PedalsTheme.uiSurface)
         }
     }
 

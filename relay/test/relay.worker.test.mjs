@@ -2788,7 +2788,7 @@ describe("agent counts and alerts", () => {
     }
   });
 
-  test("working agent starts the island and attention does not duplicate it", async () => {
+  test("working stays silent and only attention starts the island", async () => {
     const computer = await createComputer();
     const client = await createClient();
     expect((await bind(client, computer)).status).toBe(201);
@@ -2817,19 +2817,17 @@ describe("agent counts and alerts", () => {
           sealed: btoa("silent-ciphertext"),
         },
       }));
-      let endpoint = await waitFor(async () => {
-        const row = await env.DB
-          .prepare(
-            `SELECT last_sequence AS lastSequence, last_total_running AS lastTotal
-               FROM push_endpoints
-              WHERE client_id = ?1 AND surface = 'liveactivity-start'`,
-          )
-          .bind(client.clientId)
-          .first();
-        return Number(row?.lastTotal) === 1 ? row : null;
-      });
-      const workingSequence = Number(endpoint.lastSequence);
-      expect(workingSequence).toBeGreaterThanOrEqual(0);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      let endpoint = await env.DB
+        .prepare(
+          `SELECT last_sequence AS lastSequence, last_total_running AS lastTotal
+             FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'liveactivity-start'`,
+        )
+        .bind(client.clientId)
+        .first();
+      expect(Number(endpoint.lastSequence)).toBe(-1);
+      expect(Number(endpoint.lastTotal)).toBe(0);
 
       host.ws.send(
         snapshotWithAgents("Island Mac", [], { running: 0, waiting: 1, done: 0 }),
@@ -2845,16 +2843,18 @@ describe("agent counts and alerts", () => {
           sealed: btoa("attention-ciphertext"),
         },
       }));
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      endpoint = await env.DB
-        .prepare(
-          `SELECT last_sequence AS lastSequence, last_total_running AS lastTotal
-             FROM push_endpoints
-            WHERE client_id = ?1 AND surface = 'liveactivity-start'`,
-        )
-        .bind(client.clientId)
-        .first();
-      expect(Number(endpoint.lastSequence)).toBe(workingSequence);
+      endpoint = await waitFor(async () => {
+        const row = await env.DB
+          .prepare(
+            `SELECT last_sequence AS lastSequence, last_total_running AS lastTotal
+               FROM push_endpoints
+              WHERE client_id = ?1 AND surface = 'liveactivity-start'`,
+          )
+          .bind(client.clientId)
+          .first();
+        return Number(row?.lastTotal) === 1 ? row : null;
+      });
+      expect(Number(endpoint.lastSequence)).toBeGreaterThanOrEqual(0);
       expect(Number(endpoint.lastTotal)).toBe(1);
 
       expect(
@@ -2966,9 +2966,61 @@ describe("agent counts and alerts", () => {
         .first();
       expect(Number(start.lastSequence)).toBe(-1);
       expect(Number(start.lastTotal)).toBe(0);
+      await runInDurableObject(coordinator, async (_instance, durableState) => {
+        const cached = await durableState.storage.get("recentAgentActivities");
+        expect(cached[computer.computerId].activity.alert).toBe(false);
+        expect(cached[computer.computerId].highPriority).toBe(false);
+      });
     } finally {
       closeAll(host);
     }
+  });
+
+  test("resuming a finished agent makes the silent working update high priority", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const coordinator = env.PUSH_COORDINATOR.getByName(client.clientId);
+
+    await runInDurableObject(coordinator, async (instance, durableState) => {
+      const finished = {
+        eventID: "66666666-6666-4666-8666-666666666666",
+        state: "done",
+        updatedAt: 1,
+        alert: false,
+        sealed: btoa("finished-ciphertext"),
+      };
+      expect(
+        await instance.cacheAgentActivity(computer.computerId, finished, false),
+      ).toBe(false);
+
+      const resumed = {
+        ...finished,
+        eventID: "77777777-7777-4777-8777-777777777777",
+        state: "running",
+        updatedAt: 2,
+        sealed: btoa("resumed-ciphertext"),
+      };
+      expect(
+        await instance.cacheAgentActivity(computer.computerId, resumed, false),
+      ).toBe(true);
+      let cached = await durableState.storage.get("recentAgentActivities");
+      expect(cached[computer.computerId].highPriority).toBe(true);
+
+      await instance.markAgentActivityDelivered(
+        computer.computerId,
+        resumed.eventID,
+      );
+      const progress = {
+        ...resumed,
+        eventID: "88888888-8888-4888-8888-888888888888",
+        updatedAt: 3,
+      };
+      expect(
+        await instance.cacheAgentActivity(computer.computerId, progress, false),
+      ).toBe(false);
+      cached = await durableState.storage.get("recentAgentActivities");
+      expect(cached[computer.computerId].highPriority).toBe(false);
+    });
   });
 
   test("rich activity failure retains the encrypted card for a forced retry", async () => {

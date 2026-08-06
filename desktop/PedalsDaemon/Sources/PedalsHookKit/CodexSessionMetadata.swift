@@ -8,10 +8,20 @@ public enum CodexSessionMetadata {
     public struct Snapshot: Equatable, Sendable {
         public var title: String? = nil
         public var transcriptPath: String? = nil
+        /// Whether Codex records this session in its own `threads` table.
+        /// `false` means the state database was readable and has no row —
+        /// an ephemeral thread (ambient suggestions and similar background
+        /// runs) that Codex itself does not treat as a session. `nil` means
+        /// the database was unavailable, so nothing can be concluded.
+        public var threadRecorded: Bool? = nil
 
-        public init(title: String? = nil, transcriptPath: String? = nil) {
+        public init(
+            title: String? = nil, transcriptPath: String? = nil,
+            threadRecorded: Bool? = nil
+        ) {
             self.title = title
             self.transcriptPath = transcriptPath
+            self.threadRecorded = threadRecorded
         }
     }
 
@@ -28,10 +38,11 @@ public enum CodexSessionMetadata {
     ) -> Snapshot {
         guard !sessionID.isEmpty else { return Snapshot() }
         let home = explicitHome ?? defaultHome
+        let row = databaseRow(sessionID: sessionID, home: home)
         return Snapshot(
-            title: titleFromIndex(sessionID: sessionID, home: home)
-                ?? titleFromDatabase(sessionID: sessionID, home: home),
-            transcriptPath: transcriptPathFromDatabase(sessionID: sessionID, home: home)
+            title: titleFromIndex(sessionID: sessionID, home: home) ?? row?.title,
+            transcriptPath: row?.transcriptPath,
+            threadRecorded: row.map(\.recorded)
         )
     }
 
@@ -76,14 +87,23 @@ public enum CodexSessionMetadata {
         return nil
     }
 
-    /// Newer Codex builds keep the generated title and first message in
-    /// `state_5.sqlite`. Open with SQLITE_OPEN_READONLY so Pedals cannot
-    /// create, migrate, or otherwise alter Codex state.
-    private static func titleFromDatabase(sessionID: String, home: URL) -> String? {
+    private struct DatabaseRow {
+        var title: String?
+        var transcriptPath: String?
+        /// False when the query ran cleanly and found no row: Codex does not
+        /// record the session (an ephemeral thread). Any open/prepare/step
+        /// failure yields no DatabaseRow at all, never a false negative.
+        var recorded: Bool
+    }
+
+    /// Newer Codex builds keep the generated title, first message, and
+    /// rollout path in `state_5.sqlite`. Open with SQLITE_OPEN_READONLY so
+    /// Pedals cannot create, migrate, or otherwise alter Codex state.
+    private static func databaseRow(sessionID: String, home: URL) -> DatabaseRow? {
         queryDatabase(sessionID: sessionID, home: home) { database in
             var statement: OpaquePointer?
             let sql = """
-            SELECT name, title, first_user_message, preview
+            SELECT name, title, first_user_message, preview, rollout_path
             FROM threads WHERE id = ? LIMIT 1
             """
             guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
@@ -91,41 +111,27 @@ public enum CodexSessionMetadata {
             else { return nil }
             defer { sqlite3_finalize(statement) }
 
-            guard bind(sessionID: sessionID, to: statement),
-                  sqlite3_step(statement) == SQLITE_ROW
-            else { return nil }
-
-            for column in 0..<4 {
-                guard let bytes = sqlite3_column_text(statement, Int32(column)) else { continue }
-                if let title = cleanedTitle(String(cString: bytes)) {
-                    return title
+            guard bind(sessionID: sessionID, to: statement) else { return nil }
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW:
+                var row = DatabaseRow(recorded: true)
+                for column in 0..<4 where row.title == nil {
+                    guard let bytes = sqlite3_column_text(statement, Int32(column))
+                    else { continue }
+                    row.title = cleanedTitle(String(cString: bytes))
                 }
+                if let bytes = sqlite3_column_text(statement, 4) {
+                    let path = sanitizeHookText(
+                        String(cString: bytes), cap: HookFieldCaps.transcriptPath
+                    )
+                    if !path.isEmpty { row.transcriptPath = path }
+                }
+                return row
+            case SQLITE_DONE:
+                return DatabaseRow(recorded: false)
+            default:
+                return nil
             }
-            return nil
-        }
-    }
-
-    private static func transcriptPathFromDatabase(
-        sessionID: String, home: URL
-    ) -> String? {
-        queryDatabase(sessionID: sessionID, home: home) { database in
-            var statement: OpaquePointer?
-            guard sqlite3_prepare_v2(
-                database,
-                "SELECT rollout_path FROM threads WHERE id = ? LIMIT 1",
-                -1, &statement, nil
-            ) == SQLITE_OK, let statement
-            else { return nil }
-            defer { sqlite3_finalize(statement) }
-
-            guard bind(sessionID: sessionID, to: statement),
-                  sqlite3_step(statement) == SQLITE_ROW,
-                  let bytes = sqlite3_column_text(statement, 0)
-            else { return nil }
-            let path = sanitizeHookText(
-                String(cString: bytes), cap: HookFieldCaps.transcriptPath
-            )
-            return path.isEmpty ? nil : path
         }
     }
 

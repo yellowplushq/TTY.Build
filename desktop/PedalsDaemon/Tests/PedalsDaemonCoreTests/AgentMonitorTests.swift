@@ -29,7 +29,14 @@ final class AgentMonitorTests: XCTestCase {
         // which drive sweeps explicitly via `sweepNow()`.
         tuning.sweepInterval = 3600
         tuning.doneAttentionDelay = 0.1
-        monitor = AgentMonitor(tuning: tuning) { [targets] in targets!.current }
+        // A neutral resolver keeps tests hermetic: the default one reads the
+        // real ~/.codex state database, which would filter test sessions as
+        // ephemeral threads on a machine with Codex installed.
+        monitor = AgentMonitor(
+            tuning: tuning,
+            codexMetadataResolver: { _ in .init() },
+            matchTargets: { [targets] in targets!.current }
+        )
     }
 
     /// Sleeps past the test's done hold-back window (0.1s) so a held done
@@ -109,14 +116,31 @@ final class AgentMonitorTests: XCTestCase {
         XCTAssertTrue(monitor.list().isEmpty)
     }
 
-    func testPromptClearsActionAndPreservesLastAgentMessage() throws {
+    func testNewestUserOrAgentMessageWinsAcrossTurns() throws {
         monitor.ingest(event("tool", action: "Bash: ls"))
         monitor.ingest(event("notify", message: "hello"))
         monitor.ingest(event("prompt", prompt: "next"))
-        let info = try only()
+        var info = try only()
         XCTAssertNil(info.action)
-        XCTAssertEqual(info.message, "hello")
+        XCTAssertNil(info.message, "the new prompt supersedes the previous agent message")
         XCTAssertEqual(info.prompt, "next")
+        XCTAssertEqual(AgentActivity.Presentation(info: info).detail, "next")
+
+        monitor.ingest(event("tool", message: "On it."))
+        info = try only()
+        XCTAssertEqual(info.message, "On it.")
+        XCTAssertEqual(
+            AgentActivity.Presentation(info: info).detail,
+            "On it.",
+            "a later agent message supersedes the user prompt"
+        )
+
+        monitor.ingest(event("prompt"))
+        XCTAssertEqual(
+            try only().message,
+            "On it.",
+            "a textless turn-start does not erase the last displayable message"
+        )
     }
 
     func testCodexFirstPromptBecomesStableFallbackSessionTitle() throws {
@@ -179,6 +203,44 @@ final class AgentMonitorTests: XCTestCase {
         XCTAssertEqual(info.state, .running)
         XCTAssertEqual(info.message, "Found the issue and applying the fix.")
         XCTAssertEqual(info.prompt, "Please investigate")
+    }
+
+    func testCodexEphemeralThreadNeverBecomesARecord() {
+        let filteringMonitor = AgentMonitor(
+            tuning: .init(),
+            codexMetadataResolver: { _ in .init(threadRecorded: false) },
+            matchTargets: { [] }
+        )
+        filteringMonitor.ingest(event(
+            "prompt", id: "ambient-run", agent: "codex",
+            prompt: "Generate 0 to 3 hyperpersonalized suggestions"
+        ))
+        filteringMonitor.ingest(event("stop", id: "ambient-run", agent: "codex"))
+        XCTAssertTrue(filteringMonitor.list().isEmpty)
+    }
+
+    func testCodexRecordSlippedInWhileDatabaseUnreadableIsRemoved() throws {
+        final class VerdictBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value: Bool?
+            func get() -> Bool? { lock.withLock { value } }
+            func set(_ next: Bool?) { lock.withLock { value = next } }
+        }
+        let verdict = VerdictBox()
+        let filteringMonitor = AgentMonitor(
+            tuning: .init(),
+            codexMetadataResolver: { _ in .init(threadRecorded: verdict.get()) },
+            matchTargets: { [] }
+        )
+        filteringMonitor.ingest(event("prompt", id: "ambient-run", agent: "codex"))
+        XCTAssertEqual(filteringMonitor.list().count, 1, "no verdict admits the record")
+
+        verdict.set(false)
+        filteringMonitor.ingest(event("tool", id: "ambient-run", agent: "codex"))
+        XCTAssertTrue(
+            filteringMonitor.list().isEmpty,
+            "an ephemeral verdict on a later event removes the record"
+        )
     }
 
     func testStopWithAgentErrorAndStickiness() throws {
@@ -555,8 +617,9 @@ final class AgentMonitorTests: XCTestCase {
         XCTAssertEqual(updates.all.count, 2)
         XCTAssertEqual(updates.all.last?.info.message, "Pick a plan")
 
-        // Turn end reports done with the final message — after the hold-back
-        // window, not on the edge itself.
+        // Work resumes after the question, then turn end reports done with
+        // the final message — after the hold-back window, not on the edge.
+        monitor.ingest(event("busy"))
         monitor.ingest(event("stop", message: "All tests pass"))
         XCTAssertEqual(updates.all.count, 2, "done is held back, not immediate")
         waitPastDoneDelay()
@@ -568,6 +631,30 @@ final class AgentMonitorTests: XCTestCase {
         monitor.ingest(event("stop"))
         waitPastDoneDelay()
         XCTAssertEqual(updates.all.count, 3)
+    }
+
+    func testTransitionsAmongAttentionStatesNeverAlert() {
+        let updates = Updates()
+        monitor.onAttention = { updates.append($0, $1) }
+
+        monitor.ingest(event("prompt", prompt: "go"))
+        monitor.ingest(event("ask", message: "Choose one"))
+        XCTAssertEqual(updates.all.map(\.attention), [.waiting])
+
+        monitor.ingest(event("stop", message: "Stopped while waiting"))
+        waitPastDoneDelay()
+        XCTAssertEqual(
+            updates.all.map(\.attention),
+            [.waiting],
+            "waiting to done is not a working-to-attention edge"
+        )
+
+        monitor.ingest(event("stop", agentError: true))
+        XCTAssertEqual(
+            updates.all.map(\.attention),
+            [.waiting],
+            "done to error also stays silent"
+        )
     }
 
     func testAttentionFiresOnErrorStop() {
