@@ -18,15 +18,10 @@ final class ComputerDetailViewController: UITableViewController {
         case unbind
     }
 
-    /// Rows in the Updates section.
-    private enum UpdateRow: Int {
-        case version
-        case latest
-        case check
-        case install
-    }
-
     private static let requestTimeout: Duration = .seconds(5)
+    /// Update requests wait for the Mac to finish a full Sparkle appcast
+    /// probe before replying, which routinely outlives the hooks timeout.
+    private static let updateRequestTimeout: Duration = .seconds(20)
 
     private let services: AppServices
     private let computerID: String
@@ -44,7 +39,13 @@ final class ComputerDetailViewController: UITableViewController {
     private var pendingUpdateReq: UInt32?
     /// Agent slugs with an install/uninstall in flight.
     private var busyAgents: Set<String> = []
-    private var installingUpdate = false
+
+    /// Why the in-flight update request was sent: a silent page-load refresh
+    /// (fills the Version row), or a user-facing check/install whose result
+    /// lands in the update sheet.
+    private enum UpdateRequestKind { case background, check, install }
+    private var updateRequestKind: UpdateRequestKind = .background
+    private weak var updateSheet: UpdateCheckViewController?
 
     init(services: AppServices, computerID: String) {
         self.services = services
@@ -106,6 +107,7 @@ final class ComputerDetailViewController: UITableViewController {
     private func refreshRemoteState() {
         guard computer?.hostOnline == true else { return }
         requestHooksStatus()
+        updateRequestKind = .background
         requestUpdateStatus()
     }
 
@@ -136,12 +138,19 @@ final class ComputerDetailViewController: UITableViewController {
 
     private func armUpdateTimeout(req: UInt32) {
         Task { [weak self] in
-            try? await Task.sleep(for: Self.requestTimeout)
+            try? await Task.sleep(for: Self.updateRequestTimeout)
             guard let self, !Task.isCancelled, pendingUpdateReq == req else { return }
             pendingUpdateReq = nil
-            installingUpdate = false
+            let kind = updateRequestKind
+            updateRequestKind = .background
             updatesUnsupported = updateInfo == nil
             reloadSections(.updates)
+            if kind != .background {
+                updateSheet?.show(.failed(
+                    title: kind == .install ? "Update Failed" : "Update Check Failed",
+                    message: "No reply from the Mac. It may be running an older Pedals — update it there to manage updates from here."
+                ))
+            }
         }
     }
 
@@ -161,9 +170,11 @@ final class ComputerDetailViewController: UITableViewController {
             guard req == pendingUpdateReq else { return }
             pendingUpdateReq = nil
             updatesUnsupported = false
-            installingUpdate = false
             updateInfo = info
+            let kind = updateRequestKind
+            updateRequestKind = .background
             reloadSections(.computer, .updates)
+            presentUpdateResult(info, kind: kind)
         case .error(let msg, let req):
             if req == pendingHooksReq {
                 pendingHooksReq = nil
@@ -172,9 +183,16 @@ final class ComputerDetailViewController: UITableViewController {
                 reloadSections(.agents)
             } else if req == pendingUpdateReq {
                 pendingUpdateReq = nil
-                installingUpdate = false
-                actionError = msg
-                reloadSections(.updates)
+                let kind = updateRequestKind
+                updateRequestKind = .background
+                // Background refreshes fail quietly (headless daemons answer
+                // update-status with err); user-driven ones land in the sheet.
+                if kind != .background {
+                    updateSheet?.show(.failed(
+                        title: kind == .install ? "Update Failed" : "Update Check Failed",
+                        message: msg
+                    ))
+                }
             }
         case .created, .exit, .offline:
             break
@@ -211,8 +229,7 @@ final class ComputerDetailViewController: UITableViewController {
             if updatesUnsupported {
                 return "This Mac runs an older Pedals without remote updates. Update Pedals on the Mac to check for updates from here."
             }
-            if let actionError { return actionError }
-            return updateInfo?.detail
+            return nil
         case .computer, .unbind:
             return nil
         }
@@ -226,7 +243,7 @@ final class ComputerDetailViewController: UITableViewController {
             guard let hookStates, !hookStates.isEmpty else { return 1 }
             return hookStates.count
         case .updates:
-            return 4
+            return 1
         case .unbind:
             return 1
         }
@@ -238,7 +255,7 @@ final class ComputerDetailViewController: UITableViewController {
         switch Section(rawValue: indexPath.section)! {
         case .computer: computerCell(row: indexPath.row)
         case .agents: agentCell(row: indexPath.row)
-        case .updates: updateCell(row: indexPath.row)
+        case .updates: updateCell()
         case .unbind: unbindCell()
         }
     }
@@ -275,6 +292,8 @@ final class ComputerDetailViewController: UITableViewController {
         }
     }
 
+    /// Mirrors the Mac Coding Agents panel: brand mark + name/hook-path
+    /// detail on the left, install-state control on the right.
     private func agentCell(row: Int) -> UITableViewCell {
         guard let hookStates, row < hookStates.count else {
             return valueCell(
@@ -285,38 +304,90 @@ final class ComputerDetailViewController: UITableViewController {
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
         var content = cell.defaultContentConfiguration()
         content.text = Self.agentName(entry.agent)
-        content.secondaryText = busyAgents.contains(entry.agent)
-            ? "Working…" : Self.stateText(entry.state)
+        content.secondaryText = Self.agentDetail(entry.agent) ?? Self.stateText(entry.state)
         content.secondaryTextProperties.color = .secondaryLabel
+        content.secondaryTextProperties.font = .preferredFont(forTextStyle: .caption1)
+        content.textToSecondaryTextVerticalPadding = 2
+        if let asset = HomeViewController.agentAssetName(entry.agent) {
+            content.image = UIImage(named: asset)
+            content.imageProperties.maximumSize = CGSize(width: 24, height: 24)
+            content.imageProperties.reservedLayoutSize = CGSize(width: 24, height: 24)
+            content.imageProperties.tintColor = PedalsTheme.uiContent
+        }
         cell.contentConfiguration = content
-        cell.selectionStyle = .default
+        cell.accessoryView = agentAccessory(for: entry)
+        cell.selectionStyle = .none
         return cell
     }
 
-    private func updateCell(row: Int) -> UITableViewCell {
-        switch UpdateRow(rawValue: row)! {
-        case .version:
-            return valueCell("Current Version", updateInfo?.current ?? "—")
-        case .latest:
-            return valueCell("Latest Version", updateInfo?.latest ?? "—")
-        case .check:
-            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-            var content = cell.defaultContentConfiguration()
-            content.text = pendingUpdateReq != nil ? "Checking…" : "Check for Updates"
-            content.textProperties.color = PedalsTheme.uiContent
-            cell.contentConfiguration = content
-            cell.selectionStyle = .default
-            return cell
-        case .install:
-            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-            var content = cell.defaultContentConfiguration()
-            content.text = installingUpdate ? "Starting Update…" : "Install Update"
-            let installable = updateInfo?.canInstall == true && !installingUpdate
-            content.textProperties.color = installable ? PedalsTheme.uiContent : .secondaryLabel
-            cell.contentConfiguration = content
-            cell.selectionStyle = installable ? .default : .none
-            return cell
+    /// Right-side control matching the Mac panel: a spinner while a request
+    /// is in flight, an "Installed" pull-down (Reinstall/Uninstall) once
+    /// installed, otherwise an Install/Update button.
+    private func agentAccessory(for entry: HookStateInfo) -> UIView {
+        if busyAgents.contains(entry.agent) {
+            let spinner = UIActivityIndicatorView(style: .medium)
+            spinner.startAnimating()
+            return spinner
         }
+        let button = UIButton(type: .system)
+        switch entry.state {
+        case "installed":
+            var config = UIButton.Configuration.plain()
+            config.title = "Installed"
+            config.image = UIImage(systemName: "checkmark.circle.fill")
+            config.imagePadding = 4
+            config.baseForegroundColor = PedalsTheme.uiSuccess
+            config.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(
+                textStyle: .subheadline
+            )
+            config.buttonSize = .small
+            config.indicator = .popup
+            button.configuration = config
+            button.menu = UIMenu(children: [
+                UIAction(title: "Reinstall") { [weak self] _ in
+                    self?.installHook(entry.agent)
+                },
+                UIAction(title: "Uninstall", attributes: .destructive) { [weak self] _ in
+                    self?.uninstallHook(entry.agent)
+                },
+            ])
+            button.showsMenuAsPrimaryAction = true
+        case "outdated":
+            button.configuration = Self.installButtonConfiguration(title: "Update…")
+            button.addAction(
+                UIAction { [weak self] _ in self?.installHook(entry.agent) },
+                for: .primaryActionTriggered
+            )
+        default:
+            button.configuration = Self.installButtonConfiguration(title: "Install…")
+            button.addAction(
+                UIAction { [weak self] _ in self?.installHook(entry.agent) },
+                for: .primaryActionTriggered
+            )
+        }
+        button.sizeToFit()
+        return button
+    }
+
+    private static func installButtonConfiguration(title: String) -> UIButton.Configuration {
+        var config = UIButton.Configuration.gray()
+        config.title = title
+        config.buttonSize = .small
+        config.cornerStyle = .capsule
+        config.baseForegroundColor = PedalsTheme.uiContent
+        return config
+    }
+
+    /// Single action row; checking, results, and installing all happen in
+    /// the update sheet, mirroring the Mac's Sparkle dialog flow.
+    private func updateCell() -> UITableViewCell {
+        let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+        var content = cell.defaultContentConfiguration()
+        content.text = "Check for Updates…"
+        content.textProperties.color = PedalsTheme.uiContent
+        cell.contentConfiguration = content
+        cell.selectionStyle = .default
+        return cell
     }
 
     private func unbindCell() -> UITableViewCell {
@@ -335,18 +406,9 @@ final class ComputerDetailViewController: UITableViewController {
         tableView.deselectRow(at: indexPath, animated: true)
         switch Section(rawValue: indexPath.section)! {
         case .agents:
-            guard let hookStates, indexPath.row < hookStates.count else { return }
-            presentHookActions(for: hookStates[indexPath.row])
+            break
         case .updates:
-            switch UpdateRow(rawValue: indexPath.row)! {
-            case .check:
-                requestUpdateStatus()
-            case .install:
-                guard updateInfo?.canInstall == true, !installingUpdate else { return }
-                confirmInstallUpdate()
-            case .version, .latest:
-                break
-            }
+            beginUpdateCheck()
         case .unbind:
             confirmUnbind()
         case .computer:
@@ -355,38 +417,6 @@ final class ComputerDetailViewController: UITableViewController {
     }
 
     // MARK: - Actions
-
-    private func presentHookActions(for entry: HookStateInfo) {
-        let name = Self.agentName(entry.agent)
-        let sheet = UIAlertController(
-            title: name,
-            message: "Hook: \(Self.stateText(entry.state))",
-            preferredStyle: .actionSheet
-        )
-        switch entry.state {
-        case "installed":
-            sheet.addAction(UIAlertAction(title: "Reinstall", style: .default) { [weak self] _ in
-                self?.installHook(entry.agent)
-            })
-        case "outdated":
-            sheet.addAction(UIAlertAction(title: "Update Hook", style: .default) { [weak self] _ in
-                self?.installHook(entry.agent)
-            })
-        default:
-            sheet.addAction(UIAlertAction(title: "Install Hook", style: .default) { [weak self] _ in
-                self?.installHook(entry.agent)
-            })
-        }
-        if entry.state == "installed" || entry.state == "outdated" {
-            sheet.addAction(UIAlertAction(title: "Uninstall", style: .destructive) { [weak self] _ in
-                self?.uninstallHook(entry.agent)
-            })
-        }
-        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        // iPad action sheets anchor to the tapped row.
-        sheet.popoverPresentationController?.sourceView = tableView
-        present(sheet, animated: true)
-    }
 
     private func installHook(_ agent: String) {
         let req = UInt32.random(in: 1...UInt32.max)
@@ -408,23 +438,78 @@ final class ComputerDetailViewController: UITableViewController {
         reloadSections(.agents)
     }
 
-    private func confirmInstallUpdate() {
-        let alert = UIAlertController(
-            title: "Install Update on \(computer?.displayName ?? "this Mac")?",
-            message: "Installing the update restarts Pedals on the Mac and closes every open terminal session there.",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Install Update", style: .default) { [weak self] _ in
-            guard let self else { return }
-            let req = UInt32.random(in: 1...UInt32.max)
-            self.pendingUpdateReq = req
-            self.installingUpdate = true
-            self.computer?.installUpdate(req: req)
-            self.armUpdateTimeout(req: req)
-            self.reloadSections(.updates)
-        })
-        present(alert, animated: true)
+    /// Presents the Sparkle-style sheet and sends a user-facing
+    /// `update-status` request whose result lands in it.
+    private func beginUpdateCheck() {
+        let host = computer?.displayName ?? "the Mac"
+        let sheet = UpdateCheckViewController()
+        sheet.onInstall = { [weak self] in self?.sendInstallUpdate() }
+        updateSheet = sheet
+        guard computer?.hostOnline == true else {
+            sheet.show(.failed(
+                title: "Update Check Failed",
+                message: "\(host) is offline."
+            ))
+            present(sheet, animated: true)
+            return
+        }
+        sheet.show(.checking(host: host))
+        present(sheet, animated: true)
+        updateRequestKind = .check
+        requestUpdateStatus()
+    }
+
+    private func sendInstallUpdate() {
+        guard let computer, computer.hostOnline else { return }
+        updateRequestKind = .install
+        let req = UInt32.random(in: 1...UInt32.max)
+        pendingUpdateReq = req
+        computer.installUpdate(req: req)
+        armUpdateTimeout(req: req)
+        updateSheet?.show(.installing(host: computer.displayName))
+    }
+
+    /// Routes a user-facing `update-status` reply into the sheet. Dismissing
+    /// the sheet mid-flight quietly downgrades the reply to a background
+    /// refresh (it still fills the Version row).
+    private func presentUpdateResult(_ info: UpdateStatusInfo?, kind: UpdateRequestKind) {
+        guard kind != .background, let sheet = updateSheet else { return }
+        let host = computer?.displayName ?? "the Mac"
+        guard let info else {
+            sheet.show(.failed(
+                title: "Update Check Failed",
+                message: "The Mac sent an empty update status."
+            ))
+            return
+        }
+        switch kind {
+        case .check:
+            if info.updateAvailable {
+                sheet.show(.available(
+                    current: info.current, latest: info.latest,
+                    host: host, canInstall: info.canInstall
+                ))
+            } else if let detail = info.detail {
+                // e.g. "update check failed: …" or "an update session is
+                // already in progress" straight from the Mac.
+                sheet.show(.failed(title: "Update Check Failed", message: detail))
+            } else {
+                sheet.show(.upToDate(version: info.current))
+            }
+        case .install:
+            if info.updateAvailable {
+                sheet.show(.started(
+                    message: info.detail ?? "The updater was opened on \(host)."
+                ))
+            } else if let detail = info.detail {
+                sheet.show(.failed(title: "Update Failed", message: detail))
+            } else {
+                // The re-check on the Mac found nothing to install.
+                sheet.show(.upToDate(version: info.current))
+            }
+        case .background:
+            break
+        }
     }
 
     private func confirmUnbind() {
@@ -482,6 +567,24 @@ final class ComputerDetailViewController: UITableViewController {
         case "opencode": "OpenCode"
         case "pi": "Pi"
         default: slug
+        }
+    }
+
+    /// Matches the menu bar app's detail lines: names exactly what gets
+    /// written where on the Mac — keep it honest.
+    private static func agentDetail(_ slug: String) -> String? {
+        switch slug {
+        case "claude": "Hooks in ~/.claude/settings.json."
+        case "codex": "Hooks in ~/.codex/hooks.json; enables the hooks feature in ~/.codex/config.toml."
+        case "copilot": "Hook file in ~/.copilot/hooks/pedals.json."
+        case "grok": "Hook file in ~/.grok/hooks/pedals.json."
+        case "hermes": "Plugin in ~/.hermes/plugins/pedals-presence/."
+        case "kimi": "Hooks in ~/.kimi-code/config.toml."
+        case "kiro": "Hooks in ~/.kiro/agents/kiro_default.json. Requires Kiro CLI 2."
+        case "omp": "Extension in ~/.omp/agent/extensions/pedals/."
+        case "opencode": "Plugin in ~/.config/opencode/plugins/pedals-presence.js."
+        case "pi": "Extension in ~/.pi/agent/extensions/pedals/."
+        default: nil
         }
     }
 

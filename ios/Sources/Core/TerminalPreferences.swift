@@ -17,12 +17,12 @@ enum TerminalCanvasLayout {
     }
 }
 
-/// User-adjustable terminal appearance (Settings): font size + Ghostty theme.
+/// User-adjustable terminal appearance (Settings): font size + background.
+/// The Ghostty theme itself is fixed to `defaultThemeName`.
 @MainActor
 final class TerminalPreferences {
     private enum Keys {
         static let fontSize = "terminal.fontSize"
-        static let themeName = "terminal.themeName"
         static let backgroundHex = "terminal.backgroundHex"
     }
 
@@ -41,14 +41,8 @@ final class TerminalPreferences {
         set { defaults.set(newValue.clamped(to: Self.fontSizeRange), forKey: Keys.fontSize) }
     }
 
-    var themeName: String {
-        get { defaults.string(forKey: Keys.themeName) ?? Self.defaultThemeName }
-        set { defaults.set(newValue, forKey: Keys.themeName) }
-    }
-
     var themeDefinition: GhosttyThemeDefinition? {
-        GhosttyThemeCatalog.theme(named: themeName)
-            ?? GhosttyThemeCatalog.theme(named: Self.defaultThemeName)
+        GhosttyThemeCatalog.theme(named: Self.defaultThemeName)
     }
 
     /// Terminal background override: "#RRGGBB", or nil to follow the theme.
@@ -98,5 +92,23 @@ final class TerminalPreferences {
 private extension Float {
     func clamped(to range: ClosedRange<Float>) -> Float {
         Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+extension UIColor {
+    /// Parses "RRGGBB" / "#RRGGBB"; used for the background swatch.
+    convenience init?(hex: String) {
+        let hex = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        guard hex.count == 6,
+              let r = UInt8(hex.prefix(2), radix: 16),
+              let g = UInt8(hex.dropFirst(2).prefix(2), radix: 16),
+              let b = UInt8(hex.dropFirst(4).prefix(2), radix: 16)
+        else { return nil }
+        self.init(
+            red: CGFloat(r) / 255,
+            green: CGFloat(g) / 255,
+            blue: CGFloat(b) / 255,
+            alpha: 1
+        )
     }
 }
