@@ -60,6 +60,11 @@ public enum RelayMetadata: Equatable, Sendable {
     /// but cannot read the agent, project, prompt, action, or message.
     public struct AgentActivityEnvelope: Codable, Equatable, Sendable {
         public static let maxSealedBytes = 2_000
+        /// Hard per-envelope budget enforced by `sealWithinBudget` (free text
+        /// is progressively re-truncated until it fits), so the Worker can
+        /// always pack two computers' envelopes into one 4 KiB Live Activity
+        /// push. `maxSealedBytes` remains the wire cap for older senders.
+        public static let targetSealedBytes = 1_200
 
         public let eventID: String
         public let state: AgentState

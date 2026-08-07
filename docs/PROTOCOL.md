@@ -538,7 +538,18 @@ The daemon sends the most recent agent as transient host metadata:
 The Worker immediately fans this to bound clients' Live Activity endpoints
 and retains only the newest opaque envelope per active computer in that
 client's PushCoordinator Durable Object. The envelope is removed when the
-agent disappears or the Activity ends and is never written to D1. This lets a
+agent disappears or the Activity ends and is never written to D1. Beyond the
+newest envelope (the primary card, in the legacy `recentAgent*` content-state
+fields), a push also carries up to one more retained computer's envelope as a
+`moreAgents` content-state array — but only while the combined base64 stays
+inside the 4 KiB APNs Live Activity cap, so oversized envelopes from older
+daemons degrade to the single-envelope push. Current senders guarantee each
+sealed envelope stays within 1200 bytes by progressively re-truncating free
+text (never the row count or agent identity), so two current envelopes always
+pack and the degradation path exists only for older daemons. The widget decrypts every envelope with its
+per-computer key, flattens each envelope's agent plus nested second agent,
+and ranks the rows by `updatedAt` — the island's expanded card therefore
+shows the same two newest agents, across computers, as the Home list. This lets a
 durable terminal-count retry re-attach the concrete agent card instead of
 replacing it with aggregate fallback content. `sealed` is
 `ChaChaPoly(key_activity, aad=computerId)`

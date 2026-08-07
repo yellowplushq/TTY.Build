@@ -293,6 +293,78 @@ test("embeds opaque agent content and alerts attention updates plus starts", () 
   assert.equal(workingStart.aps.sound, undefined);
 });
 
+test("carries extra per-computer envelopes and sheds them before the 4 KiB cap", () => {
+  const sealed = Buffer.from("ciphertext").toString("base64");
+  const base = {
+    state: {
+      totalRunning: 0,
+      agentsRunning: 2,
+      agentsWaiting: 0,
+      agentsDone: 0,
+      sequence: 12,
+      updatedAt: "2023-11-14T22:13:20Z",
+      computers: [{ online: true }, { online: true }],
+    },
+    event: "update",
+    activity: {
+      eventID: "11111111-1111-4111-8111-111111111111",
+      state: "running",
+      updatedAt: 1_700_000_000_000,
+      alert: false,
+      sealed,
+      computerId: "c".repeat(32),
+    },
+  };
+  const extra = {
+    computerId: "d".repeat(32),
+    state: "waiting",
+    updatedAt: 1_699_999_000_000,
+    sealed: Buffer.from("other-ciphertext").toString("base64"),
+  };
+
+  const withExtras = buildApnsPayload("liveactivity-update", {
+    ...base,
+    moreActivities: [extra],
+  });
+  assert.deepEqual(withExtras.aps["content-state"].moreAgents, [{
+    computerID: extra.computerId,
+    state: "waiting",
+    updatedAt: 1_699_999_000 - 978_307_200,
+    sealed: extra.sealed,
+  }]);
+  // The extra envelope never alerts by itself.
+  assert.equal(withExtras.aps.alert, undefined);
+
+  // Two near-cap envelopes overflow: the extras are shed, the primary stays.
+  const oversized = buildApnsPayload("liveactivity-update", {
+    ...base,
+    activity: { ...base.activity, sealed: "A".repeat(2668) },
+    moreActivities: [{ ...extra, sealed: "B".repeat(2668) }],
+  });
+  assert.equal(oversized.aps["content-state"].moreAgents, undefined);
+  assert.equal(oversized.aps["content-state"].recentAgentSealed, "A".repeat(2668));
+  assert.ok(Buffer.byteLength(JSON.stringify(oversized)) < 4096);
+
+  assert.throws(
+    () => buildApnsPayload("liveactivity-update", {
+      state: base.state, event: "update", moreActivities: [extra],
+    }),
+    /requires payload.activity/,
+  );
+  assert.throws(
+    () => buildApnsPayload("liveactivity-update", {
+      ...base, moreActivities: [{ ...extra, sealed: "not base64!!" }],
+    }),
+    /base64/,
+  );
+  assert.throws(
+    () => buildApnsPayload("liveactivity-update", {
+      ...base, moreActivities: [{ ...extra, eventID: "unexpected" }],
+    }),
+    /not allowed/,
+  );
+});
+
 test("sends sandbox widget pushes with fixed topic, type and body", async () => {
   let request = null;
   const client = createApnsClient(env, {

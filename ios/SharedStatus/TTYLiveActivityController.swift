@@ -171,27 +171,14 @@ public final class TTYLiveActivityController {
             if let second { content.second = .init(info: second) }
             agentContent = content
             do {
-                var sealed = try AgentActivity.seal(
+                // Match the daemon: guaranteed within the target budget with
+                // both rows intact — no degradation path.
+                let sealed = try AgentActivity.sealWithinBudget(
                     content,
                     key: AgentActivity.activityKey(secret: binding.secret),
                     computerID: binding.computerID
                 )
-                if sealed.count > RelayMetadata.AgentActivityEnvelope.maxSealedBytes,
-                   content.second != nil
-                {
-                    // Match the daemon: the second row is best-effort and must
-                    // never cost the primary card its encrypted envelope.
-                    var trimmed = content
-                    trimmed.second = nil
-                    sealed = try AgentActivity.seal(
-                        trimmed,
-                        key: AgentActivity.activityKey(secret: binding.secret),
-                        computerID: binding.computerID
-                    )
-                }
-                if sealed.count <= RelayMetadata.AgentActivityEnvelope.maxSealedBytes {
-                    sealedText = sealed.base64EncodedString()
-                }
+                sealedText = sealed.base64EncodedString()
             } catch {
                 // Home already has the decrypted content. Keep the local
                 // ActivityKit presentation useful and let a later key/push

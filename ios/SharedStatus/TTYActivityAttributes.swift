@@ -72,6 +72,29 @@ public struct TTYActivityAttributes: ActivityAttributes, Codable, Hashable, Send
             }
         }
 
+        /// One additional per-computer E2EE envelope riding along with the
+        /// primary `recentAgentSealed` card, so the expanded island can rank
+        /// agent rows across computers the way Home does. Optional-decoded:
+        /// pushes from an older relay simply omit it.
+        public struct MoreAgent: Codable, Hashable, Sendable {
+            public var computerID: String
+            public var state: String?
+            public var updatedAt: Date?
+            public var sealed: String
+
+            public init(
+                computerID: String,
+                state: String? = nil,
+                updatedAt: Date? = nil,
+                sealed: String
+            ) {
+                self.computerID = computerID
+                self.state = state
+                self.updatedAt = updatedAt
+                self.sealed = sealed
+            }
+        }
+
         public var totalRunning: Int
         /// Coding-agent aggregates. Optional-decoded so pushes from a relay
         /// that predates agent counts still parse (ActivityKit decodes
@@ -84,6 +107,7 @@ public struct TTYActivityAttributes: ActivityAttributes, Codable, Hashable, Send
         public var recentAgentUpdatedAt: Date?
         public var recentAgentSealed: String?
         public var recentAgentDisplay: RecentAgentDisplay?
+        public var moreAgents: [MoreAgent]?
         public var onlineComputerCount: Int
         public var offlineComputerCount: Int
         public var updatedAt: Date
@@ -99,6 +123,7 @@ public struct TTYActivityAttributes: ActivityAttributes, Codable, Hashable, Send
             recentAgentUpdatedAt: Date? = nil,
             recentAgentSealed: String? = nil,
             recentAgentDisplay: RecentAgentDisplay? = nil,
+            moreAgents: [MoreAgent]? = nil,
             onlineComputerCount: Int,
             offlineComputerCount: Int,
             updatedAt: Date,
@@ -113,6 +138,7 @@ public struct TTYActivityAttributes: ActivityAttributes, Codable, Hashable, Send
             self.recentAgentUpdatedAt = recentAgentUpdatedAt
             self.recentAgentSealed = recentAgentSealed
             self.recentAgentDisplay = recentAgentDisplay
+            self.moreAgents = moreAgents
             self.onlineComputerCount = max(0, onlineComputerCount)
             self.offlineComputerCount = max(0, offlineComputerCount)
             self.updatedAt = updatedAt
@@ -132,6 +158,9 @@ public struct TTYActivityAttributes: ActivityAttributes, Codable, Hashable, Send
                 recentAgentSealed: try container.decodeIfPresent(String.self, forKey: .recentAgentSealed),
                 recentAgentDisplay: try container.decodeIfPresent(
                     RecentAgentDisplay.self, forKey: .recentAgentDisplay
+                ),
+                moreAgents: try container.decodeIfPresent(
+                    [MoreAgent].self, forKey: .moreAgents
                 ),
                 onlineComputerCount: try container.decode(Int.self, forKey: .onlineComputerCount),
                 offlineComputerCount: try container.decode(Int.self, forKey: .offlineComputerCount),
@@ -210,8 +239,75 @@ extension TTYActivityAttributes.ContentState {
         if let recentAgentDisplay {
             return recentAgentDisplay.content
         }
-        guard let computerID = recentAgentComputerID,
-              let sealedText = recentAgentSealed,
+        return decryptedContent(
+            computerID: recentAgentComputerID, sealedText: recentAgentSealed
+        )
+    }
+
+    /// One concrete agent row of the expanded card, already resolved to
+    /// display strings so the widget never touches envelope internals.
+    struct ResolvedAgentRow: Equatable {
+        var slug: String
+        var state: AgentState
+        var title: String
+        var detail: String
+        var updatedAt: Date
+    }
+
+    /// The expanded card's concrete rows: every agent across the primary
+    /// envelope and any `moreAgents` companions, newest first — the same
+    /// ranking Home shows. Foreground display snapshots already ranked
+    /// across computers and are used as-is. The count aggregate stays
+    /// authoritative: rows never exceed `totalAgents`, so a stale envelope
+    /// cannot show an agent the counts say is gone.
+    var resolvedAgentRows: [ResolvedAgentRow] {
+        guard totalAgents > 0 else { return [] }
+        var rows: [ResolvedAgentRow] = []
+        func append(_ content: AgentActivity.Content) {
+            let presentation = AgentActivity.Presentation(content: content)
+            rows.append(ResolvedAgentRow(
+                slug: content.agent,
+                state: content.state,
+                title: presentation.title,
+                detail: presentation.detail,
+                updatedAt: Date(timeIntervalSince1970: content.updatedAt)
+            ))
+            if let second = content.second {
+                let secondPresentation = AgentActivity.Presentation(companion: second)
+                rows.append(ResolvedAgentRow(
+                    slug: second.agent,
+                    state: second.state,
+                    title: secondPresentation.title,
+                    detail: secondPresentation.detail,
+                    updatedAt: Date(timeIntervalSince1970: second.updatedAt)
+                ))
+            }
+        }
+        if let recentAgentDisplay {
+            append(recentAgentDisplay.content)
+        } else {
+            if let primary = decryptedContent(
+                computerID: recentAgentComputerID, sealedText: recentAgentSealed
+            ) {
+                append(primary)
+            }
+            for envelope in moreAgents ?? [] {
+                if let content = decryptedContent(
+                    computerID: envelope.computerID, sealedText: envelope.sealed
+                ) {
+                    append(content)
+                }
+            }
+            rows.sort { $0.updatedAt > $1.updatedAt }
+        }
+        return Array(rows.prefix(min(2, totalAgents)))
+    }
+
+    private func decryptedContent(
+        computerID: String?, sealedText: String?
+    ) -> AgentActivity.Content? {
+        guard let computerID,
+              let sealedText,
               let sealed = Data(base64Encoded: sealedText),
               let keyData = AgentActivityKeyStore.key(forComputer: computerID)
         else { return nil }
