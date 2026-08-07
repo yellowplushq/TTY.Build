@@ -38,11 +38,12 @@ struct WatchTerminalView: View {
         .task { session.start() }
         .onDisappear { session.stop() }
         .onChange(of: scenePhase) { _, phase in
-            // Wrist-down stops every link (WatchTerminalStore.stop()); the
-            // store's start() only revives control connections, so the open
-            // terminal reconnects itself on wake instead of sitting frozen.
+            // Wrist-down parks every link (WatchTerminalStore.suspend()); the
+            // store's resume() only revives control connections, so the open
+            // terminal resumes its own session here (or restarts it if the
+            // link died while parked).
             guard phase == .active else { return }
-            session.start()
+            session.resume()
         }
     }
 }
@@ -158,13 +159,37 @@ private struct WatchTerminalContent: View {
         case .idle:
             EmptyView()
         case .connecting, .reconnecting:
-            ProgressView()
-                .controlSize(.mini)
+            // watchOS renders ProgressView at full indicator size regardless
+            // of controlSize; a hand-drawn arc keeps the badge glanceable
+            // without covering terminal content.
+            MiniSpinner()
                 .padding(4)
                 .background(.black.opacity(0.7), in: Circle())
+                .padding(.top, 4)
+                .padding(.trailing, 5)
         case .live:
             EmptyView()
         }
+    }
+}
+
+private struct MiniSpinner: View {
+    @State private var spinning = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.72)
+            .stroke(
+                .white.opacity(0.9),
+                style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
+            )
+            .frame(width: 11, height: 11)
+            .rotationEffect(.degrees(spinning ? 360 : 0))
+            .animation(
+                .linear(duration: 0.9).repeatForever(autoreverses: false),
+                value: spinning
+            )
+            .onAppear { spinning = true }
     }
 }
 

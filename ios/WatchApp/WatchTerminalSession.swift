@@ -91,6 +91,25 @@ final class WatchTerminalSession {
         phase = .idle
     }
 
+    /// Wrist-down: park the link with its E2EE state intact instead of
+    /// tearing it down, so the next wake usually needs no handshake.
+    func suspend() {
+        link?.suspend()
+    }
+
+    /// Wrist-up: continue the parked link and refresh the grid. The replay
+    /// covers anything dropped while the relay queued (or overflowed) during
+    /// the suspension; if the link died, `resume()` redials and the handshake
+    /// replay makes this request redundant but harmless.
+    func resume() {
+        guard let link else {
+            start()
+            return
+        }
+        link.resume()
+        link.send(.requestReplay)
+    }
+
     private func handle(state: RelayLink.State) {
         switch state {
         case .idle:
