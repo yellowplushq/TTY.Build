@@ -81,7 +81,10 @@ public final class TTYLiveActivityController {
                 recentAgentSealed: agentState == "terminal" ? nil : "fixture",
                 recentAgentDisplay: agentState == "terminal"
                     ? nil
-                    : fixtureDisplay(state: agentState),
+                    : fixtureDisplay(
+                        state: agentState,
+                        includeSecond: running + waiting + done > 1
+                    ),
                 onlineComputerCount: 1,
                 offlineComputerCount: 0,
                 updatedAt: .now,
@@ -157,21 +160,35 @@ public final class TTYLiveActivityController {
     /// without waiting for an APNs round trip. The local update is sealed in
     /// the same format because the widget extension, not the app, renders it.
     public func synchronizeRecentAgent(
-        _ info: AgentInfo?, binding: ComputerBinding?
+        _ info: AgentInfo?, second: AgentInfo? = nil, binding: ComputerBinding?
     ) async {
         let activities = Activity<TTYActivityAttributes>.activities
         guard !activities.isEmpty else { return }
         var agentContent: AgentActivity.Content?
         var sealedText: String?
         if let info, let binding {
-            let content = AgentActivity.Content(info: info)
+            var content = AgentActivity.Content(info: info)
+            if let second { content.second = .init(info: second) }
             agentContent = content
             do {
-                let sealed = try AgentActivity.seal(
+                var sealed = try AgentActivity.seal(
                     content,
                     key: AgentActivity.activityKey(secret: binding.secret),
                     computerID: binding.computerID
                 )
+                if sealed.count > RelayMetadata.AgentActivityEnvelope.maxSealedBytes,
+                   content.second != nil
+                {
+                    // Match the daemon: the second row is best-effort and must
+                    // never cost the primary card its encrypted envelope.
+                    var trimmed = content
+                    trimmed.second = nil
+                    sealed = try AgentActivity.seal(
+                        trimmed,
+                        key: AgentActivity.activityKey(secret: binding.secret),
+                        computerID: binding.computerID
+                    )
+                }
                 if sealed.count <= RelayMetadata.AgentActivityEnvelope.maxSealedBytes {
                     sealedText = sealed.base64EncodedString()
                 }
@@ -282,7 +299,7 @@ public final class TTYLiveActivityController {
 
     #if DEBUG
     private func fixtureDisplay(
-        state rawState: String
+        state rawState: String, includeSecond: Bool
     ) -> TTYActivityAttributes.ContentState.RecentAgentDisplay? {
         guard let state = AgentState(rawValue: rawState) else { return nil }
         return .init(content: .init(
@@ -296,7 +313,18 @@ public final class TTYLiveActivityController {
             message: state == .done
                 ? "Live Activity is ready" : "Choose how to continue",
             sessionId: 1,
-            updatedAt: Date.now.timeIntervalSince1970
+            updatedAt: Date.now.timeIntervalSince1970,
+            second: includeSecond
+                ? .init(
+                    id: "fixture-second",
+                    agent: "claude",
+                    state: .running,
+                    sessionName: "Refactor the relay tests",
+                    project: "pedals",
+                    message: "Running the worker test suite",
+                    updatedAt: Date.now.timeIntervalSince1970 - 90
+                )
+                : nil
         ))
     }
     #endif

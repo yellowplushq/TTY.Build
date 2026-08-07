@@ -49,11 +49,24 @@ struct ActivityCard: View {
         let presentation = ActivityPresentation(state: state)
         Group {
             if presentation.showsAgent {
-                AgentActivityRow(
-                    state: state,
-                    presentation: presentation,
-                    redactsSensitiveContent: redactsSensitiveContent
-                )
+                // Two most recent agents stack as full-width rows; the last
+                // row carries the "and N more" summary so it stays aligned
+                // with the text column in both shapes.
+                VStack(alignment: .leading, spacing: 9) {
+                    AgentActivityRow(
+                        state: state,
+                        presentation: presentation,
+                        redactsSensitiveContent: redactsSensitiveContent,
+                        showsMetrics: presentation.secondAgent == nil
+                    )
+                    if let second = presentation.secondAgent {
+                        SecondaryAgentRow(
+                            state: state,
+                            companion: second,
+                            redactsSensitiveContent: redactsSensitiveContent
+                        )
+                    }
+                }
             } else {
                 TerminalActivityCard(
                     state: state,
@@ -67,12 +80,16 @@ struct ActivityCard: View {
 struct ActivityPresentation {
     let agent: AgentActivity.Content?
     let agentState: AgentState?
+    /// The island's second expanded row. Gated on the authoritative aggregate:
+    /// a stale envelope must not show a second agent the counts say is gone.
+    let secondAgent: AgentActivity.Companion?
 
     init(state: TTYActivityAttributes.ContentState) {
         let fallbackState = state.displayedAgentState
         let decodedAgent = fallbackState == nil ? nil : state.resolvedRecentAgent
         agent = decodedAgent
         agentState = decodedAgent?.state ?? fallbackState
+        secondAgent = state.totalAgents > 1 ? decodedAgent?.second : nil
     }
 
     var showsAgent: Bool { agentState != nil }
@@ -90,18 +107,34 @@ struct ActivityPresentation {
 /// The same visual anchor as a Home agent row: the real agent mark with its
 /// current state sitting on the mark's top-right corner.
 struct AgentMark: View {
-    let presentation: ActivityPresentation
+    let slug: String?
+    let agentState: AgentState?
+    let name: String
     var size: CGFloat = 22
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var workingBadgeDimmed = false
 
+    init(presentation: ActivityPresentation, size: CGFloat = 22) {
+        self.init(
+            slug: presentation.agent?.agent,
+            agentState: presentation.agentState,
+            name: presentation.agentName,
+            size: size
+        )
+    }
+
+    init(slug: String?, agentState: AgentState?, name: String, size: CGFloat = 22) {
+        self.slug = slug
+        self.agentState = agentState
+        self.name = name
+        self.size = size
+    }
+
     var body: some View {
         let badgeSize: CGFloat = size >= 22 ? 10 : 8
         ZStack(alignment: .topLeading) {
-            if let agent = presentation.agent,
-               let asset = ActivityStyle.asset(for: agent.agent)
-            {
+            if let asset = slug.flatMap(ActivityStyle.asset(for:)) {
                 Image(asset)
                     .resizable()
                     .scaledToFit()
@@ -114,9 +147,9 @@ struct AgentMark: View {
                     .offset(y: 4)
             }
 
-            if let agentState = presentation.agentState, agentState != .done {
+            if let agentState, agentState != .done {
                 Circle()
-                    .fill(ActivityStyle.color(for: presentation))
+                    .fill(ActivityStyle.color(for: agentState))
                     .frame(width: badgeSize, height: badgeSize)
                     .overlay {
                         Circle()
@@ -133,12 +166,12 @@ struct AgentMark: View {
         .foregroundStyle(PedalsTheme.content)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            "\(presentation.agentName), \(ActivityStyle.label(for: presentation))"
+            "\(name), \(ActivityStyle.label(for: agentState))"
         )
         .onAppear {
             updateWorkingBadgeAnimation()
         }
-        .onChange(of: presentation.agentState) { _, _ in
+        .onChange(of: agentState) { _, _ in
             updateWorkingBadgeAnimation()
         }
         .onChange(of: reduceMotion) { _, _ in
@@ -150,7 +183,7 @@ struct AgentMark: View {
         withAnimation(.none) {
             workingBadgeDimmed = false
         }
-        guard presentation.agentState == .running, !reduceMotion else { return }
+        guard agentState == .running, !reduceMotion else { return }
         withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
             workingBadgeDimmed = true
         }
@@ -241,6 +274,9 @@ private struct AgentActivityRow: View {
     let state: TTYActivityAttributes.ContentState
     let presentation: ActivityPresentation
     let redactsSensitiveContent: Bool
+    /// The count summary belongs to whichever row sits last in the card; a
+    /// primary row followed by a secondary row leaves it to that second row.
+    var showsMetrics = true
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -271,8 +307,69 @@ private struct AgentActivityRow: View {
             Text(ActivityStyle.detail(for: presentation))
                 .font(.subheadline)
                 .foregroundStyle(ActivityStyle.color(for: presentation))
-                .lineLimit(2)
-            ActivityMetrics(state: state)
+                .lineLimit(showsMetrics ? 2 : 1)
+            if showsMetrics {
+                ActivityMetrics(state: state)
+            }
+        }
+        if redactsSensitiveContent {
+            content.privacySensitive()
+        } else {
+            content
+        }
+    }
+}
+
+/// The expanded card's second row: the same mark-and-text anatomy as the
+/// primary row one visual step down, so the island reads as the top of the
+/// Home list rather than a single spotlighted agent.
+private struct SecondaryAgentRow: View {
+    let state: TTYActivityAttributes.ContentState
+    let companion: AgentActivity.Companion
+    let redactsSensitiveContent: Bool
+
+    private var name: String {
+        AgentActivity.displayName(forAgent: companion.agent)
+    }
+
+    var body: some View {
+        let presentation = AgentActivity.Presentation(companion: companion)
+        HStack(alignment: .top, spacing: 10) {
+            AgentMark(
+                slug: companion.agent,
+                agentState: companion.state,
+                name: name
+            )
+            .accessibilityHidden(true)
+
+            content(presentation: presentation)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(name)
+        .accessibilityValue(
+            "\(ActivityStyle.label(for: companion.state)), "
+                + "\(presentation.title), \(presentation.detail)"
+        )
+    }
+
+    @ViewBuilder
+    private func content(presentation: AgentActivity.Presentation) -> some View {
+        let content = VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(presentation.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(ActivityStyle.label(for: companion.state))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(ActivityStyle.color(for: companion.state))
+                    .lineLimit(1)
+            }
+            Text(presentation.detail)
+                .font(.caption)
+                .foregroundStyle(ActivityStyle.color(for: companion.state))
+                .lineLimit(1)
+            ActivityMetrics(state: state, visibleAgents: 2)
         }
         if redactsSensitiveContent {
             content.privacySensitive()
@@ -305,10 +402,11 @@ private struct TerminalActivityCard: View {
 
 struct ActivityMetrics: View {
     let state: TTYActivityAttributes.ContentState
+    var visibleAgents = 1
 
     var body: some View {
         HStack(spacing: 6) {
-            if let summary = state.activityCountSummary {
+            if let summary = state.activityCountSummary(visibleAgents: visibleAgents) {
                 Text(summary)
             }
         }
@@ -357,14 +455,18 @@ private struct CompactValue: View {
 }
 
 enum ActivityStyle {
-    static func label(for presentation: ActivityPresentation) -> String {
-        switch presentation.agentState {
+    static func label(for state: AgentState?) -> String {
+        switch state {
         case .waiting: "Needs you"
         case .error: "Error"
         case .done: "Finished"
         case .running: "Working"
         case nil: "Live"
         }
+    }
+
+    static func label(for presentation: ActivityPresentation) -> String {
+        label(for: presentation.agentState)
     }
 
     static func compactLabel(for presentation: ActivityPresentation) -> String {
@@ -377,14 +479,18 @@ enum ActivityStyle {
         }
     }
 
-    static func color(for presentation: ActivityPresentation) -> Color {
-        switch presentation.agentState {
+    static func color(for state: AgentState?) -> Color {
+        switch state {
         case .waiting: PedalsTheme.warning
         case .error: PedalsTheme.critical
         case .done: PedalsTheme.success
         case .running: PedalsTheme.content
         case nil: PedalsTheme.content
         }
+    }
+
+    static func color(for presentation: ActivityPresentation) -> Color {
+        color(for: presentation.agentState)
     }
 
     static func primary(

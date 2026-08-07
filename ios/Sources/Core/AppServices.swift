@@ -221,14 +221,20 @@ final class AppServices {
     }
 
     private func synchronizeLatestAgentActivity(rows: [AgentRow]? = nil) {
-        let recent = (rows ?? terminals.agentRows)
-            .max { $0.info.updatedAt < $1.info.updatedAt }
+        // The island's expanded card shows the two most recently updated
+        // agents; unlike the daemon's per-computer envelope, the phone can
+        // pick them across every paired computer.
+        let sorted = (rows ?? terminals.agentRows)
+            .sorted { $0.info.updatedAt > $1.info.updatedAt }
+        let recent = sorted.first
         let binding = recent.flatMap {
             terminals.computer(id: $0.computerID)?.binding
         }
         Task {
             await TTYLiveActivityController.shared.synchronizeRecentAgent(
-                recent?.info, binding: binding
+                recent?.info,
+                second: sorted.dropFirst().first?.info,
+                binding: binding
             )
         }
     }

@@ -450,7 +450,7 @@ public final class RelayHostClient: @unchecked Sendable {
             return
         }
 
-        let content = AgentActivity.Content(info: recent)
+        let content = activityContentLocked(for: recent)
         guard content != lastReportedActivity else { return }
         let elapsed = Date().timeIntervalSince(lastActivitySentAt)
         if forceImmediate || recent.state != .running || lastReportedActivity == nil
@@ -470,13 +470,35 @@ public final class RelayHostClient: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
+    /// The reported envelope leads with `info` and nests the next most
+    /// recently updated agent so the island's expanded card can show two
+    /// rows. `lastAgents` is already sorted newest-first by the monitor.
+    private func activityContentLocked(for info: AgentInfo) -> AgentActivity.Content {
+        var content = AgentActivity.Content(info: info)
+        if let second = lastAgents.first(where: { $0.id != info.id }) {
+            content.second = .init(info: second)
+        }
+        return content
+    }
+
     private func sendAgentActivityLocked(_ info: AgentInfo, alert: Bool) {
-        let content = AgentActivity.Content(info: info)
+        var content = activityContentLocked(for: info)
         do {
             let key = AgentActivity.activityKey(secret: identity.computer.secret)
-            let sealed = try AgentActivity.seal(
+            var sealed = try AgentActivity.seal(
                 content, key: key, computerID: identity.computer.computerID
             )
+            if sealed.count > RelayMetadata.AgentActivityEnvelope.maxSealedBytes,
+               content.second != nil
+            {
+                // The second row is best-effort; the primary agent card must
+                // never be lost to the envelope size cap.
+                content.second = nil
+                guard alert || content != lastReportedActivity else { return }
+                sealed = try AgentActivity.seal(
+                    content, key: key, computerID: identity.computer.computerID
+                )
+            }
             guard sealed.count <= RelayMetadata.AgentActivityEnvelope.maxSealedBytes else {
                 return
             }

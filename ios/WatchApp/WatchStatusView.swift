@@ -127,7 +127,7 @@ struct WatchStatusView: View {
     }
 
     /// Standalone Agents section, mirroring the iPhone Home list: state-dot
-    /// column, attention-first sorting, state-colored detail, long-press
+    /// column, most-recently-updated first, state-colored detail, long-press
     /// dismissal, and a Clear control for everything not working.
     @ViewBuilder
     private var agentRows: some View {
@@ -135,11 +135,7 @@ struct WatchStatusView: View {
             .flatMap { computer in
                 computer.agents.map { (computer: computer, info: $0) }
             }
-            .sorted { lhs, rhs in
-                let l = Self.attentionRank(lhs.info.state)
-                let r = Self.attentionRank(rhs.info.state)
-                return l != r ? l < r : lhs.info.updatedAt > rhs.info.updatedAt
-            }
+            .sorted { $0.info.updatedAt > $1.info.updatedAt }
         if !rows.isEmpty {
             Divider()
                 .padding(.vertical, 4)
@@ -192,17 +188,6 @@ struct WatchStatusView: View {
                     }
                 }
             }
-        }
-    }
-
-    /// Attention first: waiting > error > running > done (same order as
-    /// the iPhone Home list).
-    private static func attentionRank(_ state: AgentState) -> Int {
-        switch state {
-        case .waiting: 0
-        case .error: 1
-        case .running: 2
-        case .done: 3
         }
     }
 
