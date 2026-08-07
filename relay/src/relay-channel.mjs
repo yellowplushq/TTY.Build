@@ -27,7 +27,11 @@ export const MAX_HOST_ACTIVE_CHANNELS = 256;
 // companion proxy; plain HTTP requests can). One poll session per
 // client-principal+channel mirrors the one-socket-per-channel WebSocket rule.
 export const HTTP_POLL_WAIT_MS = 20_000;
-export const HTTP_SESSION_IDLE_MS = 60_000;
+// Five minutes so a watch wrist-down glance-and-return resumes the poll
+// session (cursor + E2EE state) instead of redoing the whole handshake.
+// Memory stays bounded regardless: queue overflow destroys the session and
+// answers `reset`, sending the client down the fresh-handshake path.
+export const HTTP_SESSION_IDLE_MS = 300_000;
 export const MAX_HTTP_QUEUE_BYTES = 2 * 1024 * 1024;
 export const MAX_HTTP_QUEUE_MESSAGES = 256;
 export const MAX_HTTP_BATCH_BYTES = 1024 * 1024;

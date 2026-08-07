@@ -31,6 +31,13 @@ final class RelayHTTPTransport: @unchecked Sendable {
     private var after: UInt64?
     private var opened = false
     private var closed = false
+    private var suspended = false
+    /// The one in-flight downlink poll, kept for cancellation by `pause()`.
+    private var pollTask: URLSessionDataTask?
+    /// Bumped for every issued poll and on `pause()`. Completions compare
+    /// against it so a cancelled or superseded poll can never close the
+    /// transport or double-deliver.
+    private var pollGeneration = 0
     private var pendingWires: [Data] = []
     private var sendInFlight = false
 
@@ -60,7 +67,31 @@ final class RelayHTTPTransport: @unchecked Sendable {
 
     func stop() {
         closed = true
+        pollTask = nil
         urlSession.invalidateAndCancel()
+    }
+
+    /// Parks the transport across a platform suspension (watch wrist-down):
+    /// cancels the in-flight poll but keeps the server session token and the
+    /// `after` cursor. Un-acked messages are redelivered on `resume()`, so a
+    /// response lost to the cancellation is safe. Queued uplink wires are held
+    /// until `resume()`.
+    func pause() {
+        guard !closed, !suspended else { return }
+        suspended = true
+        pollGeneration += 1
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    /// Continues a paused transport with the same poll session and cursor.
+    /// If the relay expired the session meanwhile, the next poll answers
+    /// `reset: true` and the transport closes — the owner reconnects fresh.
+    func resume() {
+        guard !closed, suspended else { return }
+        suspended = false
+        pollNext()
+        drainSendsLocked()
     }
 
     func send(_ wire: Data) {
@@ -72,7 +103,7 @@ final class RelayHTTPTransport: @unchecked Sendable {
     // MARK: - Downlink (on `queue`)
 
     private func pollNext() {
-        guard !closed,
+        guard !closed, !suspended,
               var components = URLComponents(
                   url: endpoint, resolvingAgainstBaseURL: false
               )
@@ -90,12 +121,17 @@ final class RelayHTTPTransport: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.timeoutInterval = Self.pollTimeout
         request.setValue("Bearer \(authorization)", forHTTPHeaderField: "Authorization")
+        pollGeneration += 1
+        let generation = pollGeneration
         let task = urlSession.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
             self.queue.async {
+                guard generation == self.pollGeneration else { return }
+                self.pollTask = nil
                 self.handlePoll(data: data, response: response, error: error)
             }
         }
+        pollTask = task
         task.resume()
     }
 
@@ -155,7 +191,7 @@ final class RelayHTTPTransport: @unchecked Sendable {
     // MARK: - Uplink (on `queue`)
 
     private func drainSendsLocked() {
-        guard !closed, !sendInFlight, !pendingWires.isEmpty else { return }
+        guard !closed, !suspended, !sendInFlight, !pendingWires.isEmpty else { return }
         var body = Data()
         var batched = 0
         while batched < Self.maximumWiresPerBatch,
@@ -188,6 +224,9 @@ final class RelayHTTPTransport: @unchecked Sendable {
         sendInFlight = false
         guard !closed else { return }
         guard error == nil, let status = (response as? HTTPURLResponse)?.statusCode else {
+            // A send caught by the platform suspension is expected; the batch
+            // is lost, but the owner refreshes with a replay on resume.
+            if suspended { return }
             closeLocked(unauthorized: false)
             return
         }
@@ -201,6 +240,7 @@ final class RelayHTTPTransport: @unchecked Sendable {
     private func closeLocked(unauthorized: Bool) {
         guard !closed else { return }
         closed = true
+        pollTask = nil
         urlSession.invalidateAndCancel()
         onClosed?(unauthorized)
     }

@@ -229,6 +229,31 @@ async function expectNoEvent(next, timeoutMs = 150) {
   await expect(next(timeoutMs)).rejects.toThrow("timed out");
 }
 
+/// The coordinator's coalescing alarm (now + 150 ms) also fires for real in
+/// workerd, so "wait until runDurableObjectAlarm returns true" races the
+/// runtime: the real firing consumes the work and deletes the alarm, and the
+/// manual runner then never sees one. Drain by processing whatever alarm is
+/// scheduled AND waiting for the queue to empty, whichever way the work got
+/// done.
+async function drainCoordinator(coordinator) {
+  await waitFor(async () => {
+    try {
+      if (await runDurableObjectAlarm(coordinator)) return null; // ran one round; re-check
+    } catch {
+      return null; // collided with the real alarm invocation; re-check
+    }
+    const [pending, inflight] = await runInDurableObject(
+      coordinator,
+      (_instance, durableState) =>
+        Promise.all([
+          durableState.storage.get("pendingClientIds"),
+          durableState.storage.get("inflightClientIds"),
+        ]),
+    );
+    return pending === undefined && inflight === undefined ? true : null;
+  });
+}
+
 function closeAll(...peers) {
   for (const peer of peers) {
     try {
@@ -1470,20 +1495,32 @@ describe("Pedals v2 Worker API", () => {
       expect([-1, online.sequence]).toContain(Number(pendingStart.lastSequence));
       expect([0, 2]).toContain(Number(pendingStart.lastTotal));
 
-      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
-      const delivered = await env.DB
-        .prepare(
-          `SELECT surface, last_sequence AS lastSequence, last_total_running AS lastTotal,
-                  invalidated_at AS invalidatedAt
-             FROM push_endpoints
-            WHERE client_id = ?1
-            ORDER BY surface`,
-        )
-        .bind(client.clientId)
-        .all();
-      expect(delivered.results).toHaveLength(4);
-      expect(delivered.results.filter((row) => row.surface !== "liveactivity-start")
-        .every((row) => Number(row.lastSequence) === online.sequence)).toBe(true);
+      // Wait on the delivered effect, not the alarm: the coalescing alarm
+      // also fires for real and may already have processed the queue.
+      const delivered = await waitFor(async () => {
+        try {
+          await runDurableObjectAlarm(coordinator);
+        } catch {
+          return null; // collided with the real alarm invocation; re-check
+        }
+        const rows = await env.DB
+          .prepare(
+            `SELECT surface, last_sequence AS lastSequence, last_total_running AS lastTotal,
+                    invalidated_at AS invalidatedAt
+               FROM push_endpoints
+              WHERE client_id = ?1
+              ORDER BY surface`,
+          )
+          .bind(client.clientId)
+          .all();
+        const updated = (rows.results ?? []).filter(
+          (row) => row.surface !== "liveactivity-start",
+        );
+        return rows.results?.length === 4
+          && updated.every((row) => Number(row.lastSequence) === online.sequence)
+          ? rows
+          : null;
+      });
       expect(delivered.results.filter((row) => row.surface !== "liveactivity-start")
         .every((row) => Number(row.lastTotal) === 2)).toBe(true);
       const untouchedStart = delivered.results.find(
@@ -1492,9 +1529,7 @@ describe("Pedals v2 Worker API", () => {
       expect(Number(untouchedStart.lastSequence)).toBe(-1);
       expect(Number(untouchedStart.lastTotal)).toBe(0);
       expect(delivered.results.every((row) => row.invalidatedAt === null)).toBe(true);
-      while (await runDurableObjectAlarm(coordinator)) {
-        // Drain any coalesced invalidation that arrived while the first alarm ran.
-      }
+      await drainCoordinator(coordinator);
 
       const rotatedStart = await api(
         "/v2/clients/me/push-endpoints/liveactivity-start",
@@ -1518,20 +1553,28 @@ describe("Pedals v2 Worker API", () => {
         .first();
       expect(Number(startBaseline.lastSequence)).toBe(-1);
       expect(Number(startBaseline.lastTotal)).toBe(0);
-      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+      await drainCoordinator(coordinator);
 
       host.ws.send(JSON.stringify({ type: "host-offline" }));
       await waitFor(async () => ((await state(client)).totalRunning === 0 ? true : null));
-      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
-      const ended = await env.DB
-        .prepare(
-          `SELECT id
-             FROM push_endpoints
-            WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
-        )
-        .bind(client.clientId)
-        .first();
-      expect(ended).toBeNull();
+      // Wait for the end-event effect (endpoint deleted) however the alarm
+      // got to run.
+      await waitFor(async () => {
+        try {
+          await runDurableObjectAlarm(coordinator);
+        } catch {
+          return null; // collided with the real alarm invocation; re-check
+        }
+        const ended = await env.DB
+          .prepare(
+            `SELECT id
+               FROM push_endpoints
+              WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
+          )
+          .bind(client.clientId)
+          .first();
+        return ended === null ? true : null;
+      });
       expect(
         await env.DB
           .prepare(
@@ -3084,13 +3127,36 @@ describe("agent counts and alerts", () => {
         expect(cached[computer.computerId].activity.eventID)
           .toBe("55555555-5555-4555-8555-555555555555");
         expect(cached[computer.computerId].highPriority).toBe(true);
-        expect(await durableState.storage.get("pendingClientIds"))
-          .toEqual([client.clientId]);
-        expect(await durableState.storage.get("forceClientIds"))
-          .toEqual([client.clientId]);
-        expect(await durableState.storage.getAlarm()).toBeLessThan(before + 1_000);
       });
-      await runDurableObjectAlarm(coordinator);
+      // While an alarm invocation is in flight, pending/force sit in the
+      // inflight keys and the alarm slot reads null, so wait for the settled
+      // durable state (a backed-off delivery always restores both keys)
+      // instead of asserting a mid-run snapshot.
+      await waitFor(async () =>
+        runInDurableObject(coordinator, async (_instance, durableState) => {
+          const [pending, force] = await Promise.all([
+            durableState.storage.get("pendingClientIds"),
+            durableState.storage.get("forceClientIds"),
+          ]);
+          return JSON.stringify(pending) === JSON.stringify([client.clientId])
+            && JSON.stringify(force) === JSON.stringify([client.clientId])
+            ? true
+            : null;
+        }));
+      // Run (or let the real firing run) the coalesced alarm; the delivery
+      // finds the endpoint backed off and settles into the Retry-After
+      // schedule with the forced client retained.
+      await waitFor(async () => {
+        try {
+          await runDurableObjectAlarm(coordinator);
+        } catch {
+          return null; // collided with the real alarm invocation; re-check
+        }
+        return runInDurableObject(coordinator, async (_instance, durableState) => {
+          const alarm = await durableState.storage.getAlarm();
+          return alarm !== null && alarm >= before + 3_599_000 ? true : null;
+        });
+      });
       await runInDurableObject(coordinator, async (_instance, durableState) => {
         expect(await durableState.storage.getAlarm()).toBeGreaterThanOrEqual(
           before + 3_599_000,
@@ -3143,7 +3209,7 @@ describe("agent counts and alerts", () => {
         }),
       });
       expect(delivered.status).toBe(202);
-      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+      await drainCoordinator(coordinator);
 
       // A later TTY-only projection reuses the retained opaque envelope, so
       // the terminal count advances without replacing the rich agent card.
@@ -3160,15 +3226,24 @@ describe("agent counts and alerts", () => {
           ? snapshot
           : null;
       });
-      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
-      const active = await env.DB
-        .prepare(
-          `SELECT last_sequence AS lastSequence, last_total_running AS lastTotal
-             FROM push_endpoints
-            WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
-        )
-        .bind(client.clientId)
-        .first();
+      // Wait on the delivered effect, not the alarm: the real coalescing
+      // alarm may already have processed the invalidation.
+      const active = await waitFor(async () => {
+        try {
+          await runDurableObjectAlarm(coordinator);
+        } catch {
+          return null; // collided with the real alarm invocation; re-check
+        }
+        const row = await env.DB
+          .prepare(
+            `SELECT last_sequence AS lastSequence, last_total_running AS lastTotal
+               FROM push_endpoints
+              WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
+          )
+          .bind(client.clientId)
+          .first();
+        return row && Number(row.lastSequence) === terminalChanged.sequence ? row : null;
+      });
       expect(Number(active.lastSequence)).toBe(terminalChanged.sequence);
       expect(Number(active.lastTotal)).toBe(2);
       expect(terminalChanged.sequence).toBeGreaterThan(completed.sequence);
@@ -3177,15 +3252,23 @@ describe("agent counts and alerts", () => {
         snapshotWithAgents("Island Mac", [], { running: 0, waiting: 0, done: 0 }),
       );
       await waitFor(async () => ((await state(client)).agentsDone === 0 ? true : null));
-      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
-      const ended = await env.DB
-        .prepare(
-          `SELECT id FROM push_endpoints
-            WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
-        )
-        .bind(client.clientId)
-        .first();
-      expect(ended).toBeNull();
+      // Same race: wait for the end-event effect (endpoint deleted) however
+      // the alarm got to run.
+      await waitFor(async () => {
+        try {
+          await runDurableObjectAlarm(coordinator);
+        } catch {
+          return null; // collided with the real alarm invocation; re-check
+        }
+        const ended = await env.DB
+          .prepare(
+            `SELECT id FROM push_endpoints
+              WHERE client_id = ?1 AND surface = 'liveactivity-update'`,
+          )
+          .bind(client.clientId)
+          .first();
+        return ended === null ? true : null;
+      });
       await runInDurableObject(coordinator, async (_instance, durableState) => {
         expect(await durableState.storage.get("recentAgentActivities")).toBeUndefined();
       });

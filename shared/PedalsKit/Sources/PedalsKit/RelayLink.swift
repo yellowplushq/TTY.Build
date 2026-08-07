@@ -91,6 +91,10 @@ public final class RelayLink: NSObject, @unchecked Sendable {
     /// intentionally unqueued when no client is present.
     private var pendingClientFrames: [Frame] = []
     private var started = false
+    /// Parked by `suspend()` for a platform suspension; `resume()` clears it.
+    /// While set, reconnects are deferred to `resume()` instead of scheduled —
+    /// a backoff timer cannot fire inside a suspended process anyway.
+    private var suspendedForResume = false
     private var reconnectAttempt = 0
     private var reconnectWork: DispatchWorkItem?
     private var pingTimer: DispatchSourceTimer?
@@ -179,9 +183,46 @@ public final class RelayLink: NSObject, @unchecked Sendable {
     public func kick() {
         queue.async { [self] in
             guard started else { return }
+            suspendedForResume = false
             teardownLocked()
             reconnectAttempt = 0
             connectLocked()
+        }
+    }
+
+    /// Parks the link across a platform suspension (watch wrist-down) without
+    /// discarding E2EE session state, so `resume()` can continue on the same
+    /// relay poll session with no fresh handshake. Only the HTTP transport can
+    /// be parked; a WebSocket is torn down here and redialed by `resume()`.
+    public func suspend() {
+        queue.async { [self] in
+            guard started, !suspendedForResume else { return }
+            suspendedForResume = true
+            reconnectWork?.cancel()
+            reconnectWork = nil
+            if let httpTransport {
+                httpTransport.pause()
+            } else {
+                teardownLocked()
+                setStateLocked(.connecting(attempt: 0))
+            }
+        }
+    }
+
+    /// Continues a suspended link. A surviving HTTP transport resumes its poll
+    /// session in place (the relay redelivers un-acked messages); if the
+    /// transport died — or the relay expired the session, which surfaces as a
+    /// terminal close on the next poll — the link redials from attempt 0.
+    public func resume() {
+        queue.async { [self] in
+            guard started, suspendedForResume else { return }
+            suspendedForResume = false
+            if let httpTransport {
+                httpTransport.resume()
+            } else {
+                reconnectAttempt = 0
+                connectLocked()
+            }
         }
     }
 
@@ -427,6 +468,12 @@ public final class RelayLink: NSObject, @unchecked Sendable {
     private func scheduleReconnectLocked() {
         teardownLocked()
         guard started else { return }
+        if suspendedForResume {
+            // A backoff timer cannot fire inside a suspended process;
+            // `resume()` redials immediately instead.
+            setStateLocked(.connecting(attempt: reconnectAttempt + 1))
+            return
+        }
         reconnectAttempt += 1
         setStateLocked(.connecting(attempt: reconnectAttempt))
         let delay = min(0.5 * pow(2, Double(reconnectAttempt - 1)), 15)

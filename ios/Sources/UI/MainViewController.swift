@@ -129,6 +129,15 @@ final class MainViewController: UIViewController {
     /// rebroadcast (title/cwd poll) can't hide the page under the finger.
     private var isPanning = false
     private var deferredApply = false
+    /// In-flight settle spring (pan release or animated `switchTo`). Held so a
+    /// new pan can stop it mid-flight and take over from the frozen positions
+    /// instead of fighting it (the old completion used to reset every frame
+    /// under the new gesture's finger).
+    private var settleAnimator: UIViewPropertyAnimator?
+    /// The other page participating in the settle (sliding out on commit, the
+    /// abandoned target on cancel). Still on screen if the settle is
+    /// interrupted, so a takeover pan adopts it as its initial candidate.
+    private var settleCounterpart: PageID?
 
     private var cancellables: Set<AnyCancellable> = []
 
@@ -584,7 +593,11 @@ final class MainViewController: UIViewController {
                 }
             }
         } else {
-            manager.sleepAllChannels()
+            // Home keeps the pooled channels warm so paging back into a
+            // terminal is instant; only backgrounding sleeps the data plane.
+            if !isApplicationActive {
+                manager.sleepAllChannels()
+            }
             toolbar.setModifierState(TerminalModifierState())
             terminalKeyboard.setModifierState(TerminalModifierState())
             if page == .home {
@@ -669,6 +682,11 @@ final class MainViewController: UIViewController {
         else {
             if case .terminal(let id) = page {
                 showTerminal(id)
+            } else if isPanning {
+                // Same deferral as showTerminal: a pan/settle owns the page
+                // frames; the completion (via deferred apply) reconciles.
+                visiblePage = page
+                deferredApply = true
             } else {
                 setVisiblePage(page)
                 tabStrip.update(tabs: tabStrip.tabs, activeId: nil)
@@ -680,6 +698,7 @@ final class MainViewController: UIViewController {
         // commit the model first so any activate-driven emission reconciles
         // toward the target page.
         isPanning = true
+        let fromPage = visiblePage
         visiblePage = page
         if case .terminal(let id) = page {
             manager.activate(id)
@@ -688,23 +707,33 @@ final class MainViewController: UIViewController {
         let direction: CGFloat = toIndex > fromIndex ? 1 : -1
         toView.isHidden = false
         toView.frame = pagesContainer.bounds.offsetBy(dx: direction * width, dy: 0)
-        UIView.animate(
-            withDuration: 0.42, delay: 0,
-            usingSpringWithDamping: 0.86, initialSpringVelocity: 0.3,
-            options: [.allowUserInteraction, .beginFromCurrentState]
-        ) {
+        settleCounterpart = fromPage
+        let animator = UIViewPropertyAnimator(
+            duration: 0.42,
+            timingParameters: UISpringTimingParameters(
+                dampingRatio: 0.86, initialVelocity: CGVector(dx: 0.3, dy: 0)
+            )
+        )
+        animator.addAnimations {
             fromView.frame = self.pagesContainer.bounds.offsetBy(dx: -direction * width, dy: 0)
             toView.frame = self.pagesContainer.bounds
-        } completion: { _ in
+        }
+        animator.addCompletion { position in
+            guard position == .end else { return }
+            self.settleAnimator = nil
+            self.settleCounterpart = nil
             self.isPanning = false
             let missedApply = self.deferredApply
             self.deferredApply = false
-            self.setVisiblePage(page)
+            // Re-read visiblePage: a tab tap mid-slide may have retargeted it.
+            self.setVisiblePage(self.visiblePage)
             self.tabStrip.update(tabs: self.tabStrip.tabs, activeId: self.visibleId)
             if missedApply {
                 self.apply(terminals: self.manager.terminals, activeId: self.manager.activeID)
             }
         }
+        animator.startAnimation()
+        settleAnimator = animator
     }
 
     private func sendToolbarKey(_ key: TerminalInputKey) {
@@ -879,6 +908,21 @@ final class MainViewController: UIViewController {
         let stripTracks = activeIndex > 0 && targetIndex > 0
 
         switch gesture.state {
+        case .began:
+            // Grab an in-flight settle: freeze both pages where they are and
+            // let this gesture continue from those positions. Seeding the
+            // translation with the active page's frozen offset keeps every
+            // tx-derived value (positions, direction, commit thresholds)
+            // continuous, so the takeover cannot jump.
+            guard let animator = settleAnimator else { break }
+            animator.stopAnimation(true)
+            settleAnimator = nil
+            panTarget = settleCounterpart.flatMap { order.firstIndex(of: $0) }
+            settleCounterpart = nil
+            gesture.setTranslation(
+                CGPoint(x: activeView.frame.origin.x, y: 0), in: pagesContainer
+            )
+
         case .changed:
             isPanning = true
             // Rubber-band when there is no neighbor on that side.
@@ -928,48 +972,69 @@ final class MainViewController: UIViewController {
                         initialVelocity: abs(velocity) / width
                     )
                 }
-                UIView.animate(
-                    withDuration: 0.42, delay: 0,
-                    usingSpringWithDamping: 0.86,
-                    initialSpringVelocity: abs(velocity) / width,
-                    options: [.allowUserInteraction, .beginFromCurrentState]
-                ) {
+                // Commit the model NOW, not in the completion — a pan that
+                // begins mid-settle must see the page under the finger as the
+                // active one. activate() no-ops if the target was removed
+                // mid-gesture; setVisiblePage + the deferred apply() reconcile
+                // once the settle lands.
+                let fromPage = visiblePage
+                visiblePage = targetPage
+                if case .terminal(let id) = targetPage {
+                    manager.activate(id)
+                }
+                settleCounterpart = fromPage
+                let animator = UIViewPropertyAnimator(
+                    duration: 0.42,
+                    timingParameters: UISpringTimingParameters(
+                        dampingRatio: 0.86,
+                        initialVelocity: CGVector(dx: abs(velocity) / width, dy: 0)
+                    )
+                )
+                animator.addAnimations {
                     activeView.frame = self.pagesContainer.bounds.offsetBy(
                         dx: CGFloat(-direction) * width, dy: 0
                     )
                     targetView.frame = self.pagesContainer.bounds
-                } completion: { _ in
+                }
+                animator.addCompletion { position in
+                    guard position == .end else { return }
+                    self.settleAnimator = nil
+                    self.settleCounterpart = nil
                     self.panTarget = nil
                     self.isPanning = false
                     let missedApply = self.deferredApply
                     self.deferredApply = false
-                    // Commit the model before activate() so its emission
-                    // reconciles toward the page under the finger, then
-                    // re-assert visibility ourselves (activate() no-ops if
-                    // the target was removed mid-gesture).
-                    self.visiblePage = targetPage
-                    if case .terminal(let id) = targetPage {
-                        self.manager.activate(id)
-                    }
-                    self.setVisiblePage(targetPage)
+                    // Re-read visiblePage: a tab tap mid-settle may have
+                    // retargeted it.
+                    self.setVisiblePage(self.visiblePage)
                     self.tabStrip.update(tabs: self.tabStrip.tabs, activeId: self.visibleId)
                     if missedApply {
                         self.apply(terminals: self.manager.terminals, activeId: self.manager.activeID)
                     }
                 }
+                animator.startAnimation()
+                settleAnimator = animator
             } else {
-                UIView.animate(
-                    withDuration: 0.38, delay: 0,
-                    usingSpringWithDamping: 0.85, initialSpringVelocity: 0.3,
-                    options: [.allowUserInteraction, .beginFromCurrentState]
-                ) {
+                settleCounterpart = hasTarget && targetView != nil
+                    ? order[targetIndex] : nil
+                let animator = UIViewPropertyAnimator(
+                    duration: 0.38,
+                    timingParameters: UISpringTimingParameters(
+                        dampingRatio: 0.85, initialVelocity: CGVector(dx: 0.3, dy: 0)
+                    )
+                )
+                animator.addAnimations {
                     activeView.frame = self.pagesContainer.bounds
                     if let targetView, hasTarget {
                         targetView.frame = self.pagesContainer.bounds.offsetBy(
                             dx: CGFloat(direction) * width, dy: 0
                         )
                     }
-                } completion: { _ in
+                }
+                animator.addCompletion { position in
+                    guard position == .end else { return }
+                    self.settleAnimator = nil
+                    self.settleCounterpart = nil
                     let order = self.pageOrder
                     if let target = self.panTarget,
                        order.indices.contains(target),
@@ -986,6 +1051,8 @@ final class MainViewController: UIViewController {
                         self.apply(terminals: self.manager.terminals, activeId: self.manager.activeID)
                     }
                 }
+                animator.startAnimation()
+                settleAnimator = animator
                 tabStrip.cancelSwitchProgress()
             }
 

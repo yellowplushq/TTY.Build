@@ -90,6 +90,26 @@ final class WatchTerminalStore {
         for session in terminalSessions.values { session.stop() }
     }
 
+    /// Wrist-down. Links are parked, not torn down: the relay's poll session
+    /// and both E2EE ends survive a short suspension, so wake usually skips
+    /// the whole handshake.
+    func suspend() {
+        guard started else { return }
+        for connection in connections.values { connection.suspend() }
+        for session in terminalSessions.values { session.suspend() }
+    }
+
+    /// Wrist-up counterpart of `suspend()`. Only control connections are
+    /// revived here — the open terminal view resumes its own session on scene
+    /// activation, and closed terminals (stopped links) must stay stopped.
+    func resume() {
+        guard started else {
+            start()
+            return
+        }
+        for connection in connections.values { connection.resume() }
+    }
+
     func retryConnections() {
         guard started else {
             start()
@@ -402,6 +422,18 @@ private final class WatchTerminalComputerConnection {
         control?.stop()
         control = nil
         linkState = .idle
+    }
+
+    func suspend() {
+        control?.suspend()
+    }
+
+    func resume() {
+        guard let control else {
+            start()
+            return
+        }
+        control.resume()
     }
 
     private func handle(state: RelayLink.State) {
