@@ -162,11 +162,14 @@ private struct WatchTerminalContent: View {
             // watchOS renders ProgressView at full indicator size regardless
             // of controlSize; a hand-drawn arc keeps the badge glanceable
             // without covering terminal content.
+            // The terminal ignores the safe area, so this badge sits on the
+            // physical corner; inset it past the display's curved edge and
+            // line its center up with the back button's row.
             MiniSpinner()
                 .padding(4)
                 .background(.black.opacity(0.7), in: Circle())
-                .padding(.top, 4)
-                .padding(.trailing, 5)
+                .padding(.top, 14)
+                .padding(.trailing, 14)
         case .live:
             EmptyView()
         }
