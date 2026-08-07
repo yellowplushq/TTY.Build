@@ -23,13 +23,124 @@ private final class UpdaterProbeDelegate: NSObject, SPUUpdaterDelegate {
     }
 }
 
+/// The standard Sparkle UI driver plus a silent mode for client-triggered
+/// installs (PROTOCOL.md §5): while a remote install is in flight it answers
+/// every prompt itself — install, then relaunch — so the update runs to
+/// completion without anyone clicking on the Mac.
+private final class RemoteInstallUserDriver: SPUStandardUserDriver {
+    private(set) var silentInstall = false
+
+    func beginSilentInstall() { silentInstall = true }
+    func endSilentInstall() { silentInstall = false }
+
+    override func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
+        guard !silentInstall else { return }
+        super.showUserInitiatedUpdateCheck(cancellation: cancellation)
+    }
+
+    override func showUpdateFound(
+        with appcastItem: SUAppcastItem,
+        state: SPUUserUpdateState,
+        reply: @escaping (SPUUserUpdateChoice) -> Void
+    ) {
+        guard silentInstall else {
+            return super.showUpdateFound(with: appcastItem, state: state, reply: reply)
+        }
+        reply(appcastItem.isInformationOnlyUpdate ? .dismiss : .install)
+    }
+
+    override func showUpdateReleaseNotes(with downloadData: SPUDownloadData) {
+        guard !silentInstall else { return }
+        super.showUpdateReleaseNotes(with: downloadData)
+    }
+
+    override func showUpdateReleaseNotesFailedToDownloadWithError(_ error: any Error) {
+        guard !silentInstall else { return }
+        super.showUpdateReleaseNotesFailedToDownloadWithError(error)
+    }
+
+    override func showUpdateNotFoundWithError(
+        _ error: any Error, acknowledgement: @escaping () -> Void
+    ) {
+        guard !silentInstall else { return acknowledgement() }
+        super.showUpdateNotFoundWithError(error, acknowledgement: acknowledgement)
+    }
+
+    override func showUpdaterError(
+        _ error: any Error, acknowledgement: @escaping () -> Void
+    ) {
+        guard !silentInstall else { return acknowledgement() }
+        super.showUpdaterError(error, acknowledgement: acknowledgement)
+    }
+
+    override func showDownloadInitiated(cancellation: @escaping () -> Void) {
+        guard !silentInstall else { return }
+        super.showDownloadInitiated(cancellation: cancellation)
+    }
+
+    override func showDownloadDidReceiveExpectedContentLength(
+        _ expectedContentLength: UInt64
+    ) {
+        guard !silentInstall else { return }
+        super.showDownloadDidReceiveExpectedContentLength(expectedContentLength)
+    }
+
+    override func showDownloadDidReceiveData(ofLength length: UInt64) {
+        guard !silentInstall else { return }
+        super.showDownloadDidReceiveData(ofLength: length)
+    }
+
+    override func showDownloadDidStartExtractingUpdate() {
+        guard !silentInstall else { return }
+        super.showDownloadDidStartExtractingUpdate()
+    }
+
+    override func showExtractionReceivedProgress(_ progress: Double) {
+        guard !silentInstall else { return }
+        super.showExtractionReceivedProgress(progress)
+    }
+
+    override func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        guard !silentInstall else { return reply(.install) }
+        super.showReady(toInstallAndRelaunch: reply)
+    }
+
+    override func showInstallingUpdate(
+        withApplicationTerminated applicationTerminated: Bool,
+        retryTerminatingApplication: @escaping () -> Void
+    ) {
+        guard !silentInstall else { return }
+        super.showInstallingUpdate(
+            withApplicationTerminated: applicationTerminated,
+            retryTerminatingApplication: retryTerminatingApplication
+        )
+    }
+
+    override func showUpdateInstalledAndRelaunched(
+        _ relaunched: Bool, acknowledgement: @escaping () -> Void
+    ) {
+        guard !silentInstall else { return acknowledgement() }
+        super.showUpdateInstalledAndRelaunched(relaunched, acknowledgement: acknowledgement)
+    }
+
+    override func showUpdateInFocus() {
+        guard !silentInstall else { return }
+        super.showUpdateInFocus()
+    }
+
+    override func dismissUpdateInstallation() {
+        guard !silentInstall else { return }
+        super.dismissUpdateInstallation()
+    }
+}
+
 @MainActor
 final class UpdaterModel: ObservableObject {
     let updater: SPUUpdater
 
     @Published private(set) var canCheckForUpdates = false
 
-    private let controller: SPUStandardUpdaterController
+    private let userDriver: RemoteInstallUserDriver
     private let probeDelegate: UpdaterProbeDelegate
 
     /// Result of the in-flight `checkForUpdateInformation` probe, delivered
@@ -41,24 +152,39 @@ final class UpdaterModel: ObservableObject {
 
     init() {
         let probeDelegate = UpdaterProbeDelegate()
-        let controller = SPUStandardUpdaterController(
-            startingUpdater: true,
-            updaterDelegate: probeDelegate,
-            userDriverDelegate: nil
-        )
+        let userDriver = RemoteInstallUserDriver(hostBundle: .main, delegate: nil)
         self.probeDelegate = probeDelegate
-        self.controller = controller
-        updater = controller.updater
+        self.userDriver = userDriver
+        updater = SPUUpdater(
+            hostBundle: .main, applicationBundle: .main,
+            userDriver: userDriver, delegate: probeDelegate
+        )
 
         probeDelegate.onFound = { [weak self] item in
-            self?.probeItem = item
+            // Only record finds for our own probes: UI-driven checks also
+            // fire this and must not leak into a later probe's result.
+            guard let self, probeContinuation != nil else { return }
+            probeItem = item
         }
         probeDelegate.onCycleFinished = { [weak self] error in
-            guard let self, let continuation = self.probeContinuation else { return }
-            self.probeContinuation = nil
-            let item = self.probeItem
-            self.probeItem = nil
-            continuation.resume(returning: (item, error))
+            guard let self else { return }
+            if let continuation = probeContinuation {
+                probeContinuation = nil
+                let item = probeItem
+                probeItem = nil
+                continuation.resume(returning: (item, error))
+            } else {
+                // A silent install cycle only ends here when it failed or
+                // was dismissed (success relaunches the app) — restore the
+                // interactive driver for local checks.
+                userDriver.endSilentInstall()
+            }
+        }
+
+        do {
+            try updater.start()
+        } catch {
+            NSLog("Pedals: Sparkle updater failed to start: %@", String(describing: error))
         }
 
         updater.publisher(for: \.canCheckForUpdates)
@@ -91,6 +217,15 @@ final class UpdaterModel: ObservableObject {
             updater.checkForUpdateInformation()
         }
         if let error = probe.error {
+            // Sparkle ends a no-update probe with SUNoUpdateError; that's
+            // the up-to-date case, not a failure.
+            let nsError = error as NSError
+            if nsError.domain == SUSparkleErrorDomain,
+                nsError.code == Int(SUError.noUpdateError.rawValue) {
+                return RemoteManagement.UpdateStatus(
+                    current: current, updateAvailable: false
+                )
+            }
             return RemoteManagement.UpdateStatus(
                 current: current, updateAvailable: false,
                 detail: "update check failed: \(error.localizedDescription)"
@@ -107,18 +242,17 @@ final class UpdaterModel: ObservableObject {
         )
     }
 
-    /// Answers a client's `update-install` request by starting the standard
-    /// Sparkle flow on this Mac (it may present UI and relaunch the app).
+    /// Answers a client's `update-install` request by running the full
+    /// Sparkle flow with the driver in silent mode: download, install, and
+    /// relaunch happen on this Mac without any local clicks.
     func installUpdate() async -> RemoteManagement.UpdateStatus {
         let status = await checkUpdateInformation()
-        if status.updateAvailable {
-            updater.checkForUpdates()
-            return RemoteManagement.UpdateStatus(
-                current: status.current, latest: status.latest,
-                updateAvailable: true,
-                detail: "the updater was opened on this Mac"
-            )
-        }
-        return status
+        guard status.updateAvailable else { return status }
+        userDriver.beginSilentInstall()
+        updater.checkForUpdates()
+        return RemoteManagement.UpdateStatus(
+            current: status.current, latest: status.latest,
+            updateAvailable: true
+        )
     }
 }

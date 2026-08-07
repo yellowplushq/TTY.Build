@@ -444,9 +444,10 @@ desktop app".
   `canInstall` is true only when the host runs the menu bar app (which owns
   the Sparkle updater); a headless daemon has no update handlers and answers
   `err` instead.
-- `update-install {req?}` — client to host: start the desktop's standard
-  Sparkle update flow (it may present UI and relaunch the app on the Mac).
-  The host answers with a fresh `update-status` echoing `req`.
+- `update-install {req?}` — client to host: download and install the update
+  on the Mac through a silent Sparkle flow (no local clicks; the app
+  relaunches when it finishes). The host answers with a fresh `update-status`
+  echoing `req` as soon as the install is underway.
 
 An active session channel accepts `requestReplay {}` from client to host as a
 ctl frame with `sessionId = 0`. The host answers with a current `replay` frame;
