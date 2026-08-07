@@ -1,0 +1,54 @@
+name: Release relay
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Test, deploy, and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Require Cloudflare credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$CLOUDFLARE_API_TOKEN" ]]; then
+            echo "Missing CLOUDFLARE_API_TOKEN repository secret." >&2
+            echo "Create a Cloudflare API token with Workers Scripts:Edit," >&2
+            echo "D1:Edit, and Workers Routes:Edit on the pedals-relay account," >&2
+            echo "then: gh secret set CLOUDFLARE_API_TOKEN" >&2
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+
+      # deploy-relay.sh runs the full test suite, a dry-run compile, remote D1
+      # migrations, the deploy, an edge version-readiness probe, and the
+      # external relay contract test against the custom domain.
+      - name: Deploy relay
+        run: scripts/deploy-relay.sh
+
+      - name: Record deployed version
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "URL: $(cat .artifacts/relay-url.txt)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Worker version: $(cat .artifacts/relay-version.txt)" >> "$GITHUB_STEP_SUMMARY"
