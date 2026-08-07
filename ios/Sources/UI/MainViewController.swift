@@ -593,7 +593,11 @@ final class MainViewController: UIViewController {
                 }
             }
         } else {
-            manager.sleepAllChannels()
+            // Home keeps the pooled channels warm so paging back into a
+            // terminal is instant; only backgrounding sleeps the data plane.
+            if !isApplicationActive {
+                manager.sleepAllChannels()
+            }
             toolbar.setModifierState(TerminalModifierState())
             terminalKeyboard.setModifierState(TerminalModifierState())
             if page == .home {

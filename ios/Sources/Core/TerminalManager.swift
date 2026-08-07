@@ -65,7 +65,11 @@ final class TerminalManager {
     /// echo matched one of our reqs) — the UI should switch to its page.
     let ownCreations = PassthroughSubject<TerminalID, Never>()
 
-    static let maxLiveChannels = 1
+    /// Data-plane pool size: the most recently activated terminals keep their
+    /// session sockets open so paging back to them is instant (no dial +
+    /// replay wait). Anything beyond the limit is evicted LRU and sleeps;
+    /// backgrounding still sleeps everything.
+    static let maxLiveChannels = 3
     /// How long to hold an unidentified new session off the tab list while our
     /// own `create` is in flight (`sessions` can arrive before `created`).
     private static let placementGrace: TimeInterval = 2
@@ -285,8 +289,8 @@ final class TerminalManager {
         evictBeyondPoolLimit()
     }
 
-    /// Put every non-active channel to sleep. With a one-channel pool, page
-    /// activation atomically moves the data plane to the foreground terminal.
+    /// Sleep the least recently activated channels once the pool overflows,
+    /// never the active one. The daemon keeps every PTY running regardless.
     private func evictBeyondPoolLimit() {
         while channels.count > Self.maxLiveChannels {
             let victim = channels.values

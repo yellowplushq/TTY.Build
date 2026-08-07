@@ -74,8 +74,8 @@ final class TerminalLifecycleTests: XCTestCase {
     }
 
     @MainActor
-    func testOnlyOneTerminalDataChannelMayRemainLive() {
+    func testRecentTerminalDataChannelsStayLiveWithinPoolLimit() {
         let maximum = TerminalManager.maxLiveChannels
-        XCTAssertEqual(maximum, 1)
+        XCTAssertEqual(maximum, 3)
     }
 }
