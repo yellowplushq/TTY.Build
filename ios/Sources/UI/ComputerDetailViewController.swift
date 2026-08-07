@@ -498,8 +498,14 @@ final class ComputerDetailViewController: UITableViewController {
             }
         case .install:
             if info.updateAvailable {
+                // Older Macs describe what they did in `detail` ("the updater
+                // was opened on this Mac"); current ones install silently and
+                // send no detail.
                 sheet.show(.started(
-                    message: info.detail ?? "The updater was opened on \(host)."
+                    message: info.detail ?? """
+                        \(host) is downloading the update and will install it \
+                        automatically. Pedals there restarts when it finishes.
+                        """
                 ))
             } else if let detail = info.detail {
                 sheet.show(.failed(title: "Update Failed", message: detail))
