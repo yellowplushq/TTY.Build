@@ -3,7 +3,7 @@ import PedalsKit
 import UIKit
 
 /// Grouped inset settings: bound computers (status, unbind, add), font size,
-/// theme, about.
+/// terminal background, about.
 @MainActor
 final class SettingsViewController: UITableViewController {
     private enum Section: Int, CaseIterable {
@@ -83,7 +83,7 @@ final class SettingsViewController: UITableViewController {
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch Section(rawValue: section)! {
         case .computers: computers.count + 1 // + "Add Computer…"
-        case .appearance: 3
+        case .appearance: 2
         case .about: 1
         }
     }
@@ -174,12 +174,6 @@ final class SettingsViewController: UITableViewController {
             cell.accessoryView = stepper
             return cell
         }
-        if row == 1 {
-            let cell = valueCell("Theme", services.preferences.themeName)
-            cell.accessoryType = .disclosureIndicator
-            cell.selectionStyle = .default
-            return cell
-        }
         let hex = services.preferences.backgroundHex
         let label = switch hex {
         case nil: "Theme"
@@ -221,10 +215,6 @@ final class SettingsViewController: UITableViewController {
                 )
             }
         case .appearance where indexPath.row == 1:
-            navigationController?.pushViewController(
-                ThemePickerViewController(services: services), animated: true
-            )
-        case .appearance where indexPath.row == 2:
             presentBackgroundOptions()
         case .appearance, .about:
             break
@@ -327,7 +317,7 @@ final class SettingsViewController: UITableViewController {
         services.preferences.backgroundHex = hex
         services.applyTerminalAppearance()
         tableView.reloadRows(
-            at: [IndexPath(row: 2, section: Section.appearance.rawValue)], with: .none
+            at: [IndexPath(row: 1, section: Section.appearance.rawValue)], with: .none
         )
     }
 }
