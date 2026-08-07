@@ -14,6 +14,32 @@ const FATAL_RETRY_MILLISECONDS = 24 * 60 * 60_000;
 const MINIMUM_RETRY_MILLISECONDS = 60_000;
 const MAXIMUM_RETRY_MILLISECONDS = 24 * 60 * 60_000;
 const WATCHDOG_MILLISECONDS = 60_000;
+// A Live Activity push is capped at 4 KiB. Extra per-computer envelopes only
+// ride along while the base64 total stays inside this budget, which leaves
+// roughly 700 bytes for counts, keys, and the alert.
+const SEALED_BUDGET_CHARACTERS = 3_400;
+const MAX_EXTRA_ACTIVITIES = 1;
+
+/// The additional per-computer envelopes (beyond the primary) that fit the
+/// payload budget, newest first. Old daemons send envelopes near the 2700-
+/// character cap; those simply leave no room and degrade to today's
+/// single-envelope push.
+function packExtraActivities(primaryActivity, others) {
+  const extras = [];
+  let used = primaryActivity.sealed.length;
+  for (const entry of others) {
+    if (extras.length >= MAX_EXTRA_ACTIVITIES) break;
+    if (used + entry.activity.sealed.length > SEALED_BUDGET_CHARACTERS) continue;
+    used += entry.activity.sealed.length;
+    extras.push({
+      computerId: entry.computerId,
+      state: entry.activity.state,
+      updatedAt: entry.activity.updatedAt,
+      sealed: entry.activity.sealed,
+    });
+  }
+  return extras;
+}
 
 function mergeIds(previous, incoming) {
   return [...new Set([...(previous ?? []), ...(incoming ?? [])])].filter(isId);
@@ -126,9 +152,13 @@ export class PushCoordinator extends DurableObject {
     });
   }
 
-  async recentAgentActivity(state) {
+  /// Every retained envelope for this client's active computers, newest
+  /// first. The first entry is the primary Live Activity card; later entries
+  /// may ride along as `moreActivities` so the island can rank agent rows
+  /// across computers.
+  async recentAgentActivities(state) {
     const cached = await this.ctx.storage.get(RECENT_AGENT_ACTIVITIES_KEY);
-    if (!cached || typeof cached !== "object" || Array.isArray(cached)) return null;
+    if (!cached || typeof cached !== "object" || Array.isArray(cached)) return [];
     const activeComputerIds = new Set(
       state.computers
         .filter((computer) =>
@@ -160,7 +190,7 @@ export class PushCoordinator extends DurableObject {
     }
     return Object.values(retained).sort(
       (lhs, rhs) => Number(rhs.activity.updatedAt) - Number(lhs.activity.updatedAt),
-    )[0] ?? null;
+    );
   }
 
   async markAgentActivityDelivered(computerId, eventID) {
@@ -355,6 +385,14 @@ export class PushCoordinator extends DurableObject {
       activity,
       aggregateChanged,
     );
+    // The incoming envelope leads the card; retained envelopes from other
+    // active computers ride along so the island can rank rows like Home.
+    const extraActivities = packExtraActivities(
+      activity,
+      (await this.recentAgentActivities(state)).filter(
+        (entry) => entry.computerId !== computerId,
+      ),
+    );
     let earliestRetryAt = null;
     let deliveredRichActivity = false;
 
@@ -377,6 +415,7 @@ export class PushCoordinator extends DurableObject {
         ? "start"
         : totalActive === 0 ? "end" : "update";
       const payload = { state, event, activity: { ...activity, computerId } };
+      if (extraActivities.length > 0) payload.moreActivities = extraActivities;
       let outcome;
       try {
         outcome = await apns.send(
@@ -443,9 +482,13 @@ export class PushCoordinator extends DurableObject {
     const totalAgents =
       (state.agentsRunning ?? 0) + (state.agentsWaiting ?? 0)
       + (state.agentsDone ?? 0);
-    const recentAgent = totalAgents > 0
-      ? await this.recentAgentActivity(state)
-      : null;
+    const retainedActivities = totalAgents > 0
+      ? await this.recentAgentActivities(state)
+      : [];
+    const recentAgent = retainedActivities[0] ?? null;
+    const extraActivities = recentAgent
+      ? packExtraActivities(recentAgent.activity, retainedActivities.slice(1))
+      : [];
     const result = await this.env.DB
       .prepare(
         `SELECT id, surface, apns_environment AS environment, token,
@@ -509,6 +552,7 @@ export class PushCoordinator extends DurableObject {
             computerId: recentAgent.computerId,
           },
         };
+        if (extraActivities.length > 0) payload.moreActivities = extraActivities;
       } else if (surface === "liveactivity-update") {
         // ActivityKit ContentState updates are full replacements. Aggregate
         // state must carry the retained opaque envelope while an agent exists,
@@ -523,6 +567,7 @@ export class PushCoordinator extends DurableObject {
               computerId: recentAgent.computerId,
             },
           };
+          if (extraActivities.length > 0) payload.moreActivities = extraActivities;
         } else {
           payload = {
             state,

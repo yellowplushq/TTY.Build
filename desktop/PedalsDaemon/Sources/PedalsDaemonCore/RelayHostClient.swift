@@ -482,26 +482,14 @@ public final class RelayHostClient: @unchecked Sendable {
     }
 
     private func sendAgentActivityLocked(_ info: AgentInfo, alert: Bool) {
-        var content = activityContentLocked(for: info)
+        let content = activityContentLocked(for: info)
         do {
             let key = AgentActivity.activityKey(secret: identity.computer.secret)
-            var sealed = try AgentActivity.seal(
+            // Guaranteed within the target budget with both rows intact, so
+            // the Worker can always pack two computers' envelopes per push.
+            let sealed = try AgentActivity.sealWithinBudget(
                 content, key: key, computerID: identity.computer.computerID
             )
-            if sealed.count > RelayMetadata.AgentActivityEnvelope.maxSealedBytes,
-               content.second != nil
-            {
-                // The second row is best-effort; the primary agent card must
-                // never be lost to the envelope size cap.
-                content.second = nil
-                guard alert || content != lastReportedActivity else { return }
-                sealed = try AgentActivity.seal(
-                    content, key: key, computerID: identity.computer.computerID
-                )
-            }
-            guard sealed.count <= RelayMetadata.AgentActivityEnvelope.maxSealedBytes else {
-                return
-            }
             control?.sendMetadata(.agentActivity(.init(
                 state: info.state,
                 updatedAt: max(0, Int64((info.updatedAt * 1_000).rounded())),

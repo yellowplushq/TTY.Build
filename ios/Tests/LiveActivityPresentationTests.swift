@@ -194,6 +194,70 @@ final class LiveActivityPresentationTests: XCTestCase {
         XCTAssertEqual(decoded.resolvedRecentAgent?.agent, "codex")
     }
 
+    func testResolvedAgentRowsFollowDisplayOrderAndAggregateCap() {
+        let content = AgentActivity.Content(
+            id: "agent-1",
+            agent: "codex",
+            state: .running,
+            sessionName: "Primary session",
+            updatedAt: 200,
+            second: .init(
+                id: "agent-2",
+                agent: "claude",
+                state: .waiting,
+                sessionName: "Second session",
+                updatedAt: 150
+            )
+        )
+        var state = makeState(running: 1, waiting: 1, done: 0)
+        state.recentAgentDisplay = .init(content: content)
+
+        let rows = state.resolvedAgentRows
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.first?.slug, "codex")
+        XCTAssertEqual(rows.first?.title, "Primary session")
+        XCTAssertEqual(rows.last?.slug, "claude")
+        XCTAssertEqual(rows.last?.state, .waiting)
+
+        // The aggregate stays authoritative: one remaining agent means the
+        // stale second row disappears.
+        var single = state
+        single.agentsWaiting = 0
+        XCTAssertEqual(single.resolvedAgentRows.count, 1)
+        XCTAssertEqual(single.resolvedAgentRows.first?.slug, "codex")
+    }
+
+    func testMoreAgentsDecodesAsOptionalAndRoundTrips() throws {
+        var state = makeState(running: 2, waiting: 0, done: 0)
+        state.moreAgents = [
+            .init(
+                computerID: "computer-b",
+                state: "running",
+                updatedAt: .now,
+                sealed: "c2VhbGVk"
+            ),
+        ]
+        let decoded = try JSONDecoder().decode(
+            TTYActivityAttributes.ContentState.self,
+            from: JSONEncoder().encode(state)
+        )
+        XCTAssertEqual(decoded.moreAgents?.count, 1)
+        XCTAssertEqual(decoded.moreAgents?.first?.computerID, "computer-b")
+        XCTAssertEqual(decoded.moreAgents?.first?.sealed, "c2VhbGVk")
+
+        // Pushes from an older relay omit the key entirely.
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(state))
+                as? [String: Any]
+        )
+        object.removeValue(forKey: "moreAgents")
+        let legacy = try JSONDecoder().decode(
+            TTYActivityAttributes.ContentState.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        XCTAssertNil(legacy.moreAgents)
+    }
+
     private func makeState(
         totalRunning: Int = 3,
         running: Int,

@@ -226,7 +226,9 @@ function rejectUnknownKeys(value, allowed, name) {
 
 function liveActivityPayload(surface, value, now) {
   const payload = plainObject(value, "payload");
-  rejectUnknownKeys(payload, new Set(["state", "event", "activity"]), "payload");
+  rejectUnknownKeys(
+    payload, new Set(["state", "event", "activity", "moreActivities"]), "payload",
+  );
   const state = plainObject(payload.state, "payload.state");
   if (!Number.isSafeInteger(state.totalRunning) || state.totalRunning < 0) {
     throw new TypeError("payload.state.totalRunning must be a non-negative safe integer");
@@ -319,6 +321,43 @@ function liveActivityPayload(surface, value, now) {
     }
   }
 
+  if (payload.moreActivities !== undefined) {
+    // Additional per-computer envelopes accompanying the primary card so the
+    // widget can rank agent rows across computers. Never alerting, never
+    // present without a primary activity.
+    if (payload.activity === undefined) {
+      throw new TypeError("payload.moreActivities requires payload.activity");
+    }
+    if (!Array.isArray(payload.moreActivities) || payload.moreActivities.length > 2) {
+      throw new TypeError("payload.moreActivities must be an array of at most 2 entries");
+    }
+    const moreAgents = payload.moreActivities.map((entry, index) => {
+      const name = `payload.moreActivities[${index}]`;
+      const extra = plainObject(entry, name);
+      rejectUnknownKeys(
+        extra, new Set(["computerId", "state", "updatedAt", "sealed"]), name,
+      );
+      if (!Object.hasOwn(AGENT_ACTIVITY_ALERTS, extra.state) && extra.state !== "running") {
+        throw new TypeError(`${name}.state is invalid`);
+      }
+      if (!Number.isSafeInteger(extra.updatedAt) || extra.updatedAt < 0) {
+        throw new TypeError(`${name}.updatedAt must be a non-negative safe integer`);
+      }
+      const computerId = requiredString(extra.computerId, `${name}.computerId`);
+      const sealed = requiredString(extra.sealed, `${name}.sealed`);
+      if (sealed.length > 2700 || !/^[A-Za-z0-9+/]+={0,2}$/.test(sealed)) {
+        throw new TypeError(`${name}.sealed must be base64`);
+      }
+      return {
+        computerID: computerId,
+        state: extra.state,
+        updatedAt: extra.updatedAt / 1000 - APPLE_REFERENCE_DATE_UNIX_SECONDS,
+        sealed,
+      };
+    });
+    if (moreAgents.length > 0) aps["content-state"].moreAgents = moreAgents;
+  }
+
   if (surface === "liveactivity-start") {
     aps["input-push-token"] = 1;
     aps["attributes-type"] = LIVE_ACTIVITY_ATTRIBUTES_TYPE;
@@ -329,6 +368,15 @@ function liveActivityPayload(surface, value, now) {
   }
   if (payload.event === "end") {
     aps["dismissal-date"] = Math.floor(now / 1000);
+  }
+  // Belt and braces for APNs's 4 KiB Live Activity cap: the extra envelopes
+  // are best-effort, so an oversized payload sheds them rather than failing
+  // the primary card. The payload is ASCII, so length equals bytes.
+  if (
+    aps["content-state"].moreAgents &&
+    JSON.stringify({ aps }).length > 4_000
+  ) {
+    delete aps["content-state"].moreAgents;
   }
   return { aps };
 }

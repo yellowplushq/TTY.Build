@@ -47,6 +47,7 @@ struct TTYStatusEntry: TimelineEntry, Sendable {
         state.recentAgentUpdatedAt = recent.recentAgentUpdatedAt
         state.recentAgentSealed = recent.recentAgentSealed
         state.recentAgentDisplay = recent.recentAgentDisplay
+        state.moreAgents = recent.moreAgents
         return state
     }
 }
@@ -116,6 +117,7 @@ struct TTYStatusProvider: TimelineProvider {
         TTYActivityAttributes.ContentState(
             totalRunning: 2,
             agentsRunning: 1,
+            agentsWaiting: 1,
             recentAgentComputerID: "preview",
             recentAgentState: "running",
             recentAgentUpdatedAt: .now,
@@ -126,7 +128,15 @@ struct TTYStatusProvider: TimelineProvider {
                 sessionName: "Polish the Widget experience",
                 project: "pedals",
                 action: "Building PedalsWidgets",
-                updatedAt: Date.now.timeIntervalSince1970
+                updatedAt: Date.now.timeIntervalSince1970,
+                second: .init(
+                    id: "preview-2",
+                    agent: "claude",
+                    state: .waiting,
+                    sessionName: "Review the release notes",
+                    message: "Choose how to continue",
+                    updatedAt: Date.now.timeIntervalSince1970 - 60
+                )
             )),
             onlineComputerCount: 1,
             offlineComputerCount: 0,
@@ -176,59 +186,20 @@ private struct TTYCountWidgetView: View {
         case .accessoryInline:
             Text(accessoryInlineText)
 
-        case .systemMedium:
-            ActivityCard(state: entry.state, redactsSensitiveContent: false)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
         default:
-            systemSmall
+            // Home Screen families render the exact island/Lock Screen card:
+            // the same ranked agent rows, terminal fallback, and count
+            // summary, with no widget-specific composition.
+            ActivityCard(state: entry.state, redactsSensitiveContent: false)
+                .frame(
+                    maxWidth: .infinity, maxHeight: .infinity,
+                    alignment: .topLeading
+                )
         }
     }
 
     private var presentation: ActivityPresentation {
         ActivityPresentation(state: entry.state)
-    }
-
-    @ViewBuilder
-    private var systemSmall: some View {
-        if presentation.showsAgent {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .center, spacing: 8) {
-                    AgentMark(presentation: presentation)
-                        .accessibilityHidden(true)
-                    Spacer(minLength: 4)
-                    ActivityStateLabel(presentation: presentation)
-                }
-                Text(ActivityStyle.primary(for: presentation, state: entry.state))
-                    .font(.headline)
-                    .lineLimit(2)
-                Text(ActivityStyle.detail(for: presentation))
-                    .font(.caption)
-                    .foregroundStyle(ActivityStyle.color(for: presentation))
-                    .lineLimit(2)
-                Spacer(minLength: 0)
-                ActivityMetrics(state: entry.state)
-            }
-            .accessibilityElement(children: .combine)
-        } else {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack {
-                    TerminalIdentity()
-                    Spacer(minLength: 4)
-                    Text("Live")
-                        .font(.caption2.weight(.semibold))
-                }
-                Spacer(minLength: 0)
-                Text(terminalCountText)
-                    .font(.headline)
-                    .contentTransition(.numericText())
-                    .lineLimit(2)
-                Text("Remote sessions are ready when you are.")
-                    .font(.caption)
-                    .foregroundStyle(PedalsTheme.secondaryContent)
-                    .lineLimit(2)
-            }
-        }
     }
 
     @ViewBuilder

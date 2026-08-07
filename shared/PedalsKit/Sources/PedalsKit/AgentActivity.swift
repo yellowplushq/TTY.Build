@@ -54,12 +54,25 @@ public enum AgentActivity {
                 id: info.id,
                 agent: info.agent,
                 state: info.state,
-                sessionName: info.sessionName.map { Content.singleLine($0, limit: 120) },
+                sessionName: info.sessionName.map { Content.singleLine($0, limit: 80) },
                 project: Content.projectName(from: info.cwd),
-                prompt: info.prompt.map { Content.singleLine($0, limit: 120) },
-                message: info.message.map { Content.singleLine($0, limit: 160) },
+                prompt: info.prompt.map { Content.singleLine($0, limit: 64) },
+                message: info.message.map { Content.singleLine($0, limit: 100) },
                 updatedAt: info.updatedAt
             )
+        }
+
+        /// `Content.trimmed(scale:)` for the nested row: free text shrinks
+        /// with `scale`, identity fields stay hard-capped.
+        fileprivate func trimmed(scale: Double) -> Companion {
+            var copy = self
+            copy.id = Content.singleLine(id, limit: 64)
+            copy.agent = Content.singleLine(agent, limit: 32)
+            copy.sessionName = Content.scaledLine(sessionName, base: 80, scale: scale)
+            copy.project = Content.scaledLine(project, base: 64, scale: scale)
+            copy.prompt = Content.scaledLine(prompt, base: 64, scale: scale)
+            copy.message = Content.scaledLine(message, base: 100, scale: scale)
+            return copy
         }
     }
 
@@ -113,20 +126,49 @@ public enum AgentActivity {
                 id: info.id,
                 agent: info.agent,
                 state: info.state,
-                sessionName: info.sessionName.map { Self.singleLine($0, limit: 120) },
+                sessionName: info.sessionName.map { Self.singleLine($0, limit: 80) },
                 project: Self.projectName(from: info.cwd),
-                prompt: info.prompt.map { Self.singleLine($0, limit: 160) },
-                action: info.action.map { Self.singleLine($0, limit: 100) },
-                message: info.message.map { Self.singleLine($0, limit: 240) },
+                prompt: info.prompt.map { Self.singleLine($0, limit: 100) },
+                action: info.action.map { Self.singleLine($0, limit: 80) },
+                message: info.message.map { Self.singleLine($0, limit: 140) },
                 sessionId: info.sessionId,
-                terminal: info.term.map { Self.singleLine($0, limit: 40) },
+                terminal: info.term.map { Self.singleLine($0, limit: 32) },
                 updatedAt: info.updatedAt
             )
         }
 
+        /// A copy with every free-text field re-truncated to `scale` of its
+        /// standard budget and identity fields hard-capped. At `scale` 0 only
+        /// the structural fields remain, whose JSON — even fully escaped —
+        /// stays far below the envelope budget, which is what lets
+        /// `sealWithinBudget` guarantee both agent rows always fit.
+        fileprivate func trimmed(scale: Double) -> Content {
+            var copy = self
+            copy.id = Self.singleLine(id, limit: 64)
+            copy.agent = Self.singleLine(agent, limit: 32)
+            copy.sessionName = Self.scaledLine(sessionName, base: 80, scale: scale)
+            copy.project = Self.scaledLine(project, base: 64, scale: scale)
+            copy.prompt = Self.scaledLine(prompt, base: 100, scale: scale)
+            copy.action = Self.scaledLine(action, base: 80, scale: scale)
+            copy.message = Self.scaledLine(message, base: 140, scale: scale)
+            copy.terminal = terminal.map { Self.singleLine($0, limit: 32) }
+            copy.second = second?.trimmed(scale: scale)
+            return copy
+        }
+
+        fileprivate static func scaledLine(
+            _ value: String?, base: Int, scale: Double
+        ) -> String? {
+            guard let value else { return nil }
+            let limit = Int(Double(base) * scale)
+            guard limit > 0 else { return nil }
+            let line = singleLine(value, limit: limit)
+            return line.isEmpty ? nil : line
+        }
+
         fileprivate static func projectName(from path: String) -> String? {
             guard !path.isEmpty else { return nil }
-            return singleLine((path as NSString).lastPathComponent, limit: 80)
+            return singleLine((path as NSString).lastPathComponent, limit: 64)
         }
 
         fileprivate static func singleLine(_ value: String, limit: Int) -> String {
@@ -233,6 +275,30 @@ public enum AgentActivity {
             plaintext, using: key, authenticating: Data(computerID.utf8)
         )
         return box.combined
+    }
+
+    /// Seals `content` guaranteed within `budget`, keeping both agent rows.
+    /// Free text (session names, prompts, messages) is progressively
+    /// re-truncated until the envelope fits; the final structural-only scale
+    /// is mathematically below the budget, so unlike a drop-the-second-row
+    /// fallback this never degrades the row count.
+    public static func sealWithinBudget(
+        _ content: Content,
+        key: SymmetricKey,
+        computerID: String,
+        budget: Int = RelayMetadata.AgentActivityEnvelope.targetSealedBytes
+    ) throws -> Data {
+        for scale in [1.0, 0.7, 0.45, 0.25] {
+            let sealed = try seal(
+                content.trimmed(scale: scale), key: key, computerID: computerID
+            )
+            if sealed.count <= budget { return sealed }
+        }
+        // Structural fields only: id, agent, state, timestamps. Their JSON is
+        // bounded (hard caps above) far below any sane budget.
+        return try seal(
+            content.trimmed(scale: 0), key: key, computerID: computerID
+        )
     }
 
     public static func open(
