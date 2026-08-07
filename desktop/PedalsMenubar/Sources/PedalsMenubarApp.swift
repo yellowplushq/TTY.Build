@@ -48,6 +48,7 @@ final class PedalsAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         refreshManagedAgentHooks()
+        model.updater = updater
         statusItemController = StatusItemController(
             model: model,
             updater: updater,

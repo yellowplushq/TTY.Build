@@ -95,6 +95,50 @@ public struct AgentInfo: Codable, Equatable, Sendable {
     }
 }
 
+/// One entry of the `hooks-status` list: install state of one coding-agent
+/// hook on the host, as managed by the daemon's HookInstaller. `agent` is the
+/// agent slug ("claude", "codex", …); `state` is "installed",
+/// "notInstalled", "outdated" (on-disk content differs from what the current
+/// desktop build would write — updating means reinstalling), or "unknown"
+/// (the daemon could not determine the state, e.g. an unreadable settings
+/// file or an unavailable probe).
+public struct HookStateInfo: Codable, Equatable, Sendable {
+    public var agent: String
+    public var state: String
+
+    public init(agent: String, state: String) {
+        self.agent = agent
+        self.state = state
+    }
+}
+
+/// Host-reported desktop update state (PROTOCOL.md §5), E2EE-only. `current`
+/// is the running desktop build's marketing version (nil when the host
+/// cannot determine it, e.g. headless `pedals serve`); `latest` is the
+/// newest version in the appcast when known. `canInstall` is true only when
+/// the host runs the menu bar app with its Sparkle updater.
+public struct UpdateStatusInfo: Codable, Equatable, Sendable {
+    public var current: String?
+    public var latest: String?
+    public var updateAvailable: Bool
+    public var canInstall: Bool
+    public var detail: String?
+
+    public init(
+        current: String? = nil,
+        latest: String? = nil,
+        updateAvailable: Bool,
+        canInstall: Bool,
+        detail: String? = nil
+    ) {
+        self.current = current
+        self.latest = latest
+        self.updateAvailable = updateAvailable
+        self.canInstall = canInstall
+        self.detail = detail
+    }
+}
+
 /// ctl JSON messages (PROTOCOL.md §5). Wire form is `{"t":"<kind>", ...}`.
 ///
 /// ctl only flows on the control channel. Data channels (one WebSocket per
@@ -143,11 +187,30 @@ public enum ControlMessage: Equatable, Sendable {
     /// `create` that failed (nil for errors not tied to a request), so the
     /// requesting client can stop waiting and surface the message.
     case err(msg: String, req: UInt32? = nil)
+    /// client→host with `list` nil: request the per-agent hook install state.
+    /// host→client: full snapshot, `req` echoing the triggering request (also
+    /// sent after a successful `hook-install`/`hook-uninstall`).
+    case hooksStatus(list: [HookStateInfo]?, req: UInt32?)
+    /// client→host: install (or update, when outdated) one agent's hook.
+    /// `agent` is the agent slug. The host replies with a fresh
+    /// `hooksStatus` echoing `req`, or `err` on failure.
+    case hookInstall(agent: String, req: UInt32?)
+    /// client→host: remove one agent's hook. Same reply contract as
+    /// `hookInstall`.
+    case hookUninstall(agent: String, req: UInt32?)
+    /// client→host with `info` nil: request the desktop update state.
+    /// host→client: reply with `req` echoing the request (also sent after an
+    /// `updateInstall`).
+    case updateStatus(info: UpdateStatusInfo?, req: UInt32?)
+    /// client→host: trigger the desktop's updater (Sparkle in the menu bar
+    /// app; may present UI and relaunch the app on the Mac). The host replies
+    /// with a fresh `updateStatus` echoing `req`, or `err` on failure.
+    case updateInstall(req: UInt32?)
 }
 
 extension ControlMessage: Codable {
     private enum CodingKeys: String, CodingKey {
-        case t, who, principal, connEpoch, nonce, ver, host, echoNonce, list, cwd, cols, rows, id, title, code, msg, req, agents, agentId
+        case t, who, principal, connEpoch, nonce, ver, host, echoNonce, list, cwd, cols, rows, id, title, code, msg, req, agents, agentId, agent, info
     }
 
     private var kind: String {
@@ -164,6 +227,11 @@ extension ControlMessage: Codable {
         case .title: "title"
         case .exit: "exit"
         case .err: "err"
+        case .hooksStatus: "hooks-status"
+        case .hookInstall: "hook-install"
+        case .hookUninstall: "hook-uninstall"
+        case .updateStatus: "update-status"
+        case .updateInstall: "update-install"
         }
     }
 
@@ -207,6 +275,20 @@ extension ControlMessage: Codable {
             try container.encode(code, forKey: .code)
         case let .err(msg, req):
             try container.encode(msg, forKey: .msg)
+            try container.encodeIfPresent(req, forKey: .req)
+        case let .hooksStatus(list, req):
+            try container.encodeIfPresent(list, forKey: .list)
+            try container.encodeIfPresent(req, forKey: .req)
+        case let .hookInstall(agent, req):
+            try container.encode(agent, forKey: .agent)
+            try container.encodeIfPresent(req, forKey: .req)
+        case let .hookUninstall(agent, req):
+            try container.encode(agent, forKey: .agent)
+            try container.encodeIfPresent(req, forKey: .req)
+        case let .updateStatus(info, req):
+            try container.encodeIfPresent(info, forKey: .info)
+            try container.encodeIfPresent(req, forKey: .req)
+        case let .updateInstall(req):
             try container.encodeIfPresent(req, forKey: .req)
         }
     }
@@ -264,6 +346,30 @@ extension ControlMessage: Codable {
         case "err":
             self = .err(
                 msg: try container.decode(String.self, forKey: .msg),
+                req: try container.decodeIfPresent(UInt32.self, forKey: .req)
+            )
+        case "hooks-status":
+            self = .hooksStatus(
+                list: try container.decodeIfPresent([HookStateInfo].self, forKey: .list),
+                req: try container.decodeIfPresent(UInt32.self, forKey: .req)
+            )
+        case "hook-install":
+            self = .hookInstall(
+                agent: try container.decode(String.self, forKey: .agent),
+                req: try container.decodeIfPresent(UInt32.self, forKey: .req)
+            )
+        case "hook-uninstall":
+            self = .hookUninstall(
+                agent: try container.decode(String.self, forKey: .agent),
+                req: try container.decodeIfPresent(UInt32.self, forKey: .req)
+            )
+        case "update-status":
+            self = .updateStatus(
+                info: try container.decodeIfPresent(UpdateStatusInfo.self, forKey: .info),
+                req: try container.decodeIfPresent(UInt32.self, forKey: .req)
+            )
+        case "update-install":
+            self = .updateInstall(
                 req: try container.decodeIfPresent(UInt32.self, forKey: .req)
             )
         default:

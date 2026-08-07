@@ -15,6 +15,11 @@ final class ComputerConnection {
         case error(msg: String, req: UInt32?)
         /// The DO expired or explicitly cleared this computer's directory.
         case offline(removedTerminalCount: Int)
+        /// Reply to a `hooks-status`/`hook-install`/`hook-uninstall` request;
+        /// `req` echoes the triggering request's tag.
+        case hooksStatus(list: [HookStateInfo], req: UInt32?)
+        /// Reply to an `update-status`/`update-install` request.
+        case updateStatus(info: UpdateStatusInfo, req: UInt32?)
     }
 
     let binding: ComputerBinding
@@ -110,6 +115,36 @@ final class ComputerConnection {
         control.send(.dismissAgent(agentId: id))
     }
 
+    // MARK: - Remote hook and update management (PROTOCOL.md §5)
+
+    /// Asks the daemon for every agent's hook install state. The reply (or a
+    /// post-install/uninstall refresh) arrives as `.hooksStatus` with the
+    /// same `req`; an old daemon silently drops the unknown kind, so callers
+    /// must time out on their own.
+    func requestHooksStatus(req: UInt32) {
+        control.send(.hooksStatus(list: nil, req: req))
+    }
+
+    func installHook(agent: String, req: UInt32) {
+        control.send(.hookInstall(agent: agent, req: req))
+    }
+
+    func uninstallHook(agent: String, req: UInt32) {
+        control.send(.hookUninstall(agent: agent, req: req))
+    }
+
+    /// Asks the daemon for the desktop's update state (same timeout caveat
+    /// as `requestHooksStatus`).
+    func requestUpdateStatus(req: UInt32) {
+        control.send(.updateStatus(info: nil, req: req))
+    }
+
+    /// Triggers the desktop's Sparkle updater; the Mac may present update UI
+    /// and relaunch the menu bar app.
+    func installUpdate(req: UInt32) {
+        control.send(.updateInstall(req: req))
+    }
+
     /// A fresh (not yet started) data link for one of this computer's sessions.
     func makeSessionLink(sid: Int) -> RelayLink {
         RelayLink(
@@ -123,7 +158,9 @@ final class ComputerConnection {
 
     // MARK: - Control frames
 
-    private func handle(frame: Frame) {
+    /// Internal (not private) so unit tests can drive reply handling with
+    /// crafted ctl frames.
+    func handle(frame: Frame) {
         guard frame.type == .ctl, let message = try? frame.controlMessage() else { return }
         switch message {
         case .hello(let who, _, _, _, _, let host):
@@ -151,7 +188,12 @@ final class ComputerConnection {
             events.send(.exit(id: id, code: code))
         case .err(let msg, let req):
             events.send(.error(msg: msg, req: req))
-        case .create, .close, .dismissAgent, .ready, .requestReplay:
+        case .hooksStatus(let list, let req):
+            if let list { events.send(.hooksStatus(list: list, req: req)) }
+        case .updateStatus(let info, let req):
+            if let info { events.send(.updateStatus(info: info, req: req)) }
+        case .create, .close, .dismissAgent, .ready, .requestReplay,
+             .hookInstall, .hookUninstall, .updateInstall:
             break // client→host only; ignore if mirrored back
         }
     }

@@ -100,7 +100,7 @@ public final class Daemon: @unchecked Sendable {
             try home.save(sessionCounter: id)
         }
         sessions = SessionManager(options: sessionOptions)
-        relay = RelayHostClient(identity: identity, sessions: sessions)
+        relay = RelayHostClient(identity: identity, sessions: sessions, home: home)
         // The monitor re-resolves ownership on its own 2 s sweep, so it needs
         // no session-event subscription (RelayHostClient owns the single
         // SessionManager event consumer).
@@ -122,6 +122,17 @@ public final class Daemon: @unchecked Sendable {
         identityLock.lock()
         defer { identityLock.unlock() }
         return identity
+    }
+
+    /// Wires the host app's updater into client-triggered `update-status` /
+    /// `update-install` ctl requests (PROTOCOL.md §5). The menu bar app calls
+    /// this once after start; a headless daemon never does, and its clients
+    /// then receive an explanatory error for update requests.
+    public func setUpdateHandlers(
+        status: RemoteManagement.UpdateHandler?,
+        install: RemoteManagement.UpdateHandler?
+    ) {
+        relay.setUpdateHandlers(status: status, install: install)
     }
 
     public func start() throws {

@@ -56,6 +56,11 @@ final class AppModel: ObservableObject {
     @Published var lastError: String?
 
     private var service: PedalsService?
+    /// Injected by the app delegate; backs client-triggered update requests
+    /// (PROTOCOL.md §5). Setting it re-wires the daemon's update handlers.
+    var updater: UpdaterModel? {
+        didSet { wireUpdateHandlers() }
+    }
     private var startupTask: Task<Void, Never>?
     private var monitoringTask: Task<Void, Never>?
     private var pairingTask: Task<Void, Never>?
@@ -143,6 +148,7 @@ final class AppModel: ObservableObject {
                     return
                 }
                 self.service = service
+                wireUpdateHandlers()
                 serviceRunning = true
                 isStartingService = false
                 startupTask = nil
@@ -201,6 +207,30 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: Session actions
+
+    /// Routes client-triggered update requests to the injected Sparkle
+    /// updater. Re-applied whenever the service or the updater changes.
+    private func wireUpdateHandlers() {
+        guard let service else { return }
+        service.setUpdateHandlers(
+            status: { [weak self] in
+                guard let self, let updater = await self.updater else {
+                    return RemoteManagement.UpdateStatus(
+                        updateAvailable: false, detail: "the updater is unavailable"
+                    )
+                }
+                return await updater.checkUpdateInformation()
+            },
+            install: { [weak self] in
+                guard let self, let updater = await self.updater else {
+                    return RemoteManagement.UpdateStatus(
+                        updateAvailable: false, detail: "the updater is unavailable"
+                    )
+                }
+                return await updater.installUpdate()
+            }
+        )
+    }
 
     func closeSession(_ id: Int) {
         guard let service else { return }
