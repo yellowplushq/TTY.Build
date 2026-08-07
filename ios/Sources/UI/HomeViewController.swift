@@ -357,7 +357,6 @@ final class HomeViewController: UIViewController {
         // Terminals section.
         struct SortableItem {
             let item: Item
-            let rank: Int
             let time: Double
         }
         var terminalSortables: [SortableItem] = []
@@ -370,7 +369,6 @@ final class HomeViewController: UIViewController {
             )
             terminalSortables.append(SortableItem(
                 item: item,
-                rank: agent.map(\.state.attentionRank) ?? 4,
                 time: agent?.updatedAt ?? terminal.info.createdAt
             ))
         }
@@ -391,14 +389,13 @@ final class HomeViewController: UIViewController {
             newContents[item] = agentRowContent(row: row, showHost: showHost, now: now)
             agentSortables.append(SortableItem(
                 item: item,
-                rank: row.info.state.attentionRank,
                 time: row.info.updatedAt
             ))
         }
 
-        let sorter: (SortableItem, SortableItem) -> Bool = {
-            $0.rank != $1.rank ? $0.rank < $1.rank : $0.time > $1.time
-        }
+        // Pure recency, matching the island and the daemon's reporting order:
+        // whatever updated last sits on top, regardless of agent state.
+        let sorter: (SortableItem, SortableItem) -> Bool = { $0.time > $1.time }
         terminalSortables.sort(by: sorter)
         agentSortables.sort(by: sorter)
 

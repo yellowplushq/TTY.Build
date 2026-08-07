@@ -88,20 +88,34 @@ final class LiveActivityPresentationTests: XCTestCase {
         XCTAssertEqual(
             makeState(
                 totalRunning: 2, running: 2, waiting: 1, done: 0
-            ).activityCountSummary,
+            ).activityCountSummary(),
             "and 2 more agents, 2 terminals"
         )
         XCTAssertEqual(
             makeState(
                 totalRunning: 0, running: 2, waiting: 0, done: 0
-            ).activityCountSummary,
+            ).activityCountSummary(),
             "and 1 more agent"
         )
         XCTAssertEqual(
             makeState(
                 totalRunning: 2, running: 1, waiting: 0, done: 0
-            ).activityCountSummary,
+            ).activityCountSummary(),
             "2 terminals"
+        )
+    }
+
+    func testActivityCountSummaryExcludesEveryVisibleAgentRow() {
+        XCTAssertEqual(
+            makeState(
+                totalRunning: 0, running: 2, waiting: 1, done: 0
+            ).activityCountSummary(visibleAgents: 2),
+            "and 1 more agent"
+        )
+        XCTAssertNil(
+            makeState(
+                totalRunning: 0, running: 1, waiting: 1, done: 0
+            ).activityCountSummary(visibleAgents: 2)
         )
     }
 
@@ -110,15 +124,74 @@ final class LiveActivityPresentationTests: XCTestCase {
             makeState(
                 totalRunning: 1, running: 0, waiting: 0, done: 0,
                 offline: 4
-            ).activityCountSummary,
+            ).activityCountSummary(),
             "1 terminal"
         )
         XCTAssertNil(
             makeState(
                 totalRunning: 0, running: 1, waiting: 0, done: 0,
                 offline: 4
-            ).activityCountSummary
+            ).activityCountSummary()
         )
+    }
+
+    func testSecondAgentSurvivesTheLocalDisplayRoundTrip() {
+        let content = AgentActivity.Content(
+            id: "agent-1",
+            agent: "codex",
+            state: .running,
+            sessionName: "Primary session",
+            updatedAt: 200,
+            second: .init(
+                id: "agent-2",
+                agent: "claude",
+                state: .waiting,
+                sessionName: "Second session",
+                message: "Choose how to continue",
+                updatedAt: 150
+            )
+        )
+        var state = makeState(running: 1, waiting: 1, done: 0)
+        state.recentAgentDisplay = .init(content: content)
+
+        let second = state.resolvedRecentAgent?.second
+        XCTAssertEqual(second?.agent, "claude")
+        XCTAssertEqual(second?.state, .waiting)
+        XCTAssertEqual(second?.sessionName, "Second session")
+        XCTAssertEqual(second?.message, "Choose how to continue")
+        XCTAssertEqual(second?.updatedAt, 150)
+    }
+
+    func testDisplayDecodesOlderPayloadWithoutSecondAgent() throws {
+        let content = AgentActivity.Content(
+            id: "agent-1",
+            agent: "codex",
+            state: .running,
+            sessionName: "Primary session",
+            updatedAt: 200,
+            second: .init(
+                id: "agent-2",
+                agent: "claude",
+                state: .waiting,
+                updatedAt: 150
+            )
+        )
+        var state = makeState(running: 1, waiting: 1, done: 0)
+        state.recentAgentDisplay = .init(content: content)
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(state))
+                as? [String: Any]
+        )
+        var display = try XCTUnwrap(object["recentAgentDisplay"] as? [String: Any])
+        display.removeValue(forKey: "second")
+        object["recentAgentDisplay"] = display
+
+        let decoded = try JSONDecoder().decode(
+            TTYActivityAttributes.ContentState.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        XCTAssertNil(decoded.recentAgentDisplay?.second)
+        XCTAssertEqual(decoded.resolvedRecentAgent?.agent, "codex")
     }
 
     private func makeState(

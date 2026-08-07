@@ -15,6 +15,54 @@ public enum AgentActivity {
         case done
     }
 
+    /// A trimmed snapshot of one additional agent, nested inside `Content`
+    /// so a single sealed envelope can carry the island's second row. Kept
+    /// to display-relevant fields only — the second row never shows tool
+    /// activity or terminal identity, and the envelope must stay small.
+    public struct Companion: Codable, Equatable, Sendable {
+        public var id: String
+        public var agent: String
+        public var state: AgentState
+        public var sessionName: String?
+        public var project: String?
+        public var prompt: String?
+        public var message: String?
+        public var updatedAt: Double
+
+        public init(
+            id: String,
+            agent: String,
+            state: AgentState,
+            sessionName: String? = nil,
+            project: String? = nil,
+            prompt: String? = nil,
+            message: String? = nil,
+            updatedAt: Double
+        ) {
+            self.id = id
+            self.agent = agent
+            self.state = state
+            self.sessionName = sessionName
+            self.project = project
+            self.prompt = prompt
+            self.message = message
+            self.updatedAt = updatedAt
+        }
+
+        public init(info: AgentInfo) {
+            self.init(
+                id: info.id,
+                agent: info.agent,
+                state: info.state,
+                sessionName: info.sessionName.map { Content.singleLine($0, limit: 120) },
+                project: Content.projectName(from: info.cwd),
+                prompt: info.prompt.map { Content.singleLine($0, limit: 120) },
+                message: info.message.map { Content.singleLine($0, limit: 160) },
+                updatedAt: info.updatedAt
+            )
+        }
+    }
+
     public struct Content: Codable, Equatable, Sendable {
         public var id: String
         public var agent: String
@@ -27,6 +75,10 @@ public enum AgentActivity {
         public var sessionId: Int?
         public var terminal: String?
         public var updatedAt: Double
+        /// The next-most-recently-updated agent on the same reporting path.
+        /// Optional on the wire: envelopes from older daemons decode with no
+        /// second row, and older widgets ignore the key entirely.
+        public var second: Companion?
 
         public init(
             id: String,
@@ -39,7 +91,8 @@ public enum AgentActivity {
             message: String? = nil,
             sessionId: Int? = nil,
             terminal: String? = nil,
-            updatedAt: Double
+            updatedAt: Double,
+            second: Companion? = nil
         ) {
             self.id = id
             self.agent = agent
@@ -52,6 +105,7 @@ public enum AgentActivity {
             self.sessionId = sessionId
             self.terminal = terminal
             self.updatedAt = updatedAt
+            self.second = second
         }
 
         public init(info: AgentInfo) {
@@ -70,12 +124,12 @@ public enum AgentActivity {
             )
         }
 
-        private static func projectName(from path: String) -> String? {
+        fileprivate static func projectName(from path: String) -> String? {
             guard !path.isEmpty else { return nil }
             return singleLine((path as NSString).lastPathComponent, limit: 80)
         }
 
-        private static func singleLine(_ value: String, limit: Int) -> String {
+        fileprivate static func singleLine(_ value: String, limit: Int) -> String {
             let normalized = value
                 .replacingOccurrences(of: "\n", with: " ")
                 .replacingOccurrences(of: "\r", with: " ")
@@ -117,6 +171,17 @@ public enum AgentActivity {
                 project: content.project,
                 prompt: content.prompt,
                 message: content.message
+            )
+        }
+
+        public init(companion: Companion) {
+            self.init(
+                agent: companion.agent,
+                state: companion.state,
+                sessionName: companion.sessionName,
+                project: companion.project,
+                prompt: companion.prompt,
+                message: companion.message
             )
         }
 

@@ -10,11 +10,44 @@ public struct TTYActivityAttributes: ActivityAttributes, Codable, Hashable, Send
         /// independent of a widget Keychain read while keeping remote agent
         /// payloads end-to-end encrypted.
         public struct RecentAgentDisplay: Codable, Hashable, Sendable {
+            /// The resolved presentation of the next-most-recent agent, so the
+            /// island's second row also survives foreground updates without a
+            /// Keychain read. Optional-decoded for states written before the
+            /// second row existed.
+            public struct Second: Codable, Hashable, Sendable {
+                public var agent: String
+                public var state: AgentState
+                public var title: String
+                public var detail: String
+                public var updatedAt: Date
+
+                public init(companion: AgentActivity.Companion) {
+                    let presentation = AgentActivity.Presentation(companion: companion)
+                    agent = companion.agent
+                    state = companion.state
+                    title = presentation.title
+                    detail = presentation.detail
+                    updatedAt = Date(timeIntervalSince1970: companion.updatedAt)
+                }
+
+                var companion: AgentActivity.Companion {
+                    .init(
+                        id: "local-second",
+                        agent: agent,
+                        state: state,
+                        sessionName: title,
+                        message: detail,
+                        updatedAt: updatedAt.timeIntervalSince1970
+                    )
+                }
+            }
+
             public var agent: String
             public var state: AgentState
             public var title: String
             public var detail: String
             public var updatedAt: Date
+            public var second: Second?
 
             public init(content: AgentActivity.Content) {
                 let presentation = AgentActivity.Presentation(content: content)
@@ -23,6 +56,7 @@ public struct TTYActivityAttributes: ActivityAttributes, Codable, Hashable, Send
                 title = presentation.title
                 detail = presentation.detail
                 updatedAt = Date(timeIntervalSince1970: content.updatedAt)
+                second = content.second.map(Second.init(companion:))
             }
 
             var content: AgentActivity.Content {
@@ -32,7 +66,8 @@ public struct TTYActivityAttributes: ActivityAttributes, Codable, Hashable, Send
                     state: state,
                     sessionName: title,
                     message: detail,
-                    updatedAt: updatedAt.timeIntervalSince1970
+                    updatedAt: updatedAt.timeIntervalSince1970,
+                    second: second?.companion
                 )
             }
         }
@@ -135,12 +170,12 @@ extension TTYActivityAttributes.ContentState {
         agentsRunning + agentsWaiting + agentsDone
     }
 
-    /// Counts shown beneath the concrete agent. The visible agent is already
-    /// represented by its row, so only additional agents are counted. Offline
-    /// computers are intentionally absent from this presentation.
-    var activityCountSummary: String? {
+    /// Counts shown beneath the concrete agent rows. Agents already shown as
+    /// rows are excluded, so the summary only counts what the card could not
+    /// fit. Offline computers are intentionally absent from this presentation.
+    func activityCountSummary(visibleAgents: Int = 1) -> String? {
         var parts: [String] = []
-        let moreAgents = max(0, totalAgents - 1)
+        let moreAgents = max(0, totalAgents - visibleAgents)
         if moreAgents > 0 {
             let noun = moreAgents == 1 ? "agent" : "agents"
             parts.append("and \(moreAgents) more \(noun)")

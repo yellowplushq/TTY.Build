@@ -62,6 +62,27 @@ final class TestVectorTests: XCTestCase {
         XCTAssertThrowsError(try AgentActivity.open(sealed, key: key, computerID: "c-2"))
     }
 
+    func testAgentActivitySecondCompanionRoundTripsAndStaysOptional() throws {
+        let key = AgentActivity.activityKey(secret: secret)
+        let content = AgentActivity.Content(
+            id: "a-1", agent: "claude", state: .running, project: "proj",
+            updatedAt: 1_000,
+            second: .init(
+                id: "a-2", agent: "codex", state: .waiting,
+                sessionName: "Second session", updatedAt: 900
+            )
+        )
+        let sealed = try AgentActivity.seal(content, key: key, computerID: "c-1")
+        XCTAssertEqual(try AgentActivity.open(sealed, key: key, computerID: "c-1"), content)
+
+        // Envelopes from daemons that predate the second row decode with no
+        // second companion, not a decoding failure.
+        var withoutSecond = content
+        withoutSecond.second = nil
+        let older = try AgentActivity.seal(withoutSecond, key: key, computerID: "c-1")
+        XCTAssertNil(try AgentActivity.open(older, key: key, computerID: "c-1").second)
+    }
+
     func testSealedMessageVectorDecrypts() throws {
         let message = Data(hexString:
             "0100000000000000" // seq = 1, u64 LE
