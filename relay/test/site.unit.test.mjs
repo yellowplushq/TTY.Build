@@ -124,6 +124,19 @@ test("the one-screen homepage exposes the product promise and download CTA", asy
   assert.match(html, /href="\/support\/"/);
 });
 
+test("the homepage offers the curl installer with a self-hosted copy button", async () => {
+  const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+  assert.match(html, /curl -fsSL https:\/\/pedals\.air\.build\/install\.sh \| bash/);
+  assert.match(html, /data-copy="install-command-text"/);
+  assert.match(html, /<script src="\/site\.js" defer><\/script>/);
+
+  const script = await readFile(new URL("../public/site.js", import.meta.url), "utf8");
+  assert.match(script, /navigator\.clipboard\.writeText/);
+
+  const headers = await readFile(new URL("../public/_headers", import.meta.url), "utf8");
+  assert.match(headers, /script-src 'self'/);
+});
+
 test("the curl installer downloads the zip release and verifies its checksum", async () => {
   const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
   assert.match(script, /^#!\/usr\/bin\/env bash/);

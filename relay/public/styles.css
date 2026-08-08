@@ -156,14 +156,43 @@ h1 span { color: #737373; }
 
 .install-command {
   margin-top: 18px;
-  padding: 10px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 8px;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 9px 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.72);
-  user-select: all;
 }
+
+.install-command > span { color: var(--faint); }
+
+.install-command code {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.78);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.install-copy {
+  flex: none;
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--raised);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.install-copy:hover { border-color: var(--line-strong); }
+.install-copy:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.install-copy.is-done { background: #1f1f1f; border-color: var(--line-strong); }
 
 .button {
   min-height: 62px;
