@@ -3,13 +3,36 @@ import GhosttyTerminal
 import XCTest
 
 final class TerminalLifecycleTests: XCTestCase {
-    func testCommittedPageChangeTransfersFocusEvenWhenTargetWasFocusedBefore() {
+    func testCommittedPageChangeTransfersFocusWhenKeyboardWasUp() {
         XCTAssertTrue(TerminalFocusPolicy.shouldFocus(
             applicationActive: true,
             restoreFocus: false,
             pageChanged: true,
             hasBeenFocused: true,
-            isFirstResponder: false
+            isFirstResponder: false,
+            keyboardVisible: true
+        ))
+    }
+
+    func testCommittedPageChangeKeepsDismissedKeyboardDismissed() {
+        XCTAssertFalse(TerminalFocusPolicy.shouldFocus(
+            applicationActive: true,
+            restoreFocus: false,
+            pageChanged: true,
+            hasBeenFocused: true,
+            isFirstResponder: false,
+            keyboardVisible: false
+        ))
+    }
+
+    func testNeverFocusedPageTakesFocusEvenWithDismissedKeyboard() {
+        XCTAssertTrue(TerminalFocusPolicy.shouldFocus(
+            applicationActive: true,
+            restoreFocus: false,
+            pageChanged: true,
+            hasBeenFocused: false,
+            isFirstResponder: false,
+            keyboardVisible: false
         ))
     }
 
@@ -19,7 +42,8 @@ final class TerminalLifecycleTests: XCTestCase {
             restoreFocus: false,
             pageChanged: false,
             hasBeenFocused: true,
-            isFirstResponder: false
+            isFirstResponder: false,
+            keyboardVisible: false
         ))
     }
 
@@ -29,7 +53,8 @@ final class TerminalLifecycleTests: XCTestCase {
             restoreFocus: true,
             pageChanged: false,
             hasBeenFocused: true,
-            isFirstResponder: false
+            isFirstResponder: false,
+            keyboardVisible: false
         ))
     }
 
@@ -39,7 +64,8 @@ final class TerminalLifecycleTests: XCTestCase {
             restoreFocus: true,
             pageChanged: true,
             hasBeenFocused: false,
-            isFirstResponder: false
+            isFirstResponder: false,
+            keyboardVisible: true
         ))
     }
 
