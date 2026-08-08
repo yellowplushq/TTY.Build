@@ -258,6 +258,74 @@ final class LiveActivityPresentationTests: XCTestCase {
         XCTAssertNil(legacy.moreAgents)
     }
 
+    func testSnapshotCarriedEnvelopesPopulateContentState() {
+        let updatedAt = Date(timeIntervalSince1970: 1_783_000_000)
+        let snapshot = TTYStatusSnapshot(
+            totalRunning: 1,
+            computers: [
+                ComputerTTYStatus(
+                    id: "computer-a",
+                    name: "Studio",
+                    runningTTYCount: 1,
+                    agents: ComputerAgentCounts(running: 1, waiting: 1),
+                    online: true,
+                    updatedAt: updatedAt
+                ),
+            ],
+            recentAgent: .init(
+                computerID: "computer-a",
+                state: "waiting",
+                updatedAt: updatedAt,
+                sealed: "c2VhbGVk"
+            ),
+            moreAgents: [
+                .init(
+                    computerID: "computer-b",
+                    state: "running",
+                    updatedAt: updatedAt,
+                    sealed: "b3RoZXI="
+                ),
+            ],
+            updatedAt: updatedAt,
+            sequence: 9
+        )
+
+        let state = TTYActivityAttributes.ContentState(snapshot: snapshot)
+        XCTAssertEqual(state.totalAgents, 2)
+        XCTAssertEqual(state.recentAgentComputerID, "computer-a")
+        XCTAssertEqual(state.recentAgentState, "waiting")
+        XCTAssertEqual(state.recentAgentUpdatedAt, updatedAt)
+        XCTAssertEqual(state.recentAgentSealed, "c2VhbGVk")
+        XCTAssertEqual(state.moreAgents?.count, 1)
+        XCTAssertEqual(state.moreAgents?.first?.computerID, "computer-b")
+        XCTAssertEqual(state.moreAgents?.first?.sealed, "b3RoZXI=")
+        XCTAssertEqual(state.displayedAgentState, .waiting)
+    }
+
+    func testSnapshotWithoutEnvelopesLeavesContentStateCountOnly() {
+        let snapshot = TTYStatusSnapshot(
+            totalRunning: 1,
+            computers: [
+                ComputerTTYStatus(
+                    id: "computer-a",
+                    name: "Studio",
+                    runningTTYCount: 1,
+                    agents: ComputerAgentCounts(running: 1, waiting: 0),
+                    online: true,
+                    updatedAt: .now
+                ),
+            ],
+            updatedAt: .now,
+            sequence: 1
+        )
+
+        let state = TTYActivityAttributes.ContentState(snapshot: snapshot)
+        XCTAssertNil(state.recentAgentComputerID)
+        XCTAssertNil(state.recentAgentSealed)
+        XCTAssertNil(state.moreAgents)
+        XCTAssertEqual(state.displayedAgentState, .running)
+    }
+
     private func makeState(
         totalRunning: Int = 3,
         running: Int,

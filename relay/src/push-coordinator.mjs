@@ -100,6 +100,9 @@ export class PushCoordinator extends DurableObject {
     if (request.method === "POST" && pathname === "/activity") {
       return this.handleActivity(request);
     }
+    if (request.method === "POST" && pathname === "/agent-activities") {
+      return this.handleAgentActivities(request);
+    }
     if (request.method !== "POST" || pathname !== "/invalidate") {
       return new Response("not found", { status: 404 });
     }
@@ -126,6 +129,37 @@ export class PushCoordinator extends DurableObject {
       if (alarm === null || alarm > desired) await this.ctx.storage.setAlarm(desired);
     });
     return new Response(null, { status: 202 });
+  }
+
+  /// The retained per-computer agent envelopes for the aggregate status
+  /// response, so a Home Screen widget can render rich agent rows without an
+  /// active Live Activity. Filtering matches the Live Activity path: an
+  /// envelope is only attached while its computer has an active agent, and
+  /// `recentAgentActivities` prunes anything stale as a side effect.
+  async handleAgentActivities(request) {
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response("bad request", { status: 400 });
+    }
+    if (!isId(body?.clientId)) {
+      return new Response("bad request", { status: 400 });
+    }
+    const state = await aggregateClientState(this.env.DB, body.clientId);
+    const retained = await this.recentAgentActivities(state);
+    const serialize = (entry) => ({
+      computerID: entry.computerId,
+      state: entry.activity.state,
+      updatedAt: entry.activity.updatedAt,
+      sealed: entry.activity.sealed,
+    });
+    return Response.json({
+      recentAgent: retained.length > 0 ? serialize(retained[0]) : null,
+      // The widget renders at most two agent rows; the primary envelope plus
+      // two companions covers that with margin.
+      moreAgents: retained.slice(1, 3).map(serialize),
+    });
   }
 
   async cacheAgentActivity(computerId, activity, highPriority) {

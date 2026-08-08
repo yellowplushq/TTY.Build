@@ -105,7 +105,7 @@ final class AgentActivityTests: XCTestCase {
             info(id: "b", state: .waiting),
             info(id: "c", state: .error),
             info(id: "d", state: .done, updatedAt: 950),
-            info(id: "e", state: .done, updatedAt: 900),
+            info(id: "e", state: .done, updatedAt: 300),
         ]
         XCTAssertEqual(
             RelayHostClient.agentCounts(of: list, now: now),

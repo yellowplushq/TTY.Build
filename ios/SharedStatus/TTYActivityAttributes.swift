@@ -175,6 +175,18 @@ public struct TTYActivityAttributes: ActivityAttributes, Codable, Hashable, Send
                 agentsRunning: snapshot.agentsRunning,
                 agentsWaiting: snapshot.agentsWaiting,
                 agentsDone: snapshot.agentsDone,
+                recentAgentComputerID: snapshot.recentAgent?.computerID,
+                recentAgentState: snapshot.recentAgent?.state,
+                recentAgentUpdatedAt: snapshot.recentAgent?.updatedAt,
+                recentAgentSealed: snapshot.recentAgent?.sealed,
+                moreAgents: snapshot.moreAgents?.map { envelope in
+                    MoreAgent(
+                        computerID: envelope.computerID,
+                        state: envelope.state,
+                        updatedAt: envelope.updatedAt,
+                        sealed: envelope.sealed
+                    )
+                },
                 onlineComputerCount: snapshot.onlineComputerCount,
                 offlineComputerCount: snapshot.offlineComputerCount,
                 updatedAt: snapshot.updatedAt,

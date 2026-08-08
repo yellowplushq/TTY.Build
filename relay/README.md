@@ -200,6 +200,13 @@ computer's name, online state, or count changes. Dates use ISO 8601 in UTC.
 `stale` is false for every successful service response; the app sets it true
 only when presenting expired cached data.
 
+While any computer has an active coding agent, the response also carries
+`recentAgent` and optionally `moreAgents`: the opaque E2EE agent envelopes
+retained by the push coordinator (the same sealed blobs a Live Activity push
+delivers), so Home Screen widgets can render rich agent rows without an
+active Live Activity. The Worker never sees their plaintext. See
+`docs/PROTOCOL.md` §6 for the exact shape.
+
 ## Authenticated WebSocket relay
 
 ```text

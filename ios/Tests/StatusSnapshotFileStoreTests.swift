@@ -91,6 +91,94 @@ final class StatusSnapshotFileStoreTests: XCTestCase {
         )
     }
 
+    func testSnapshotDecodesRelayAgentEnvelopes() throws {
+        let json = """
+        {
+          "version": 2,
+          "totalRunning": 1,
+          "agentsRunning": 1,
+          "agentsWaiting": 1,
+          "agentsDone": 0,
+          "computers": [],
+          "updatedAt": "2026-07-18T00:00:00Z",
+          "sequence": 42,
+          "stale": false,
+          "recentAgent": {
+            "computerID": "computer-a",
+            "state": "waiting",
+            "updatedAt": "2026-07-18T00:00:01Z",
+            "sealed": "c2VhbGVk"
+          },
+          "moreAgents": [
+            {
+              "computerID": "computer-b",
+              "state": "running",
+              "updatedAt": "2026-07-18T00:00:02Z",
+              "sealed": "b3RoZXI="
+            }
+          ]
+        }
+        """
+
+        let snapshot = try JSONDecoder.pedals.decode(
+            TTYStatusSnapshot.self,
+            from: Data(json.utf8)
+        )
+        XCTAssertEqual(snapshot.recentAgent?.computerID, "computer-a")
+        XCTAssertEqual(snapshot.recentAgent?.state, "waiting")
+        XCTAssertEqual(snapshot.recentAgent?.sealed, "c2VhbGVk")
+        XCTAssertEqual(snapshot.moreAgents?.count, 1)
+        XCTAssertEqual(snapshot.moreAgents?.first?.computerID, "computer-b")
+    }
+
+    func testSnapshotDecodesRelayResponseWithoutAgentEnvelopes() throws {
+        let json = """
+        {
+          "version": 2,
+          "totalRunning": 0,
+          "agentsRunning": 0,
+          "agentsWaiting": 0,
+          "agentsDone": 0,
+          "computers": [],
+          "updatedAt": "2026-07-18T00:00:00Z",
+          "sequence": 7,
+          "stale": false
+        }
+        """
+
+        let snapshot = try JSONDecoder.pedals.decode(
+            TTYStatusSnapshot.self,
+            from: Data(json.utf8)
+        )
+        XCTAssertNil(snapshot.recentAgent)
+        XCTAssertNil(snapshot.moreAgents)
+    }
+
+    func testAgentEnvelopesSurviveTheFileStoreRoundTrip() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = StatusSnapshotFileStore(directory: directory)
+
+        var snapshot = Self.snapshot(sequence: 5)
+        snapshot.recentAgent = .init(
+            computerID: "computer-a",
+            state: "running",
+            updatedAt: Date(timeIntervalSince1970: 1_783_000_000),
+            sealed: "c2VhbGVk"
+        )
+        snapshot.moreAgents = [
+            .init(
+                computerID: "computer-b",
+                state: "waiting",
+                updatedAt: Date(timeIntervalSince1970: 1_782_999_000),
+                sealed: "b3RoZXI="
+            ),
+        ]
+
+        XCTAssertTrue(try store.save(snapshot).didWrite)
+        XCTAssertEqual(try store.load(), snapshot)
+    }
+
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("pedals-status-tests-\(UUID().uuidString)", isDirectory: true)

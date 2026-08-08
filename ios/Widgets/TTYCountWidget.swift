@@ -18,10 +18,11 @@ struct TTYStatusEntry: TimelineEntry, Sendable {
         self.state = state ?? Self.presentationState(for: snapshot)
     }
 
-    /// A Home Screen widget cannot receive the E2EE agent envelope in its
-    /// aggregate status response. When a Live Activity is present, reuse its
-    /// already-delivered content so both system surfaces show the same agent,
-    /// title, detail, and state.
+    /// The aggregate status response carries the same E2EE agent envelopes a
+    /// Live Activity receives, so the widget renders rich agent rows on its
+    /// own. A push that landed after the last timeline refresh can still be
+    /// newer than the snapshot, so when a Live Activity is present keep
+    /// whichever copy is most recent.
     private static func presentationState(
         for snapshot: TTYStatusSnapshot
     ) -> TTYActivityAttributes.ContentState {
@@ -41,6 +42,11 @@ struct TTYStatusEntry: TimelineEntry, Sendable {
                 return lhs < rhs
             }
         guard let recent else { return state }
+
+        let activityUpdatedAt = recent.recentAgentDisplay?.updatedAt
+            ?? recent.recentAgentUpdatedAt ?? .distantPast
+        let snapshotUpdatedAt = state.recentAgentUpdatedAt ?? .distantPast
+        guard activityUpdatedAt >= snapshotUpdatedAt else { return state }
 
         state.recentAgentComputerID = recent.recentAgentComputerID
         state.recentAgentState = recent.recentAgentState
