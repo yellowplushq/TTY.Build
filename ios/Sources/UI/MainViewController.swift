@@ -16,16 +16,20 @@ private enum TerminalKeyboardPagingHintMemory {
 }
 
 enum TerminalFocusPolicy {
+    /// Paging preserves the keyboard as-is: a page change refocuses only when
+    /// the keyboard was up on the page being left, so a dismissed keyboard
+    /// stays dismissed across swipes.
     static func shouldFocus(
         applicationActive: Bool,
         restoreFocus: Bool,
         pageChanged: Bool,
         hasBeenFocused: Bool,
-        isFirstResponder: Bool
+        isFirstResponder: Bool,
+        keyboardVisible: Bool
     ) -> Bool {
         applicationActive
             && !isFirstResponder
-            && (restoreFocus || pageChanged || !hasBeenFocused)
+            && (restoreFocus || !hasBeenFocused || (pageChanged && keyboardVisible))
     }
 }
 
@@ -120,6 +124,11 @@ final class MainViewController: UIViewController {
     /// `manager.computers` inside a sink (@Published emits during willSet, so
     /// the property still holds the old value there).
     private var computerCount = 0
+
+    /// Tracks the on-screen keyboard (system or terminal replacement) via
+    /// keyboard frame notifications; paging reads it to preserve the
+    /// keyboard's open/dismissed state across page changes.
+    private var isKeyboardVisible = false
 
     private var panGesture: UIPanGestureRecognizer!
     /// In-flight pan: target index we are dragging toward.
@@ -382,6 +391,7 @@ final class MainViewController: UIViewController {
         } else {
             return
         }
+        isKeyboardVisible = visible
 
         let safeAreaBottom = view.safeAreaLayoutGuide.layoutFrame.maxY
         let keyboardTop = localKeyboardFrame.map {
@@ -579,7 +589,8 @@ final class MainViewController: UIViewController {
                 restoreFocus: restoreFocus,
                 pageChanged: previousPage != page,
                 hasBeenFocused: terminalPage.hasBeenFocused,
-                isFirstResponder: terminalPage.host.view.isFirstResponder
+                isFirstResponder: terminalPage.host.view.isFirstResponder,
+                keyboardVisible: isKeyboardVisible
             ) {
                 terminalPage.host.view.becomeFirstResponder()
             }
