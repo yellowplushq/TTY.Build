@@ -58,6 +58,11 @@ final class MainViewController: UIViewController {
         let container = UIView()
         let overlay = TerminalStatusOverlay()
         var hasBeenFocused = false
+        /// True once the emulator holds a replay base plus every stdout byte
+        /// since. Pooled hidden pages are kept fed, so paging back to an
+        /// intact stream needs no replay; eviction, background sleep,
+        /// reconnects, and foreign resizes all break the stream.
+        var streamIntact = false
 
         init(host: TerminalHost) {
             self.host = host
@@ -313,6 +318,7 @@ final class MainViewController: UIViewController {
         manager.$phases
             .sink { [weak self] phases in
                 guard let self else { return }
+                reconcileStreamIntegrity(phases: phases)
                 updateOverlays(terminals: manager.terminals, phases: phases)
             }
             .store(in: &cancellables)
@@ -429,6 +435,9 @@ final class MainViewController: UIViewController {
         switch output {
         case .replay(let data):
             page.host.feedReplay(data)
+            // A replay resets and refeeds the emulator, so it now holds the
+            // snapshot base; subsequent stdout keeps it in sync.
+            page.streamIntact = true
             // Sync the daemon-side grid to this device's current geometry
             // (the replay was rendered for whoever attached last).
             if let cols = page.host.cols, let rows = page.host.rows {
@@ -436,6 +445,15 @@ final class MainViewController: UIViewController {
             }
         case .stdout(let data):
             page.host.feed(data)
+        case .remoteResize(let cols, let rows):
+            // The daemon is formatting output for a grid this emulator never
+            // applied (another client's resize). The echoed authoritative
+            // resize is not re-parsable state, so the stream is stale until
+            // the next replay. Our own resizes echo back with the grid the
+            // emulator just applied and are a no-op here.
+            if page.host.cols != cols || page.host.rows != rows {
+                page.streamIntact = false
+            }
         case .hostRestored:
             // The relay dropped client→host frames while the daemon socket
             // was gone. The grid announcement is the one lost frame type that
@@ -443,6 +461,18 @@ final class MainViewController: UIViewController {
             // resize as a no-op.
             if let cols = page.host.cols, let rows = page.host.rows {
                 manager.sendResize(id, cols: cols, rows: rows)
+            }
+        }
+    }
+
+    /// A page's emulator mirrors the daemon stream only while its channel has
+    /// been continuously live: eviction, background sleep, and reconnects all
+    /// drop bytes that only the next replay restores. (`.live` is reached via
+    /// a replay, which re-marks the stream intact through `handle(id:output:)`.)
+    private func reconcileStreamIntegrity(phases: [TerminalID: TerminalChannel.Phase]) {
+        for (id, page) in pages where page.streamIntact {
+            if phases[id] != .live {
+                page.streamIntact = false
             }
         }
     }
@@ -599,7 +629,11 @@ final class MainViewController: UIViewController {
             // repaints output that arrived while the view was hidden.
             if isApplicationActive {
                 terminalPage.host.kickRender()
-                if previousPage != page || restoreFocus {
+                // A page that stayed pooled was fed every byte while hidden;
+                // replaying would reset and reparse the whole scrollback for
+                // nothing. Only a stale stream (slept, reconnected, or
+                // resized by another client) needs a fresh snapshot.
+                if !terminalPage.streamIntact {
                     manager.requestReplay(id)
                 }
             }

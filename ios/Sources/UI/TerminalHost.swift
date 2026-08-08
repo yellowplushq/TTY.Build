@@ -32,8 +32,9 @@ final class TerminalHost {
     private var selectionStartedWithFirstResponder = false
     private var shiftIsArmed = false
     /// False while this terminal is offscreen or the application is inactive.
-    /// The daemon-side PTY keeps running; the next activation receives a full
-    /// replay before live stdout resumes.
+    /// The daemon-side PTY keeps running; hidden pooled pages still parse
+    /// stdout and replays (rendering stays foreground-only), while slept
+    /// channels resync via a full replay on the next activation.
     private(set) var isActive = true
 
     var isTextSelectionActive: Bool { selectionOverlay != nil }
@@ -227,17 +228,19 @@ final class TerminalHost {
         }
     }
 
-    /// Feed live remote `stdout` bytes into the emulator.
+    /// Feed live remote `stdout` bytes into the emulator. Hidden pooled pages
+    /// keep parsing so paging back needs no replay; rendering stays
+    /// foreground-only (`kickRender` self-guards on `isActive`).
     func feed(_ data: Data) {
-        guard isActive else { return }
         session.receive(data)
         kickRender()
     }
 
     /// Feed a `replay` snapshot: reset the emulator first (RIS + erase
     /// scrollback) so a reconnect replay doesn't duplicate earlier output.
+    /// Also applied while hidden — a pooled channel's reconnect replay is
+    /// what keeps the background emulator in sync.
     func feedReplay(_ data: Data) {
-        guard isActive else { return }
         muteInputUntil = Date().addingTimeInterval(0.5)
         session.receive(Data("\u{1b}c\u{1b}[3J".utf8))
         session.receive(data)
@@ -257,9 +260,9 @@ final class TerminalHost {
         session.receive(TerminalSizeReport.enableSequence)
     }
 
-    /// Surface the remote process exit inside the emulator.
+    /// Surface the remote process exit inside the emulator. Also applied
+    /// while hidden so a pooled page shows the exit when paged back to.
     func markExited(code: Int) {
-        guard isActive else { return }
         session.finish(exitCode: UInt32(clamping: max(0, code)), runtimeMilliseconds: 0)
         kickRender()
     }
