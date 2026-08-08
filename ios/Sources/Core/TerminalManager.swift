@@ -31,10 +31,13 @@ struct Terminal: Equatable {
 /// - terminals created elsewhere (other devices / CLI) are appended at the
 ///   end and do NOT steal focus.
 ///
-/// Channels connect lazily on first activation. Only the foreground terminal
-/// keeps a data socket; switching pages closes the previous socket ("asleep")
-/// while the daemon keeps its PTY running. Reactivating reconnects + replays,
-/// so an inactive terminal consumes no stdout/render/resize work on iPhone.
+/// Channels connect lazily on first activation. The most recently activated
+/// terminals keep their data sockets (see `maxLiveChannels`); anything beyond
+/// the pool is closed ("asleep") while the daemon keeps its PTY running.
+/// Hidden pooled terminals keep parsing stdout into their emulators without
+/// rendering, so paging back needs no replay. Reactivating a slept terminal
+/// reconnects + replays, so it consumes no stdout/render/resize work while
+/// asleep.
 @MainActor
 final class TerminalManager {
     @Published private(set) var computers: [ComputerConnection] = []
@@ -50,6 +53,10 @@ final class TerminalManager {
     enum Output {
         case replay(Data)
         case stdout(Data)
+        /// The daemon applied a grid this device never sent (another client
+        /// resized the PTY). Hidden keep-fed emulators can't reconstruct
+        /// output formatted for a foreign grid, so their stream is stale.
+        case remoteResize(cols: UInt16, rows: UInt16)
         /// The daemon's relay socket blipped; frames sent meanwhile were
         /// dropped. Re-announce idempotent per-terminal state (grid size).
         case hostRestored
@@ -277,6 +284,9 @@ final class TerminalManager {
         }
         channel.onStdout = { [weak self] data in
             self?.outputs.send((id: id, output: .stdout(data)))
+        }
+        channel.onResizeEcho = { [weak self] cols, rows in
+            self?.outputs.send((id: id, output: .remoteResize(cols: cols, rows: rows)))
         }
         channel.onHostRestored = { [weak self] in
             self?.outputs.send((id: id, output: .hostRestored))

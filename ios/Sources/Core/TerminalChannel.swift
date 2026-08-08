@@ -41,6 +41,10 @@ final class TerminalChannel {
     var onHostRestored: (() -> Void)?
     var onReplay: ((Data) -> Void)?
     var onStdout: ((Data) -> Void)?
+    /// The daemon echoed an authoritative grid it applied (PROTOCOL.md §5).
+    /// Used to detect another client resizing the PTY behind a hidden
+    /// emulator, which invalidates the keep-fed background stream.
+    var onResizeEcho: ((_ cols: UInt16, _ rows: UInt16) -> Void)?
     /// LRU stamp for the connection pool.
     private(set) var lastActivated = Date()
 
@@ -164,9 +168,12 @@ final class TerminalChannel {
         case .ctl:
             break
         case .resize:
-            // The iPhone owns this renderer's grid. Host resize echoes are for
-            // passive observers such as Watch and are intentionally ignored.
-            break
+            // The iPhone owns this renderer's grid while its page is active,
+            // so echoes never reconfigure the emulator. They still matter as
+            // a signal: a grid we never applied means another client resized
+            // the PTY and the stream no longer matches this emulator.
+            guard let size = try? frame.resizeSize() else { break }
+            onResizeEcho?(size.cols, size.rows)
         case .stdin:
             break // client→host only; ignore if mirrored back
         }
