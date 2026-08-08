@@ -36,6 +36,12 @@ public final class TTYLiveActivityController {
             observe(activity)
         }
 
+        // A previous session may have left a local-request/push-to-start
+        // duplicate pair behind; keep one and end the rest.
+        observationTasks.append(Task {
+            await Self.endDuplicateActivities()
+        })
+
         observationTasks.append(Task { [weak self] in
             for await activity in Activity<TTYActivityAttributes>.activityUpdates {
                 guard !Task.isCancelled else { return }
@@ -103,6 +109,28 @@ public final class TTYLiveActivityController {
         observeState(for: activity)
     }
 
+    /// The aggregate activity has two start paths — a silent local request and
+    /// an APNs push-to-start — that can race before the first activity's
+    /// update token reaches the relay, leaving two identical activities alive.
+    /// Keep the freshest one and end the rest immediately. The ended activities
+    /// transition to a terminal state, which unregisters their update tokens
+    /// from the relay through the normal observation path. Nonisolated so the
+    /// ended activities can cross into ActivityKit's nonisolated `end`.
+    private nonisolated static func endDuplicateActivities() async {
+        let activities = Activity<TTYActivityAttributes>.activities
+        guard activities.count > 1 else { return }
+        var survivor = activities[0]
+        for candidate in activities.dropFirst()
+        where (candidate.content.state.updatedAt, candidate.content.state.sequence)
+            > (survivor.content.state.updatedAt, survivor.content.state.sequence) {
+            survivor = candidate
+        }
+        let survivorID = survivor.id
+        for activity in activities where activity.id != survivorID {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+    }
+
     /// Keeps the aggregate activity current in the foreground. A normal first
     /// appearance is requested locally and silently. Remote push-to-start is
     /// reserved for attention events because Apple requires those starts to
@@ -150,7 +178,11 @@ public final class TTYLiveActivityController {
             )
             observe(activity)
         } else {
-            for activity in activities {
+            // The local request and the APNs push-to-start can race and leave
+            // two aggregate activities alive; collapse back to one before
+            // pushing the new state.
+            await Self.endDuplicateActivities()
+            for activity in Activity<TTYActivityAttributes>.activities {
                 await activity.update(content)
             }
         }
@@ -162,6 +194,7 @@ public final class TTYLiveActivityController {
     public func synchronizeRecentAgent(
         _ info: AgentInfo?, second: AgentInfo? = nil, binding: ComputerBinding?
     ) async {
+        await Self.endDuplicateActivities()
         let activities = Activity<TTYActivityAttributes>.activities
         guard !activities.isEmpty else { return }
         var agentContent: AgentActivity.Content?
