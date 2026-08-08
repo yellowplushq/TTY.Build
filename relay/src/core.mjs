@@ -453,7 +453,7 @@ export async function aggregateClientState(db, clientId, nowSeconds = Math.floor
   };
 }
 
-function isoDate(seconds) {
+export function isoDate(seconds) {
   const safeSeconds = Number.isFinite(seconds) && seconds >= 0 ? Math.floor(seconds) : 0;
   return new Date(safeSeconds * 1000).toISOString().replace(".000Z", "Z");
 }

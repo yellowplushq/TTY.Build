@@ -67,9 +67,30 @@ public struct ComputerTTYStatus: Codable, Hashable, Identifiable, Sendable {
 public struct TTYStatusSnapshot: Codable, Hashable, Sendable {
     public static let currentVersion = 2
 
+    /// One opaque E2EE agent envelope attached to the aggregate status
+    /// response. The relay retains the newest sealed envelope per computer so
+    /// widgets can render rich agent rows without an active Live Activity;
+    /// opening it requires the per-computer activity key from
+    /// `AgentActivityKeyStore`.
+    public struct RecentAgentEnvelope: Codable, Hashable, Sendable {
+        public var computerID: String
+        public var state: String
+        public var updatedAt: Date
+        public var sealed: String
+
+        public init(computerID: String, state: String, updatedAt: Date, sealed: String) {
+            self.computerID = computerID
+            self.state = state
+            self.updatedAt = updatedAt
+            self.sealed = sealed
+        }
+    }
+
     public var version: Int
     public var totalRunning: Int
     public var computers: [ComputerTTYStatus]
+    public var recentAgent: RecentAgentEnvelope?
+    public var moreAgents: [RecentAgentEnvelope]?
     public var updatedAt: Date
     public var sequence: UInt64
     public var stale: Bool
@@ -78,6 +99,8 @@ public struct TTYStatusSnapshot: Codable, Hashable, Sendable {
         version: Int = currentVersion,
         totalRunning: Int,
         computers: [ComputerTTYStatus],
+        recentAgent: RecentAgentEnvelope? = nil,
+        moreAgents: [RecentAgentEnvelope]? = nil,
         updatedAt: Date,
         sequence: UInt64,
         stale: Bool = false
@@ -85,9 +108,31 @@ public struct TTYStatusSnapshot: Codable, Hashable, Sendable {
         self.version = version
         self.totalRunning = max(0, totalRunning)
         self.computers = computers
+        self.recentAgent = recentAgent
+        self.moreAgents = moreAgents
         self.updatedAt = updatedAt
         self.sequence = sequence
         self.stale = stale
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            version: try container.decode(Int.self, forKey: .version),
+            totalRunning: try container.decode(Int.self, forKey: .totalRunning),
+            computers: try container.decode([ComputerTTYStatus].self, forKey: .computers),
+            // Absent in responses from a relay that predates rich widget
+            // content, and in snapshots cached before it existed.
+            recentAgent: try container.decodeIfPresent(
+                RecentAgentEnvelope.self, forKey: .recentAgent
+            ),
+            moreAgents: try container.decodeIfPresent(
+                [RecentAgentEnvelope].self, forKey: .moreAgents
+            ),
+            updatedAt: try container.decode(Date.self, forKey: .updatedAt),
+            sequence: try container.decode(UInt64.self, forKey: .sequence),
+            stale: try container.decode(Bool.self, forKey: .stale)
+        )
     }
 
     public static var empty: Self {

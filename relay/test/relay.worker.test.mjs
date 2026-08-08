@@ -3019,6 +3019,75 @@ describe("agent counts and alerts", () => {
     }
   });
 
+  test("aggregate state carries the retained agent envelopes for widgets", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    expect((await bind(client, computer)).status).toBe(201);
+    const host = (await connect(computer.computerId, computer.hostToken)).peer;
+    const coordinator = env.PUSH_COORDINATOR.getByName(client.clientId);
+    try {
+      // No envelope before any agent activity.
+      const plain = await state(client);
+      expect(plain.recentAgent).toBeUndefined();
+      expect(plain.moreAgents).toBeUndefined();
+
+      expect(
+        (await api("/v2/clients/me/push-endpoints/liveactivity-update", {
+          method: "PUT",
+          token: client.statusToken,
+          body: {
+            token: "bc".repeat(32),
+            environment: "sandbox",
+            activityId: "widget-test",
+          },
+        })).status,
+      ).toBe(200);
+
+      host.ws.send(
+        snapshotWithAgents("Widget Mac", [], { running: 1, waiting: 0, done: 0 }),
+      );
+      await waitFor(async () => ((await state(client)).agentsRunning === 1 ? true : null));
+
+      const updatedAt = Date.now();
+      const delivered = await coordinator.fetch("https://push.internal/activity", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: client.clientId,
+          computerId: computer.computerId,
+          activity: {
+            eventID: "44444444-4444-4444-8444-444444444444",
+            state: "running",
+            updatedAt,
+            alert: false,
+            sealed: btoa("widget-ciphertext"),
+          },
+        }),
+      });
+      expect(delivered.status).toBe(202);
+
+      const rich = await state(client);
+      expect(rich.recentAgent).toEqual({
+        computerID: computer.computerId,
+        state: "running",
+        updatedAt: new Date(Math.floor(updatedAt / 1000) * 1000)
+          .toISOString()
+          .replace(".000Z", "Z"),
+        sealed: btoa("widget-ciphertext"),
+      });
+      expect(rich.moreAgents).toBeUndefined();
+
+      // Once the counts return to zero the envelope is no longer attached.
+      host.ws.send(
+        snapshotWithAgents("Widget Mac", [], { running: 0, waiting: 0, done: 0 }),
+      );
+      await waitFor(async () => ((await state(client)).agentsRunning === 0 ? true : null));
+      const drained = await state(client);
+      expect(drained.recentAgent).toBeUndefined();
+    } finally {
+      closeAll(host);
+    }
+  });
+
   test("resuming a finished agent makes the silent working update high priority", async () => {
     const client = await createClient();
     const computer = await createComputer();

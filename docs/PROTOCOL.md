@@ -494,12 +494,33 @@ GET /v2/clients/me/state
   ],
   "updatedAt": "2026-07-18T00:00:00.000Z",
   "sequence": 42,
-  "stale": false
+  "stale": false,
+  "recentAgent": {
+    "computerID": "...",
+    "state": "waiting",
+    "updatedAt": "2026-07-18T00:00:00Z",
+    "sealed": "<base64 E2EE envelope>"
+  },
+  "moreAgents": [
+    {
+      "computerID": "...",
+      "state": "running",
+      "updatedAt": "2026-07-18T00:00:00Z",
+      "sealed": "<base64 E2EE envelope>"
+    }
+  ]
 }
 ```
 
 Offline computers contribute zero to `totalRunning` and to the agent counts;
 their last reported values are never presented as current.
+
+`recentAgent` and `moreAgents` are the same opaque E2EE envelopes the Live
+Activity push carries (see §6.1), retained by the client's push coordinator so
+Home Screen widgets can render rich agent rows without an active Live
+Activity. They are attached only while at least one computer has an active
+agent, and omitted otherwise; the Worker never sees their plaintext. Clients
+must tolerate their absence (older relays never send them).
 
 WidgetKit and ActivityKit tokens are registered with:
 

@@ -17,6 +17,7 @@ import {
   enforceRateLimit,
   isId,
   isPushSurface,
+  isoDate,
   json,
   notifyPushCoordinator,
   randomId,
@@ -796,7 +797,52 @@ async function deleteComputer(request, env, ctx, computerId) {
 
 async function getClientState(request, env) {
   const client = await requireStatusClient(request, env);
-  return json(await aggregateClientState(env.DB, client.id));
+  const state = await aggregateClientState(env.DB, client.id);
+  const { recentAgent, moreAgents } = await recentAgentEnvelopes(env, client.id);
+  if (recentAgent) state.recentAgent = recentAgent;
+  if (moreAgents.length > 0) state.moreAgents = moreAgents;
+  return json(state);
+}
+
+/// Best-effort E2EE agent envelopes retained by the client's push
+/// coordinator. Widgets decrypt them with the per-computer activity key; the
+/// Worker only relays the opaque sealed blobs. The status payload stays
+/// useful without them, so any failure simply omits the rich fields.
+async function recentAgentEnvelopes(env, clientId) {
+  const empty = { recentAgent: null, moreAgents: [] };
+  if (!env.PUSH_COORDINATOR) return empty;
+  let body;
+  try {
+    const response = await env.PUSH_COORDINATOR.getByName(clientId).fetch(
+      "https://push-coordinator.internal/agent-activities",
+      { method: "POST", body: JSON.stringify({ clientId }) },
+    );
+    if (!response.ok) return empty;
+    body = await response.json();
+  } catch {
+    return empty;
+  }
+  const recentAgent = publicAgentEnvelope(body?.recentAgent);
+  const moreAgents = Array.isArray(body?.moreAgents)
+    ? body.moreAgents.map(publicAgentEnvelope).filter(Boolean).slice(0, 2)
+    : [];
+  return { recentAgent, moreAgents };
+}
+
+function publicAgentEnvelope(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const { computerID, state, updatedAt, sealed } = entry;
+  if (
+    !isId(computerID) ||
+    !["running", "waiting", "error", "done"].includes(state) ||
+    !Number.isSafeInteger(updatedAt) || updatedAt < 0 ||
+    typeof sealed !== "string" ||
+    sealed.length > 2_700 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(sealed)
+  ) {
+    return null;
+  }
+  return { computerID, state, updatedAt: isoDate(updatedAt / 1000), sealed };
 }
 
 function pushActivityKey(url, body = undefined) {

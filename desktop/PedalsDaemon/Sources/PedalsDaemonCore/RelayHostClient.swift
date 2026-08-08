@@ -403,7 +403,12 @@ public final class RelayHostClient: @unchecked Sendable {
         }
     }
 
-    static let doneActivityLifetime: TimeInterval = 75
+    /// A finished agent keeps counting toward the server-visible aggregate
+    /// for ten minutes: long enough that the Live Activity and widgets can
+    /// present the completion, short enough that a forgotten completion does
+    /// not occupy them forever. The user can always end it sooner with the
+    /// dismiss action, which removes the record entirely.
+    static let doneActivityLifetime: TimeInterval = 600
     static let runningActivityUpdateFloor: TimeInterval = 10
 
     static func agentCounts(
