@@ -17,40 +17,53 @@ ZIP_NAME="Pedals-macOS.zip"
 CHECKSUM_NAME="$ZIP_NAME.sha256"
 APP_NAME="Pedals.app"
 
+# Color only when talking to an interactive ANSI terminal.
+if [[ -t 1 && "${TERM:-}" != "dumb" && -z "${NO_COLOR:-}" ]]; then
+  bold=$'\033[1m'
+  green=$'\033[32m'
+  red=$'\033[31m'
+  reset=$'\033[0m'
+else
+  bold="" green="" red="" reset=""
+fi
+
+step() {
+  printf '%s==>%s %s%s%s\n' "$green" "$reset" "$bold" "$*" "$reset"
+}
+
 fail() {
-  echo "pedals-install: $*" >&2
+  printf '%spedals-install:%s %s\n' "$red" "$reset" "$*" >&2
   exit 1
 }
 
-matrix_intro() {
-  # A two-second nod to the Matrix. Skipped unless stderr is an interactive
-  # ANSI terminal, so piping and CI logs stay clean.
-  [[ -t 2 && "${TERM:-}" != "dumb" && -z "${NO_COLOR:-}" ]] || return 0
-  local chars=(ｱ ｶ ｻ ﾀ ﾅ ﾊ ﾏ ﾔ ﾗ ﾜ ｦ ｰ 0 1 Z)
-  local rows=8 cols=38 f i c line
-  printf '\0337\033[?25l' >&2
-  for ((f = 0; f < 12; f++)); do
-    printf '\0338' >&2
-    for ((i = 0; i < rows; i++)); do
-      line=""
-      for ((c = 0; c < cols; c++)); do
-        line+="${chars[RANDOM % ${#chars[@]}]} "
-      done
-      printf '\033[32m%s\033[0m\n' "$line" >&2
-    done
-    sleep 0.06
-  done
-  printf '\0338\033[J\033[?25h' >&2
-  printf '\033[32;1m  P E D A L S\033[0m  \033[32mfollow the white rabbit back to your terminal.\033[0m\n' >&2
+app_version() {
+  # Prints "1.2.3 (45)" for the app bundle at $1, or nothing if unreadable.
+  local plist="$1/Contents/Info.plist" short build
+  short="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null || true)"
+  [[ -n "$short" ]] || return 0
+  build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist" 2>/dev/null || true)"
+  if [[ -n "$build" && "$build" != "$short" ]]; then
+    printf '%s (%s)' "$short" "$build"
+  else
+    printf '%s' "$short"
+  fi
+}
+
+download() {
+  # $1=url $2=destination; a progress bar when stderr is a terminal, silent
+  # otherwise so piped and CI runs stay clean.
+  if [[ -t 2 ]]; then
+    curl -fL -# "$1" -o "$2"
+  else
+    curl -fsSL "$1" -o "$2"
+  fi
 }
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "this installer supports macOS only"
 
-for command in curl shasum ditto; do
-  command -v "$command" >/dev/null 2>&1 || fail "required command is unavailable: $command"
+for cmd in curl shasum ditto; do
+  command -v "$cmd" >/dev/null 2>&1 || fail "required command is unavailable: $cmd"
 done
-
-matrix_intro
 
 if [[ -n "${PEDALS_INSTALL_DIR:-}" ]]; then
   install_dir="$PEDALS_INSTALL_DIR"
@@ -62,18 +75,17 @@ else
   mkdir -p "$install_dir"
 fi
 
+installed_version=""
 if [[ -d "$install_dir/$APP_NAME" ]]; then
-  installed_version="$(/usr/libexec/PlistBuddy \
-    -c 'Print :CFBundleShortVersionString' \
-    "$install_dir/$APP_NAME/Contents/Info.plist" 2>/dev/null || true)"
-  echo "Pedals ${installed_version:-unknown version} is already installed in $install_dir."
+  installed_version="$(app_version "$install_dir/$APP_NAME")"
+  step "Pedals ${installed_version:-unknown version} is already installed in $install_dir"
   # stdin may be the script itself (curl | bash), so prompt via /dev/tty and
   # default to updating when no terminal is available to answer.
   answer=""
   printf 'Press return to update to the latest release, or q to quit: '
   read -r answer 2>/dev/null < /dev/tty || answer=""
   case "$answer" in
-    q|Q|n|N|quit|exit)
+    q | Q | n | N | quit | exit)
       echo "Nothing changed."
       exit 0
       ;;
@@ -81,30 +93,67 @@ if [[ -d "$install_dir/$APP_NAME" ]]; then
 fi
 
 workdir="$(mktemp -d -t pedals-install)"
+staging="$install_dir/.$APP_NAME.installing"
 cleanup() {
-  rm -rf "$workdir"
+  rm -rf "$workdir" "$staging"
 }
 trap cleanup EXIT
 
-echo "Downloading the latest Pedals release..."
-curl -fsSL "$BASE_URL/download/macos.zip" -o "$workdir/$ZIP_NAME" \
+step "Downloading the latest Pedals release"
+download "$BASE_URL/download/macos.zip" "$workdir/$ZIP_NAME" \
   || fail "the release download failed"
 curl -fsSL "$BASE_URL/download/macos.zip.sha256" -o "$workdir/$CHECKSUM_NAME" \
   || fail "the checksum download failed"
 
-echo "Verifying the archive checksum..."
+step "Verifying the archive checksum"
 (cd "$workdir" && shasum -a 256 -c "$CHECKSUM_NAME" >/dev/null) \
   || fail "checksum verification failed; nothing was installed"
 
 ditto -xk "$workdir/$ZIP_NAME" "$workdir/extract"
 [[ -d "$workdir/extract/$APP_NAME" ]] || fail "the archive did not contain $APP_NAME"
 
-rm -rf "$install_dir/$APP_NAME"
-ditto "$workdir/extract/$APP_NAME" "$install_dir/$APP_NAME"
+new_version="$(app_version "$workdir/extract/$APP_NAME")"
+if [[ -n "$new_version" && "$new_version" == "$installed_version" ]]; then
+  step "Reinstalling Pedals $new_version (already the latest release)"
+elif [[ -n "$new_version" ]]; then
+  step "Installing Pedals $new_version to $install_dir"
+else
+  step "Installing Pedals to $install_dir"
+fi
 
-echo "Installed $install_dir/$APP_NAME"
+# Stage next to the destination, then swap, so a failed copy can never leave
+# a half-written Pedals.app behind.
+rm -rf "$staging"
+ditto "$workdir/extract/$APP_NAME" "$staging"
+rm -rf "${install_dir:?}/${APP_NAME:?}"
+mv "$staging" "$install_dir/$APP_NAME"
+
+step "Installed $install_dir/$APP_NAME"
+
 if pgrep -x Pedals >/dev/null 2>&1; then
-  echo "Pedals is currently running; quit and reopen it to use the new version."
+  # Never quit a running app without an explicit yes from a real terminal.
+  answer=""
+  printf 'Pedals is running. Press return to relaunch it now, or q to keep the current session: '
+  read -r answer 2>/dev/null < /dev/tty || answer="q"
+  case "$answer" in
+    q | Q | n | N)
+      echo "Quit and reopen Pedals whenever you're ready to use the new version."
+      ;;
+    *)
+      osascript -e 'tell application "Pedals" to quit' >/dev/null 2>&1 || true
+      tries=0
+      while pgrep -x Pedals >/dev/null 2>&1 && (( tries < 20 )); do
+        sleep 0.5
+        tries=$(( tries + 1 ))
+      done
+      if pgrep -x Pedals >/dev/null 2>&1; then
+        echo "Pedals didn't quit; close it and reopen to finish the update."
+      else
+        open "$install_dir/$APP_NAME"
+        step "Relaunched Pedals"
+      fi
+      ;;
+  esac
 else
   open "$install_dir/$APP_NAME"
 fi
