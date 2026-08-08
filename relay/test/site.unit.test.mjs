@@ -135,6 +135,10 @@ test("the homepage offers the curl installer with a self-hosted copy button", as
 
   const headers = await readFile(new URL("../public/_headers", import.meta.url), "utf8");
   assert.match(headers, /script-src 'self'/);
+
+  const styles = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
+  assert.match(styles, /\.install-command code \{[^}]*min-width: 0/);
+  assert.match(styles, /\.install-command code \{[^}]*overflow-x: auto/);
 });
 
 test("the curl installer downloads the zip release and verifies its checksum", async () => {

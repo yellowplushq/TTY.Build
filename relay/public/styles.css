@@ -171,11 +171,15 @@ h1 span { color: #737373; }
 .install-command > span { color: var(--faint); }
 
 .install-command code {
-  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
   color: rgba(255, 255, 255, 0.78);
-  text-overflow: ellipsis;
   white-space: nowrap;
+  scrollbar-width: none;
 }
+
+.install-command code::-webkit-scrollbar { display: none; }
 
 .install-copy {
   flex: none;
@@ -461,6 +465,7 @@ h1 span { color: #737373; }
   h1 { font-size: clamp(48px, 15.2vw, 68px); }
   .lede { margin-top: 23px; font-size: 15px; }
   .actions { display: grid; justify-content: stretch; }
+  .install-command { display: flex; width: 100%; font-size: 12px; }
   .button { justify-content: flex-start; }
   .button-secondary .arrow { margin-left: auto; }
   .product-stage { min-height: 330px; }
