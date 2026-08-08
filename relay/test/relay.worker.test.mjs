@@ -1444,7 +1444,7 @@ describe("Pedals v2 Worker API", () => {
       expect(rotated.token).toBe("6b".repeat(32));
       expect(Number(rotated.lastSequence)).toBe(-1);
       expect(Number(rotated.lastTotal)).toBe(0);
-      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+      await drainCoordinator(coordinator);
     } finally {
       closeAll(host);
     }
@@ -1605,7 +1605,7 @@ describe("Pedals v2 Worker API", () => {
       })).status,
     ).toBe(200);
 
-    await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+    await drainCoordinator(coordinator);
     expect(
       await env.DB
         .prepare(
@@ -1644,7 +1644,7 @@ describe("Pedals v2 Worker API", () => {
             ? snapshot
             : null;
         });
-        await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+        await drainCoordinator(coordinator);
 
         const registered = await api(
           "/v2/clients/me/push-endpoints/liveactivity-update",
@@ -1659,7 +1659,7 @@ describe("Pedals v2 Worker API", () => {
           },
         );
         expect(registered.status).toBe(200);
-        await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+        await drainCoordinator(coordinator);
         expect(
           await env.DB
             .prepare(
@@ -1681,7 +1681,7 @@ describe("Pedals v2 Worker API", () => {
             ? snapshot
             : null;
         });
-        await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+        await drainCoordinator(coordinator);
         expect(
           await env.DB
             .prepare(
@@ -1741,18 +1741,23 @@ describe("Pedals v2 Worker API", () => {
     ).toBe(200);
 
     const before = Date.now();
-    await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
-    const endpoint = await env.DB
-      .prepare(
-        `SELECT retry_not_before AS retryNotBefore,
-                failure_count AS failureCount,
-                last_failure_reason AS lastFailureReason
-           FROM push_endpoints
-          WHERE client_id = ?1 AND surface = 'ios-widget'`,
-      )
-      .bind(client.clientId)
-      .first();
-    expect(Number(endpoint.failureCount)).toBe(1);
+    // The deferral lands in D1 when the coordinator's alarm (which workerd
+    // fires for real) processes the registration. Wait for that observable
+    // state instead of running the alarm manually: the retry stays queued
+    // with a future alarm, so draining or re-running it would retry early.
+    const endpoint = await waitFor(async () => {
+      const row = await env.DB
+        .prepare(
+          `SELECT retry_not_before AS retryNotBefore,
+                  failure_count AS failureCount,
+                  last_failure_reason AS lastFailureReason
+             FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'ios-widget'`,
+        )
+        .bind(client.clientId)
+        .first();
+      return Number(row?.failureCount) === 1 ? row : null;
+    });
     expect(endpoint.lastFailureReason).toBe("TooManyRequests");
     expect(Number(endpoint.retryNotBefore) * 1000).toBeGreaterThanOrEqual(
       before + 3_599_000,
@@ -1777,18 +1782,21 @@ describe("Pedals v2 Worker API", () => {
     ).toBe(200);
 
     const before = Date.now();
-    await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
-    const endpoint = await env.DB
-      .prepare(
-        `SELECT retry_not_before AS retryNotBefore,
-                failure_count AS failureCount,
-                last_failure_reason AS lastFailureReason
-           FROM push_endpoints
-          WHERE client_id = ?1 AND surface = 'watch-widget'`,
-      )
-      .bind(client.clientId)
-      .first();
-    expect(Number(endpoint.failureCount)).toBe(1);
+    // Same as the 429 test above: wait for the quarantine to land in D1 via
+    // the real alarm; the endpoint keeps a far-future retry alarm.
+    const endpoint = await waitFor(async () => {
+      const row = await env.DB
+        .prepare(
+          `SELECT retry_not_before AS retryNotBefore,
+                  failure_count AS failureCount,
+                  last_failure_reason AS lastFailureReason
+             FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'watch-widget'`,
+        )
+        .bind(client.clientId)
+        .first();
+      return Number(row?.failureCount) === 1 ? row : null;
+    });
     expect(endpoint.lastFailureReason).toBe("BadTopic");
     expect(Number(endpoint.retryNotBefore) * 1000).toBeGreaterThanOrEqual(
       before + 24 * 60 * 60_000 - 1_000,
@@ -2920,7 +2928,7 @@ describe("agent counts and alerts", () => {
           ? true
           : null;
       });
-      await waitFor(async () => (await runDurableObjectAlarm(coordinator)) || null);
+      await drainCoordinator(coordinator);
       const endedUpdate = await env.DB
         .prepare(
           `SELECT id FROM push_endpoints
@@ -3031,6 +3039,17 @@ describe("agent counts and alerts", () => {
       expect(plain.recentAgent).toBeUndefined();
       expect(plain.moreAgents).toBeUndefined();
 
+      // Registering an update endpoint while nothing is active races the
+      // coordinator's forced delivery: a successful push with totalActive = 0
+      // is an "end" that deletes the fresh endpoint, after which /activity
+      // takes the no-endpoints early return and never caches the envelope.
+      // Activate an agent first so the endpoint survives its own registration
+      // invalidation.
+      host.ws.send(
+        snapshotWithAgents("Widget Mac", [], { running: 1, waiting: 0, done: 0 }),
+      );
+      await waitFor(async () => ((await state(client)).agentsRunning === 1 ? true : null));
+
       expect(
         (await api("/v2/clients/me/push-endpoints/liveactivity-update", {
           method: "PUT",
@@ -3042,11 +3061,6 @@ describe("agent counts and alerts", () => {
           },
         })).status,
       ).toBe(200);
-
-      host.ws.send(
-        snapshotWithAgents("Widget Mac", [], { running: 1, waiting: 0, done: 0 }),
-      );
-      await waitFor(async () => ((await state(client)).agentsRunning === 1 ? true : null));
 
       const updatedAt = Date.now();
       const delivered = await coordinator.fetch("https://push.internal/activity", {
@@ -3065,7 +3079,10 @@ describe("agent counts and alerts", () => {
       });
       expect(delivered.status).toBe(202);
 
-      const rich = await state(client);
+      const rich = await waitFor(async () => {
+        const snapshot = await state(client);
+        return snapshot.recentAgent ? snapshot : null;
+      });
       expect(rich.recentAgent).toEqual({
         computerID: computer.computerId,
         state: "running",
