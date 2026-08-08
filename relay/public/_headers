@@ -1,12 +1,15 @@
 /*
   Cache-Control: public, max-age=300
-  Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
 
 /styles.css
+  Cache-Control: public, max-age=3600
+
+/site.js
   Cache-Control: public, max-age=3600
 
 /og.png

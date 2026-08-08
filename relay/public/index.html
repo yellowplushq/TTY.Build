@@ -13,6 +13,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/styles.css">
+    <script src="/site.js" defer></script>
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://pedals.air.build/">
     <meta property="og:site_name" content="Pedals">
@@ -57,7 +58,11 @@
               <span class="arrow" aria-hidden="true">↘</span>
             </a>
           </div>
-          <p class="install-command"><code>curl -fsSL https://pedals.air.build/install.sh | bash</code></p>
+          <div class="install-command">
+            <span aria-hidden="true">$</span>
+            <code id="install-command-text">curl -fsSL https://pedals.air.build/install.sh | bash</code>
+            <button class="install-copy" type="button" data-copy="install-command-text">Copy</button>
+          </div>
         </section>
 
         <section class="product-stage" aria-label="Pedals terminal connection preview">
