@@ -38,16 +38,43 @@ release assets:
 
 - `Pedals-macOS.dmg`
 - `Pedals-macOS.dmg.sha256`
+- `Pedals-macOS.zip`
+- `Pedals-macOS.zip.sha256`
 - `appcast.xml`
 
-The website's `/download/macos` route redirects to that exact asset on the
-latest GitHub release. Set the Worker's `DESKTOP_RELEASE_REPOSITORY` variable to
-the repository slug, for example `owner/pedals`, before deploying the website.
-The stable `/appcast.xml` route redirects to the signed feed from the same
-release. Pedals checks it on launch and every 24 hours, and users can also run
-`Check for Updates…` from the menu or Settings. Both the feed and the update
-archive are verified with the app's pinned Ed25519 public key before an update
-is installed.
+The zip is packaged after the signed update feed is generated so Sparkle only
+ever sees the DMG; the app inside the zip carries the stapled notarization
+ticket as well.
+
+The website's `/download/macos` route redirects to the DMG on the latest
+GitHub release, while `/download/macos.zip` and `/download/macos.zip.sha256`
+redirect to the zip archive and its checksum. Set the Worker's
+`DESKTOP_RELEASE_REPOSITORY` variable to the repository slug, for example
+`owner/pedals`, before deploying the website. The stable `/appcast.xml` route
+redirects to the signed feed from the same release. Pedals checks it on launch
+and every 24 hours, and users can also run `Check for Updates…` from the menu
+or Settings. Both the feed and the update archive are verified with the app's
+pinned Ed25519 public key before an update is installed.
+
+## Curl installation
+
+The website serves `relay/public/install.sh` at `/install.sh`, so users can
+install or reinstall the desktop app with one command:
+
+```bash
+curl -fsSL https://pedals.air.build/install.sh | bash
+```
+
+The script downloads `Pedals-macOS.zip` through the stable redirect, verifies
+it against the release's SHA-256 checksum before installing anything, copies
+`Pedals.app` into `/Applications` (falling back to `~/Applications` without
+ever using sudo), and launches it. Interactive terminals get a brief
+Matrix-style intro (skipped when output is not a TTY, `TERM=dumb`, or
+`NO_COLOR` is set), and when an existing install is detected the script shows
+its version and offers to update or quit, reading the answer from `/dev/tty`
+so the prompt still works through `curl | bash`. Keep the script short,
+auditable, and compatible with the bash 3.2 that ships with macOS; it is part
+of the trust boundary of the release.
 
 ## Build locally
 
@@ -59,6 +86,7 @@ PEDALS_DESKTOP_BUILD_NUMBER=1 \
 ./scripts/build-desktop-release.sh
 
 ./scripts/package-desktop-dmg.sh
+./scripts/package-desktop-zip.sh
 ```
 
 Outputs are written below `.artifacts/desktop-release/` and must not be

@@ -1,6 +1,13 @@
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const MACOS_ASSET = "Pedals-macOS.dmg";
+const MACOS_ZIP_ASSET = "Pedals-macOS.zip";
 const APPCAST_ASSET = "appcast.xml";
+const DESKTOP_ASSETS = new Map([
+  ["/download/macos", MACOS_ASSET],
+  ["/download/macos.zip", MACOS_ZIP_ASSET],
+  ["/download/macos.zip.sha256", `${MACOS_ZIP_ASSET}.sha256`],
+  ["/appcast.xml", APPCAST_ASSET],
+]);
 
 function redirect(location, method) {
   return new Response(null, {
@@ -16,7 +23,8 @@ function redirect(location, method) {
 export function handleDesktopDownload(request, env, url) {
   if (!["GET", "HEAD"].includes(request.method)) return null;
   if (url.pathname === "/download") return redirect("/download/macos", request.method);
-  if (!["/download/macos", "/appcast.xml"].includes(url.pathname)) return null;
+  const asset = DESKTOP_ASSETS.get(url.pathname);
+  if (!asset) return null;
 
   const repository = String(env.DESKTOP_RELEASE_REPOSITORY ?? "").trim();
   if (!REPOSITORY.test(repository)) {
@@ -36,9 +44,7 @@ export function handleDesktopDownload(request, env, url) {
   }
 
   return redirect(
-    `https://github.com/${repository}/releases/latest/download/${
-      url.pathname === "/appcast.xml" ? APPCAST_ASSET : MACOS_ASSET
-    }`,
+    `https://github.com/${repository}/releases/latest/download/${asset}`,
     request.method,
   );
 }
@@ -64,4 +70,4 @@ export async function handleWebsiteAsset(request, env) {
   });
 }
 
-export { APPCAST_ASSET, MACOS_ASSET };
+export { APPCAST_ASSET, MACOS_ASSET, MACOS_ZIP_ASSET };

@@ -154,6 +154,17 @@ h1 span { color: #737373; }
   margin-top: 34px;
 }
 
+.install-command {
+  margin-top: 18px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.72);
+  user-select: all;
+}
+
 .button {
   min-height: 62px;
   display: flex;

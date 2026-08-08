@@ -190,19 +190,35 @@ jobs:
           grep -q 'sparkle:edSignature=' "$PEDALS_DESKTOP_OUTPUT_DIR/appcast.xml"
           grep -q 'sparkle-signatures:' "$PEDALS_DESKTOP_OUTPUT_DIR/appcast.xml"
 
+      - name: Package zip archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals.app"
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          ./scripts/package-desktop-zip.sh
+          cd "$PEDALS_DESKTOP_OUTPUT_DIR"
+          shasum -a 256 Pedals-macOS.zip > Pedals-macOS.zip.sha256
+
       - name: Publish GitHub release
         shell: bash
         run: |
           set -euo pipefail
           dmg="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals-macOS.dmg"
           checksum="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals-macOS.dmg.sha256"
+          zip="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals-macOS.zip"
+          zip_checksum="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals-macOS.zip.sha256"
           appcast="$PEDALS_DESKTOP_OUTPUT_DIR/appcast.xml"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$dmg" "$checksum" "$appcast" --clobber
+            gh release upload "$GITHUB_REF_NAME" \
+              "$dmg" "$checksum" "$zip" "$zip_checksum" "$appcast" --clobber
           else
             gh release create "$GITHUB_REF_NAME" \
               "$dmg" \
               "$checksum" \
+              "$zip" \
+              "$zip_checksum" \
               "$appcast" \
               --verify-tag \
               --title "Pedals $PEDALS_DESKTOP_VERSION" \

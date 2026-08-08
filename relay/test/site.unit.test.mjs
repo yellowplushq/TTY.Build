@@ -6,6 +6,7 @@ import {
   handleDesktopDownload,
   handleWebsiteAsset,
   MACOS_ASSET,
+  MACOS_ZIP_ASSET,
 } from "../src/site.mjs";
 
 function request(path, options = {}) {
@@ -42,6 +43,26 @@ test("the stable appcast path redirects to the latest signed update feed", () =>
     `https://github.com/yellowplushq/pedals/releases/latest/download/${APPCAST_ASSET}`,
   );
   assert.equal(response.headers.get("content-length"), "0");
+});
+
+test("the zip download paths redirect to the latest release archive and checksum", () => {
+  for (const [path, asset] of [
+    ["/download/macos.zip", MACOS_ZIP_ASSET],
+    ["/download/macos.zip.sha256", `${MACOS_ZIP_ASSET}.sha256`],
+  ]) {
+    const req = request(path);
+    const response = handleDesktopDownload(
+      req,
+      { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/pedals" },
+      new URL(req.url),
+    );
+
+    assert.equal(response.status, 302);
+    assert.equal(
+      response.headers.get("location"),
+      `https://github.com/yellowplushq/pedals/releases/latest/download/${asset}`,
+    );
+  }
 });
 
 test("the short download path redirects to the canonical path", () => {
@@ -101,6 +122,16 @@ test("the one-screen homepage exposes the product promise and download CTA", asy
   assert.match(html, /Terminal bytes and encryption keys never live on the service/);
   assert.match(html, /href="\/privacy\/"/);
   assert.match(html, /href="\/support\/"/);
+});
+
+test("the curl installer downloads the zip release and verifies its checksum", async () => {
+  const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
+  assert.match(script, /^#!\/usr\/bin\/env bash/);
+  assert.match(script, /\/download\/macos\.zip/);
+  assert.match(script, /\/download\/macos\.zip\.sha256/);
+  assert.match(script, /shasum -a 256 -c/);
+  assert.match(script, /read -r answer .*\/dev\/tty/);
+  assert.doesNotMatch(script, /sudo/);
 });
 
 test("support and privacy pages expose release-ready public information", async () => {
