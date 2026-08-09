@@ -248,6 +248,22 @@ final class UpdaterModel: ObservableObject {
     func installUpdate() async -> RemoteManagement.UpdateStatus {
         let status = await checkUpdateInformation()
         guard status.updateAvailable else { return status }
+        // The probe's continuation resumes inside `didFinishUpdateCycleFor`,
+        // where the update session has not fully torn down yet: Sparkle still
+        // reports `sessionInProgress` and would ignore a `checkForUpdates()`
+        // made right now. Wait briefly for the session to end first.
+        var attempts = 0
+        while updater.sessionInProgress, attempts < 40 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            attempts += 1
+        }
+        guard !updater.sessionInProgress else {
+            return RemoteManagement.UpdateStatus(
+                current: status.current, latest: status.latest,
+                updateAvailable: true,
+                detail: "the previous update session has not finished yet"
+            )
+        }
         userDriver.beginSilentInstall()
         updater.checkForUpdates()
         return RemoteManagement.UpdateStatus(
