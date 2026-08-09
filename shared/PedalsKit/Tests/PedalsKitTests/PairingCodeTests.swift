@@ -20,13 +20,13 @@ final class PairingCodeTests: XCTestCase {
         let clientPublicKey = try PairingKeyAgreement.publicKey(for: clientPrivateKey)
         let hostPublicKey = try PairingKeyAgreement.publicKey(for: hostPrivateKey)
         let secret = Data((0 ..< 32).map(UInt8.init))
-        let sessionID = "0123456789abcdef0123456789abcdef"
+        let claimID = "0123456789abcdef0123456789abcdef"
 
         let envelope = try PairingKeyAgreement.seal(
             secret: secret,
             hostPrivateKey: hostPrivateKey,
             clientPublicKey: clientPublicKey,
-            sessionID: sessionID
+            claimID: claimID
         )
         XCTAssertNotEqual(envelope, secret)
         XCTAssertEqual(
@@ -34,7 +34,7 @@ final class PairingCodeTests: XCTestCase {
                 envelope: envelope,
                 clientPrivateKey: clientPrivateKey,
                 hostPublicKey: hostPublicKey,
-                sessionID: sessionID
+                claimID: claimID
             ),
             secret
         )
@@ -43,7 +43,7 @@ final class PairingCodeTests: XCTestCase {
                 envelope: envelope,
                 clientPrivateKey: clientPrivateKey,
                 hostPublicKey: hostPublicKey,
-                sessionID: String(repeating: "f", count: 32)
+                claimID: String(repeating: "f", count: 32)
             )
         )
     }

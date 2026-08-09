@@ -63,7 +63,7 @@ public final class Daemon: @unchecked Sendable {
     private var identity: HostIdentity
     private let serviceActions: ServiceActions
     private let pairingLock = NSLock()
-    private var pairingSession: HostPairingSession?
+    private var pairingSession: HostPairingCode?
     private var pairingTask: Task<Void, Never>?
 
     /// Loads (or registers) the v2 host identity and wires everything up.
@@ -286,7 +286,7 @@ public final class Daemon: @unchecked Sendable {
         }
     }
 
-    private func createPairingSession(rotatingIdentity reset: Bool) throws -> HostPairingSession {
+    private func createPairingSession(rotatingIdentity reset: Bool) throws -> HostPairingCode {
         cancelCurrentPairingSession(revoke: true)
         identityLock.lock()
         defer { identityLock.unlock() }
@@ -310,24 +310,26 @@ public final class Daemon: @unchecked Sendable {
             throw HostIdentityResetError.resetPending(pending.phase)
         }
 
-        let pairing = try serviceActions.createPairingSession(identity)
+        let pairing = try serviceActions.createPairingCode(identity)
         pairingLock.withLock { pairingSession = pairing }
         startPairingMonitor(pairing: pairing, identity: identity)
         return pairing
     }
 
-    private func startPairingMonitor(pairing: HostPairingSession, identity: HostIdentity) {
+    private func startPairingMonitor(pairing: HostPairingCode, identity: HostIdentity) {
         let actions = serviceActions
         let task = Task.detached { [weak self] in
             while !Task.isCancelled,
                   Int64(Date().timeIntervalSince1970) < pairing.expiresAt
             {
                 do {
-                    switch try actions.pairingSessionStatus(pairing, identity) {
+                    switch try actions.pairingCodeStatus(pairing, identity) {
                     case .waiting:
                         try await Task.sleep(for: .milliseconds(400))
-                    case .claimed(let clientPublicKey):
-                        try actions.completePairingSession(pairing, clientPublicKey, identity)
+                    case .claimed(let claimID, let clientPublicKey):
+                        try actions.completePairingClaim(
+                            claimID, clientPublicKey, pairing.privateKey, identity
+                        )
                         return
                     case .completed:
                         return
@@ -338,7 +340,7 @@ public final class Daemon: @unchecked Sendable {
                 }
             }
             self?.pairingLock.withLock {
-                if self?.pairingSession?.sessionID == pairing.sessionID {
+                if self?.pairingSession?.codeID == pairing.codeID {
                     self?.pairingSession = nil
                     self?.pairingTask = nil
                 }
@@ -348,7 +350,7 @@ public final class Daemon: @unchecked Sendable {
     }
 
     private func cancelCurrentPairingSession(revoke: Bool) {
-        let current: HostPairingSession? = pairingLock.withLock {
+        let current: HostPairingCode? = pairingLock.withLock {
             pairingTask?.cancel()
             pairingTask = nil
             guard let pairingSession else { return nil }
@@ -356,7 +358,7 @@ public final class Daemon: @unchecked Sendable {
             return pairingSession
         }
         if revoke, let current {
-            try? serviceActions.cancelPairingSession(current, hostIdentity)
+            try? serviceActions.cancelPairingCode(current, hostIdentity)
         }
     }
 

@@ -2,7 +2,7 @@ import XCTest
 @testable import PedalsKit
 
 final class ReversePairingTests: XCTestCase {
-    func testReverseSaltEnvelopeRoundTripsAndIsDomainSeparated() throws {
+    func testEnvelopeIsBoundToItsClaimID() throws {
         let hostPrivateKey = PairingKeyAgreement.makePrivateKey()
         let durablePrivateKey = PairingKeyAgreement.makePrivateKey()
         let durablePublicKey = try PairingKeyAgreement.publicKey(for: durablePrivateKey)
@@ -14,39 +14,42 @@ final class ReversePairingTests: XCTestCase {
             secret: secret,
             hostPrivateKey: hostPrivateKey,
             clientPublicKey: durablePublicKey,
-            sessionID: claimID,
-            salt: PairingKeyAgreement.reverseSalt
+            claimID: claimID
         )
         XCTAssertEqual(
             try PairingKeyAgreement.open(
                 envelope: envelope,
                 clientPrivateKey: durablePrivateKey,
                 hostPublicKey: hostPublicKey,
-                sessionID: claimID,
-                salt: PairingKeyAgreement.reverseSalt
+                claimID: claimID
             ),
             secret
         )
+        XCTAssertThrowsError(
+            try PairingKeyAgreement.open(
+                envelope: envelope,
+                clientPrivateKey: durablePrivateKey,
+                hostPublicKey: hostPublicKey,
+                claimID: "00000000000000000000000000000000"
+            )
+        )
+    }
 
-        // A reverse envelope must not open under the forward-pairing salt,
-        // and must be bound to its claim ID.
-        XCTAssertThrowsError(
-            try PairingKeyAgreement.open(
-                envelope: envelope,
-                clientPrivateKey: durablePrivateKey,
-                hostPublicKey: hostPublicKey,
-                sessionID: claimID
-            )
+    func testTokenUsabilityRespectsExpiryAndMargin() throws {
+        let key = PairingKeyAgreement.makePrivateKey()
+        let now = Date()
+        let live = ReversePairingToken(
+            code: try PairingCode("01234567"),
+            privateKey: key,
+            expiresAt: Int64(now.timeIntervalSince1970) + 3_600
         )
-        XCTAssertThrowsError(
-            try PairingKeyAgreement.open(
-                envelope: envelope,
-                clientPrivateKey: durablePrivateKey,
-                hostPublicKey: hostPublicKey,
-                sessionID: "00000000000000000000000000000000",
-                salt: PairingKeyAgreement.reverseSalt
-            )
+        XCTAssertTrue(live.isUsable(at: now))
+        let closing = ReversePairingToken(
+            code: try PairingCode("01234567"),
+            privateKey: key,
+            expiresAt: Int64(now.timeIntervalSince1970) + 30
         )
+        XCTAssertFalse(closing.isUsable(at: now))
     }
 
     func testOpenReversePairingClaimValidatesSecretAndBuildsBinding() throws {
@@ -71,8 +74,7 @@ final class ReversePairingTests: XCTestCase {
                 secret: secret,
                 hostPrivateKey: hostPrivateKey,
                 clientPublicKey: try PairingKeyAgreement.publicKey(for: token.privateKey),
-                sessionID: claimID,
-                salt: PairingKeyAgreement.reverseSalt
+                claimID: claimID
             ),
             createdAt: 0
         )
@@ -92,8 +94,7 @@ final class ReversePairingTests: XCTestCase {
                 secret: Data(repeating: 7, count: 16),
                 hostPrivateKey: hostPrivateKey,
                 clientPublicKey: try PairingKeyAgreement.publicKey(for: token.privateKey),
-                sessionID: claimID,
-                salt: PairingKeyAgreement.reverseSalt
+                claimID: claimID
             ),
             createdAt: 0
         )

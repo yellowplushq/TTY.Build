@@ -130,59 +130,61 @@ try {
   const clientPublicKey = "B".repeat(43);
   const encryptedSecret = "C".repeat(80);
   const pairing = await json(
-    `/v2/computers/${computer.computerId}/pairing-sessions`,
+    `/v2/computers/${computer.computerId}/pairing-codes`,
     {
       method: "POST",
       token: computer.hostToken,
-      body: { hostPublicKey },
+      body: { publicKey: hostPublicKey },
     },
     201,
   );
-  assert.match(pairing.sessionId, /^[0-9a-f]{32}$/);
+  assert.match(pairing.codeId, /^[0-9a-f]{32}$/);
   assert.match(pairing.code, /^\d{8}$/);
+  assert.equal(pairing.singleUse, true);
   assert.ok(pairing.expiresAt > Math.floor(Date.now() / 1000));
 
   const claim = await json(
-    "/v2/clients/me/pairing-sessions/claim",
+    "/v2/clients/me/pairing-codes/claim",
     {
       method: "POST",
       token: client.clientToken,
-      body: { code: pairing.code, clientPublicKey },
+      body: { code: pairing.code, publicKey: clientPublicKey },
     },
     200,
   );
-  assert.equal(claim.sessionId, pairing.sessionId);
+  assert.match(claim.claimId, /^[0-9a-f]{32}$/);
   assert.equal(claim.computerId, computer.computerId);
   assert.equal(claim.hostPublicKey, hostPublicKey);
 
   const claimed = await json(
-    `/v2/computers/${computer.computerId}/pairing-sessions/${pairing.sessionId}`,
+    `/v2/computers/${computer.computerId}/pairing-codes/${pairing.codeId}`,
     { token: computer.hostToken },
     200,
   );
   assert.equal(claimed.status, "claimed");
+  assert.equal(claimed.claimId, claim.claimId);
   assert.equal(claimed.clientPublicKey, clientPublicKey);
 
   await json(
-    `/v2/computers/${computer.computerId}/pairing-sessions/${pairing.sessionId}/complete`,
+    `/v2/computers/${computer.computerId}/pairing-claims/${claim.claimId}/complete`,
     {
       method: "POST",
       token: computer.hostToken,
       body: { encryptedSecret },
     },
-    201,
+    204,
   );
-  const completed = await json(
-    `/v2/clients/me/pairing-sessions/${pairing.sessionId}`,
+  const sealed = await json(
+    `/v2/clients/me/pairing-claims/${claim.claimId}`,
     { token: client.clientToken },
     200,
   );
-  assert.equal(completed.status, "completed");
-  assert.equal(completed.encryptedSecret, encryptedSecret);
+  assert.equal(sealed.status, "sealed");
+  assert.equal(sealed.encryptedSecret, encryptedSecret);
   await json(
-    `/v2/clients/me/pairing-sessions/${pairing.sessionId}`,
-    { method: "DELETE", token: client.clientToken },
-    204,
+    `/v2/clients/me/pairing-claims/${claim.claimId}/accept`,
+    { method: "POST", token: client.clientToken },
+    201,
   );
 
   host = await connect(computer.computerId, computer.hostToken);

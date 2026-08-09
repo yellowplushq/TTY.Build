@@ -9,9 +9,15 @@ const PUSH_SURFACES = new Set([
 ]);
 
 export const MAX_JSON_BODY = 16 * 1024;
-export const PAIRING_CODE_TTL_SECONDS = 15 * 60;
-export const REVERSE_CLAIM_TTL_SECONDS = 30 * 24 * 60 * 60;
-export const REVERSE_TOKEN_TTL_SECONDS = 60 * 60;
+// Unified pairing: creation-time parameters are clamped to these bounds and
+// fall back to per-issuer defaults. Claim lifetimes derive from who claimed:
+// a client's own claim is a transient step in an interactive flow, while a
+// host-initiated claim waits for the user's confirmation card.
+export const PAIRING_CODE_TTL_BOUNDS = [60, 24 * 60 * 60];
+export const HOST_CODE_TTL_SECONDS = 15 * 60;
+export const CLIENT_CODE_TTL_SECONDS = 60 * 60;
+export const CLIENT_CLAIM_TTL_SECONDS = 60 * 60;
+export const HOST_CLAIM_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const SNAPSHOT_VERSION = 2;
 export const MAX_COMPUTERS = 128;
 export const MAX_CLIENTS = 512;
@@ -329,10 +335,10 @@ export async function notifyPushCoordinator(env, clientIds, { force = false } = 
   }
 }
 
-/// Best-effort visible alert telling the phone a computer claimed its
-/// enrollment token and awaits confirmation. Losing one is harmless: the
-/// phone also lists pending claims on every launch and foreground.
-export async function notifyReversePairingClaim(env, clientId, computerName) {
+/// Best-effort visible alert telling the phone a computer sealed a claim
+/// that awaits the user's confirmation. Losing one is harmless: the phone
+/// also lists pending claims on every launch and foreground.
+export async function notifyPairingClaim(env, clientId, computerName) {
   if (!env.PUSH_COORDINATOR || !isId(clientId)) return;
   const response = await env.PUSH_COORDINATOR.getByName(clientId).fetch(
     "https://push.internal/pairing-claim",

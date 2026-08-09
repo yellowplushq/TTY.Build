@@ -9,15 +9,15 @@ public struct ServiceActions: @unchecked Sendable {
 
     public var createComputer: @Sendable (URL) throws -> HostIdentity
     public var deleteComputer: @Sendable (HostIdentity) throws -> Void
-    public var createPairingSession: @Sendable (HostIdentity) throws -> HostPairingSession
-    public var pairingSessionStatus: @Sendable (
-        HostPairingSession, HostIdentity
-    ) throws -> HostPairingSessionStatus
-    public var completePairingSession: @Sendable (
-        HostPairingSession, Data, HostIdentity
+    public var createPairingCode: @Sendable (HostIdentity) throws -> HostPairingCode
+    public var pairingCodeStatus: @Sendable (
+        HostPairingCode, HostIdentity
+    ) throws -> HostPairingCodeStatus
+    public var completePairingClaim: @Sendable (
+        _ claimID: String, _ clientPublicKey: Data, _ privateKey: Data, _ identity: HostIdentity
     ) throws -> Void
-    public var cancelPairingSession: @Sendable (
-        HostPairingSession, HostIdentity
+    public var cancelPairingCode: @Sendable (
+        HostPairingCode, HostIdentity
     ) throws -> Void
     public var claimReversePairing: @Sendable (
         PairingCode, String, HostIdentity
@@ -26,21 +26,21 @@ public struct ServiceActions: @unchecked Sendable {
     public init(
         createComputer: @escaping @Sendable (URL) throws -> HostIdentity,
         deleteComputer: @escaping @Sendable (HostIdentity) throws -> Void,
-        createPairingSession: @escaping @Sendable (HostIdentity) throws -> HostPairingSession = {
+        createPairingCode: @escaping @Sendable (HostIdentity) throws -> HostPairingCode = {
             _ in throw ActionError.pairingCodesUnavailable
         },
-        pairingSessionStatus: @escaping @Sendable (
-            HostPairingSession, HostIdentity
-        ) throws -> HostPairingSessionStatus = { _, _ in
+        pairingCodeStatus: @escaping @Sendable (
+            HostPairingCode, HostIdentity
+        ) throws -> HostPairingCodeStatus = { _, _ in
             throw ActionError.pairingCodesUnavailable
         },
-        completePairingSession: @escaping @Sendable (
-            HostPairingSession, Data, HostIdentity
-        ) throws -> Void = { _, _, _ in
+        completePairingClaim: @escaping @Sendable (
+            String, Data, Data, HostIdentity
+        ) throws -> Void = { _, _, _, _ in
             throw ActionError.pairingCodesUnavailable
         },
-        cancelPairingSession: @escaping @Sendable (
-            HostPairingSession, HostIdentity
+        cancelPairingCode: @escaping @Sendable (
+            HostPairingCode, HostIdentity
         ) throws -> Void = { _, _ in },
         claimReversePairing: @escaping @Sendable (
             PairingCode, String, HostIdentity
@@ -50,10 +50,10 @@ public struct ServiceActions: @unchecked Sendable {
     ) {
         self.createComputer = createComputer
         self.deleteComputer = deleteComputer
-        self.createPairingSession = createPairingSession
-        self.pairingSessionStatus = pairingSessionStatus
-        self.completePairingSession = completePairingSession
-        self.cancelPairingSession = cancelPairingSession
+        self.createPairingCode = createPairingCode
+        self.pairingCodeStatus = pairingCodeStatus
+        self.completePairingClaim = completePairingClaim
+        self.cancelPairingCode = cancelPairingCode
         self.claimReversePairing = claimReversePairing
     }
 
@@ -70,36 +70,37 @@ public struct ServiceActions: @unchecked Sendable {
                 ).deleteComputer(identity: identity)
             }
         },
-        createPairingSession: { identity in
+        createPairingCode: { identity in
             try blocking {
                 try await PedalsServiceAPI(
                     serviceURL: identity.computer.serviceURL
-                ).createPairingSession(identity: identity)
+                ).createPairingCode(identity: identity)
             }
         },
-        pairingSessionStatus: { pairing, identity in
+        pairingCodeStatus: { pairing, identity in
             try blocking {
                 try await PedalsServiceAPI(
                     serviceURL: identity.computer.serviceURL
-                ).pairingSessionStatus(pairing, identity: identity)
+                ).pairingCodeStatus(pairing, identity: identity)
             }
         },
-        completePairingSession: { pairing, clientPublicKey, identity in
+        completePairingClaim: { claimID, clientPublicKey, privateKey, identity in
             try blocking {
                 try await PedalsServiceAPI(
                     serviceURL: identity.computer.serviceURL
-                ).completePairingSession(
-                    pairing,
+                ).completePairingClaim(
+                    claimID: claimID,
                     clientPublicKey: clientPublicKey,
+                    privateKey: privateKey,
                     identity: identity
                 )
             }
         },
-        cancelPairingSession: { pairing, identity in
+        cancelPairingCode: { pairing, identity in
             try blocking {
                 try await PedalsServiceAPI(
                     serviceURL: identity.computer.serviceURL
-                ).cancelPairingSession(pairing, identity: identity)
+                ).cancelPairingCode(pairing, identity: identity)
             }
         },
         claimReversePairing: { code, computerName, identity in

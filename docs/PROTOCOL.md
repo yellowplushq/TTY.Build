@@ -47,51 +47,105 @@ The Worker hashes the presented token and derives both its role and scope from
 D1. A request cannot select `host`, `client`, or a credential scope in a URL or
 body. In particular, a `statusToken` cannot mutate bindings or open a relay.
 
-## 2. One-time pairing and durable bindings
+## 2. Unified pairing and durable bindings
 
-Opening the desktop pairing surface generates an ephemeral Curve25519 key and
-requests an eight-digit, single-use rendezvous code:
+Pairing has one ceremony with two entry directions. Either principal issues
+an 8-digit rendezvous code; the counterpart claims it; the computer — which
+owns the E2EE secret — seals an envelope onto the claim; and the client's
+accept is the only operation that ever creates a `client_computers` binding
+edge. Consent is structural, not a flag: a client accepts its own claims
+immediately after decrypting (typing the computer's code was its consent),
+while a host-initiated claim waits for the user's explicit accept — the
+confirmation card. The code is never encryption key material.
 
-```http
-POST /v2/computers/:computerId/pairing-sessions
-Authorization: Bearer <hostToken>
-Content-Type: application/json
-
-{"hostPublicKey":"<base64url Curve25519 public key>"}
-```
-
-The response contains `sessionId`, `code`, and `expiresAt`. A code is valid for
-15 minutes and only while its desktop pairing surface remains open. Opening a
-new surface replaces the computer's prior session; closing it sends `DELETE
-/v2/computers/:computerId/pairing-sessions/:sessionId`. Expiry, cancellation,
-a successful claim, or completion prevents another client from using the code.
-
-iOS creates or loads its client identity, generates its own ephemeral key, and
-claims the code:
+Issuing a code (either bearer):
 
 ```http
-POST /v2/clients/me/pairing-sessions/claim
-Authorization: Bearer <clientToken>
+POST /v2/computers/:computerId/pairing-codes   (host bearer)
+POST /v2/clients/me/pairing-codes              (client bearer)
 Content-Type: application/json
 
-{"code":"12345678","clientPublicKey":"<base64url Curve25519 public key>"}
+{"publicKey":"<base64url Curve25519 public key>",
+ "ttlSeconds": 900, "singleUse": true}
 ```
 
-The daemon polls its authenticated session. Once claimed, it derives a shared
-key using ephemeral Curve25519 plus HKDF-SHA256, then seals the existing
-32-byte computer E2EE secret with ChaChaPoly. The session ID is authenticated
-as AEAD associated data. The daemon submits only that ciphertext envelope;
-the Worker atomically creates the durable client-computer edge and never sees
-the plaintext secret. iOS polls its claimed session, decrypts the envelope,
-stores the `ComputerBinding` in the Keychain, and acknowledges the session so
-the Worker deletes it.
+`ttlSeconds` and `singleUse` are optional creation parameters (TTL clamped
+to [60 s, 24 h]). Defaults express each direction's UX: a desktop pairing
+page issues a 15-minute single-use code with an ephemeral key; the phone's
+install command issues a one-hour multi-use code backed by a durable key
+stored in its Keychain. The response carries `codeId`, `code`, `expiresAt`,
+and `singleUse`. One live code exists per principal — reissuing replaces
+it. A client reissuing with the SAME public key (an expired-code refresh)
+keeps its pending claims; reissuing with a rotated key deletes them, since
+their envelopes could never be decrypted again.
 
-The eight-digit code is therefore only a short-lived rendezvous handle, not
-encryption key material.
+Claiming (the counterpart of the issuer):
+
+```http
+POST /v2/clients/me/pairing-codes/claim        (client bearer)
+{"code":"12345678","publicKey":"<base64url>"}
+
+POST /v2/computers/:computerId/pairing-codes/claim   (host bearer)
+{"code":"12345678","publicKey":"<base64url>","computerName":"Studio"}
+```
+
+Both return `claimId` plus the issuer's public key. A claim records both
+sides' keys and who claimed; one pending claim exists per client-computer
+pair, and a single-use code admits exactly one claim. Client-initiated
+claims live for one hour (they bridge an interactive flow); host-initiated
+claims live for 30 days awaiting the user. The computer then seals the
+secret onto the claim — whichever side it was in the exchange:
+
+```http
+POST /v2/computers/:computerId/pairing-claims/:claimId/complete
+{"encryptedSecret":"<base64url ChaChaPoly box>"}
+```
+
+The construction is ephemeral-or-durable Curve25519 agreement, HKDF-SHA256
+with salt `Pedals pairing v3` and the claim ID as info, and ChaChaPoly with
+the claim ID as AEAD associated data. The Worker never sees the plaintext
+secret. When the claim was host-initiated, completion raises a visible APNs
+alert on the client's `ios-app` push endpoints; client-initiated claims are
+being polled interactively (`GET /v2/computers/:computerId/pairing-codes/:codeId`
+on the host side, `GET /v2/clients/me/pairing-claims/:claimId` on the
+client side) and need no announcement.
+
+The client finishes the ceremony:
+
+```http
+GET  /v2/clients/me/pairing-claims             (sealed host-initiated claims)
+POST /v2/clients/me/pairing-claims/:claimId/accept
+DELETE /v2/clients/me/pairing-claims/:claimId  (reject; the computer is never told)
+```
+
+Accept decrypts nothing server-side: it atomically creates the binding edge
+(subject to the per-client binding capacity), bumps the delivery sequence,
+clears any stale revocation-outbox row, consumes the claim, and retires a
+single-use code. The phone commits the decrypted `ComputerBinding` to its
+Keychain *before* accepting, so the delete-only binding declaration below
+can never remove a fresh edge. Rejection and expiry are silent — a
+fire-and-forget claimer (the install flow) simply never gains access.
+
+The phone-issued code travels to the desktop as an extended attribute
+(`build.air.pedals.pairing-code`) stamped on the app bundle — written by
+the install script after extraction, or already present in an archive
+served by `GET /download/<code>/macos.zip`, which injects an AppleDouble
+(`__MACOSX/._Pedals.app`) entry into the release zip so Archive Utility and
+`ditto` restore the attribute on extraction. Extended attributes live
+outside the code-signature seal, so the signed app stays byte-identical.
+The app consumes the stamp on launch (and a slow periodic check), claims
+the code, and removes the stamp on any terminal outcome. The explicit
+accept on the phone is the security boundary for that code's one-hour,
+multi-use lifetime: a leaked code lets a stranger's computer appear on the
+confirmation card, never bind.
+
+Neither codes nor private keys are persisted server-side. Code and claim
+rows contain only code hashes, public keys, ciphertext, identities, and
+expiry metadata; the cron sweep removes them at expiry.
 
 The phone's Keychain list is the authoritative client-side binding set, and
-unbinding commits there first. The client then declares its full remaining set
-through:
+unbinding commits there first. The client then declares its full remaining
+set through:
 
 ```http
 PUT /v2/clients/me/bindings
@@ -104,12 +158,13 @@ Content-Type: application/json
 The Worker converges delete-only: every edge of the client (and its delegated
 Watch) absent from the declared list is removed, and each removal commits a
 client-targeted socket-revocation outbox row in the same D1 transaction. A
-declared id without an existing edge is ignored — the ceremony above remains
-the only way to create one, so a cloned credential cannot self-authorize a
-computer. The Worker attempts socket closure immediately and cron retries
-transient Durable Object failures, so established sockets cannot outlive an
-unbind indefinitely. The declaration is idempotent; the client repeats it (for
-example on foreground) until the service confirms convergence.
+declared id without an existing edge is ignored — the accept ceremony above
+remains the only way to create one, so a cloned credential cannot
+self-authorize a computer. The Worker attempts socket closure immediately and
+cron retries transient Durable Object failures, so established sockets cannot
+outlive an unbind indefinitely. The declaration is idempotent; the client
+repeats it (for example on foreground) until the service confirms
+convergence.
 
 For terminal viewing, the iPhone registers an independent Watch client and
 reconciles its server-side edges through:
@@ -135,90 +190,6 @@ the iPhone transfers the independent Watch identity and its locally held E2EE
 own Keychain. Thus simultaneous iPhone and Watch relay sockets have distinct
 principals and cannot replace one another.
 
-Neither the code nor either ephemeral private key is persisted. Pairing session
-rows contain only code hashes, public keys, ciphertext, identities, and expiry
-metadata, and are removed on acknowledgement or expiry.
-
-### Reverse pairing (enrollment tokens)
-
-The forward ceremony above requires typing a computer-issued code on the
-phone. Reverse pairing inverts who quotes the rendezvous value so a fresh
-desktop install can pair with zero typing: the phone registers an 8-digit
-enrollment code (valid for one hour, multi-use within that window) whose
-durable Curve25519 public key computers seal to, and embeds the code in the
-one-line install command
-(`curl -fsSL https://pedals.air.build/12345678 | bash` — the service serves
-`install.sh` with that code baked in; `--pair 12345678` and `PEDALS_PAIR`
-are the manual equivalents).
-
-```http
-PUT /v2/clients/me/reverse-pairing-token
-Authorization: Bearer <clientToken>
-Content-Type: application/json
-
-{"clientPublicKey":"<base64url Curve25519 public key>"}
-```
-
-The response contains `code` and `expiresAt`. One token exists per client;
-re-registering mints a fresh code. The durable key is meant to stay stable
-across refreshes — the phone re-submits the same public key when its code
-expires, and pending claims survive because their envelopes still decrypt.
-Only a re-registration that actually rotates the key deletes pending claims
-(their envelopes could never be opened again). An expired code stops
-admitting new claims but existing pending claims remain confirmable for
-their own 30-day lifetime. Only the code hash and public key are stored
-server-side; the phone keeps the code and the durable private key in its
-Keychain.
-
-The code reaches the desktop app as an extended attribute
-(`build.air.pedals.pairing-code`) stamped on the app bundle — written by the
-install script after extraction, or already present in an archive served by
-`GET /download/<code>/macos.zip`, which injects an AppleDouble
-(`__MACOSX/._Pedals.app`) entry into the release zip so Archive Utility and
-`ditto` restore the attribute on extraction. Extended attributes live
-outside the code-signature seal, so the signed app stays byte-identical.
-The app consumes the stamp on launch (and on a slow periodic check), claims
-the code, and removes the stamp on any terminal outcome; a computer claims
-by sealing its existing 32-byte E2EE secret exactly as in the forward
-ceremony — ephemeral host
-Curve25519 key against the phone's durable key, HKDF-SHA256 with a distinct
-salt (`Pedals reverse pairing v1`), ChaChaPoly with the server-issued claim
-ID as AEAD associated data and HKDF info:
-
-```http
-POST /v2/computers/:computerId/reverse-pairing-claims
-Authorization: Bearer <hostToken>
-Content-Type: application/json
-
-{"code":"12345678","hostPublicKey":"<base64url>","computerName":"Studio"}
-```
-
-The response contains `claimId` and `clientPublicKey`; the computer submits
-the ciphertext to `POST …/reverse-pairing-claims/:claimId/complete
-{"encryptedSecret":…}` and is done. Claims are fire-and-forget for the
-computer: it never learns whether the phone confirmed or rejected.
-
-Crucially, **no binding edge exists yet**. A completed claim is a pending
-row (30-day expiry; one per client-computer pair — re-claiming replaces it)
-that the Worker announces with a visible APNs alert to the client's
-`ios-app` push endpoints. The phone lists pending claims on every launch and
-foreground (`GET /v2/clients/me/reverse-pairing-claims`), shows the claiming
-computer's self-declared name, and the user decides:
-
-```http
-POST /v2/clients/me/reverse-pairing-claims/:claimId/confirm
-DELETE /v2/clients/me/reverse-pairing-claims/:claimId
-```
-
-Confirmation atomically creates the `client_computers` edge (subject to the
-same binding capacity as forward pairing), bumps the delivery sequence,
-clears any stale revocation-outbox row, and consumes the claim; the phone
-decrypts the envelope and commits the `ComputerBinding` to its Keychain
-*before* confirming, so a concurrent delete-only binding declaration can
-never remove the fresh edge. Rejection deletes the claim silently. This
-explicit confirmation is the security boundary of reverse pairing: a leaked
-enrollment code lets a stranger's computer appear on the confirmation card,
-never bind.
 
 ## 3. Authenticated relay
 

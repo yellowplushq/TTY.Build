@@ -49,76 +49,44 @@ No body or `{}`. Creates a host identity.
 The daemon stores both values in its mode-0600 identity file. It separately
 generates the 32-byte E2EE secret; that secret is never sent to this API.
 
-### `POST /v2/computers/:computerId/pairing-sessions`
+### Unified pairing
 
-Host bearer required. Opening the desktop pairing page generates an ephemeral
-Curve25519 key and submits only its base64url public key:
+One ceremony, two entry directions (PROTOCOL.md §2). Either principal issues
+a code; the counterpart claims it; the computer seals its E2EE secret onto
+the claim; the client's accept is the only edge-creating operation.
 
-```json
-{"hostPublicKey":"43-character-base64url"}
-```
-
-The response contains an eight-digit single-use code valid for 15 minutes:
-
-```json
-{"sessionId":"32-lowercase-hex","code":"12345678","expiresAt":1780000000}
-```
-
-Creating a session deletes the computer's prior session. The daemon polls
-`GET /v2/computers/:computerId/pairing-sessions/:sessionId`; closing the page
-sends `DELETE` to that path. A claimed session exposes the client's ephemeral
-public key only to the authenticated host.
-
-### `POST /v2/clients/me/pairing-sessions/claim`
-
-Client control bearer required:
-
-```json
-{"code":"12345678","clientPublicKey":"43-character-base64url"}
-```
-
-The code only selects the session; it is not encryption key material. After a
-claim, the host uses ephemeral Curve25519, HKDF-SHA256, and ChaChaPoly to wrap
-the computer's existing 32-byte E2EE secret. `POST
-/v2/computers/:computerId/pairing-sessions/:sessionId/complete` atomically
-creates the binding and retains only the encrypted envelope for its claiming
-client. The client polls `GET /v2/clients/me/pairing-sessions/:sessionId`,
-decrypts locally, stores its binding in Keychain, then acknowledges with
-`DELETE` so the Worker removes the session.
-
-D1 stores the code hash, public keys, ciphertext, identities, and timestamps;
-it never receives the E2EE secret or either ephemeral private key. Completed,
-cancelled, acknowledged, and expired sessions cannot be claimed again.
-
-### Reverse pairing (enrollment tokens)
-
-The mirrored ceremony lets a computer initiate against a phone-issued token
-(embedded in the install command) with the phone offline; see PROTOCOL.md §2
-for the full flow and crypto. Endpoints:
-
-- `PUT /v2/clients/me/reverse-pairing-token` (control bearer,
-  `{clientPublicKey}` → `{code, expiresAt}`) — one token per client, codes
-  valid for one hour. A same-key refresh keeps pending claims; only a key
-  rotation deletes them.
-- `POST /v2/computers/:computerId/reverse-pairing-claims` (host bearer,
-  `{code, hostPublicKey, computerName}` → `{claimId, clientPublicKey}`),
-  then `POST …/reverse-pairing-claims/:claimId/complete
-  {encryptedSecret}`. One pending claim per client-computer pair; 30-day
-  expiry swept by cron. A completed claim triggers a visible APNs alert to
-  the client's `ios-app` push endpoints.
-- `GET /v2/clients/me/reverse-pairing-claims` lists completed claims;
-  `POST …/:claimId/confirm` atomically creates the binding edge (the only
-  edge-creating path besides the forward ceremony and Watch delegation);
+- `POST /v2/computers/:computerId/pairing-codes` (host bearer) /
+  `POST /v2/clients/me/pairing-codes` (control bearer) —
+  `{publicKey, ttlSeconds?, singleUse?}` → `{codeId, code, expiresAt,
+  singleUse}`. TTL clamps to [60 s, 24 h]; defaults are 15 min single-use
+  for hosts, 1 h multi-use for clients. One live code per principal;
+  reissuing replaces it, and a client reissue that rotates the key deletes
+  its pending claims (a same-key refresh keeps them).
+- `POST /v2/clients/me/pairing-codes/claim` `{code, publicKey}` and
+  `POST /v2/computers/:computerId/pairing-codes/claim`
+  `{code, publicKey, computerName}` → `{claimId, …issuer public key}`.
+  One pending claim per client-computer pair; a single-use code admits one
+  claim. Client claims expire in 1 h, host claims in 30 days.
+- `POST /v2/computers/:computerId/pairing-claims/:claimId/complete`
+  `{encryptedSecret}` — the computer seals onto the claim. Host-initiated
+  claims raise a visible APNs alert on the client's `ios-app` endpoints.
+- Host polls `GET /v2/computers/:computerId/pairing-codes/:codeId`
+  (`waiting`/`claimed`/`completed`) and cancels with `DELETE` on that path;
+  the client polls its own claim at
+  `GET /v2/clients/me/pairing-claims/:claimId`.
+- `GET /v2/clients/me/pairing-claims` lists sealed host-initiated claims;
+  `POST …/:claimId/accept` atomically creates the binding edge (capacity
+  checked), consumes the claim, and retires a single-use code;
   `DELETE …/:claimId` rejects silently.
-- `GET /download/<code>/macos.zip` proxies the latest release archive with
-  the code injected as a sequestered-xattr (`__MACOSX/._Pedals.app`) entry;
-  the signed app bytes pass through untouched and the code is never checked
-  against the token table.
+
+D1 stores code hashes, public keys, ciphertext, identities, and timestamps;
+it never receives the E2EE secret or any private key.
+
 
 ### `DELETE /v2/computers/:computerId`
 
-Host bearer required. Atomically deletes the computer, its state, pairing sessions, and
-all bindings, then closes every live host/client WebSocket for that computer.
+Host bearer required. Atomically deletes the computer, its state, pairing codes
+and claims, and all bindings, then closes every live host/client WebSocket for that computer.
 Returns `204`. A seven-day hashed reset tombstone makes retrying the same reset
 with the same host token idempotent. The deletion transaction also commits a
 durable revocation outbox entry. The Worker attempts socket closure immediately

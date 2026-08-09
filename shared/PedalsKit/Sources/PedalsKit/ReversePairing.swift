@@ -1,12 +1,11 @@
 import Foundation
 
-/// Phone-issued enrollment credential embedded in the desktop install
-/// command. The code admits new claims for one hour and is multi-use within
-/// that window; the private key is durable — it survives code refreshes so
-/// claims sealed under an earlier code stay confirmable, and a computer can
-/// claim while the phone app is not running. Each claimed computer still
-/// requires an explicit confirmation on the phone before a binding edge
-/// exists.
+/// The phone-issued pairing code embedded in the desktop install command.
+/// Same unified ceremony as the desktop's code, with client-issuer defaults:
+/// one hour of validity, multi-use within that window, and a durable private
+/// key that survives code refreshes so claims sealed under an earlier code
+/// stay acceptable. Every claim of this code is host-initiated and therefore
+/// waits for the user's explicit accept — the confirmation card.
 public struct ReversePairingToken: Codable, Equatable, Sendable {
     public let code: PairingCode
     public let privateKey: Data
@@ -23,8 +22,7 @@ public struct ReversePairingToken: Codable, Equatable, Sendable {
     }
 }
 
-/// One computer's completed claim against the phone's enrollment token,
-/// waiting for the user to confirm it on the phone.
+/// One computer's sealed, host-initiated claim awaiting the user's accept.
 public struct ReversePairingClaim: Equatable, Sendable {
     public let claimID: String
     public let computerID: String
@@ -51,31 +49,27 @@ public struct ReversePairingClaim: Equatable, Sendable {
 }
 
 extension PedalsServiceAPI {
-    private struct RegisterReverseTokenRequest: Encodable {
-        let clientPublicKey: String
+    private struct RegisterClientCodeRequest: Encodable {
+        let publicKey: String
     }
 
-    private struct RegisterReverseTokenResponse: Decodable {
+    private struct RegisterClientCodeResponse: Decodable {
         let code: String
         let expiresAt: Int64
     }
 
-    private struct ClaimReversePairingRequest: Encodable {
+    private struct HostClaimRequest: Encodable {
         let code: String
-        let hostPublicKey: String
+        let publicKey: String
         let computerName: String
     }
 
-    private struct ClaimReversePairingResponse: Decodable {
+    private struct HostClaimResponse: Decodable {
         let claimId: String
         let clientPublicKey: String
     }
 
-    private struct CompleteReverseClaimRequest: Encodable {
-        let encryptedSecret: String
-    }
-
-    private struct ReverseClaimsResponse: Decodable {
+    private struct PendingClaimsResponse: Decodable {
         struct Claim: Decodable {
             let claimId: String
             let computerId: String
@@ -88,12 +82,11 @@ extension PedalsServiceAPI {
         let claims: [Claim]
     }
 
-    /// Registers (or refreshes) the client's enrollment token. Pass the
-    /// stored private key when refreshing an expired code: keeping the key
-    /// stable keeps envelopes sealed under earlier codes confirmable (the
-    /// service only drops pending claims when the key rotates). The private
-    /// key never leaves the device; callers persist the returned token in
-    /// the Keychain.
+    /// Issues (or refreshes) the client's code. Pass the stored private key
+    /// when refreshing an expired code: keeping the key stable keeps claims
+    /// sealed under earlier codes acceptable (the service only drops pending
+    /// claims when the key rotates). The private key never leaves the
+    /// device; callers persist the returned token in the Keychain.
     public func registerReversePairingToken(
         as client: ClientIdentity,
         reusingPrivateKey: Data? = nil
@@ -101,12 +94,12 @@ extension PedalsServiceAPI {
         guard client.serviceURL == serviceURL else { throw APIError.serviceMismatch }
         let privateKey = reusingPrivateKey ?? PairingKeyAgreement.makePrivateKey()
         let publicKey = try PairingKeyAgreement.publicKey(for: privateKey)
-        let response: RegisterReverseTokenResponse = try await send(
-            method: "PUT",
-            path: "/v2/clients/me/reverse-pairing-token",
+        let response: RegisterClientCodeResponse = try await send(
+            method: "POST",
+            path: "/v2/clients/me/pairing-codes",
             bearer: client.clientToken,
-            body: RegisterReverseTokenRequest(
-                clientPublicKey: publicKey.base64URLEncodedString()
+            body: RegisterClientCodeRequest(
+                publicKey: publicKey.base64URLEncodedString()
             )
         )
         return try ReversePairingToken(
@@ -116,10 +109,10 @@ extension PedalsServiceAPI {
         )
     }
 
-    /// Computer side: claims the phone's enrollment token, seals this
-    /// computer's E2EE secret to the phone's durable public key, and submits
-    /// the envelope. Fire-and-forget — the binding edge appears only after
-    /// the user confirms on the phone, which this computer never observes.
+    /// Computer side: claims the phone's code, seals this computer's E2EE
+    /// secret to the phone's durable public key, and submits the envelope.
+    /// Fire-and-forget — the binding edge appears only after the user
+    /// accepts on the phone, which this computer never observes.
     public func claimReversePairing(
         code: PairingCode,
         computerName: String,
@@ -131,13 +124,13 @@ extension PedalsServiceAPI {
         let privateKey = PairingKeyAgreement.makePrivateKey()
         let publicKey = try PairingKeyAgreement.publicKey(for: privateKey)
         let name = String(computerName.filter { !$0.isNewline }.prefix(64))
-        let claim: ClaimReversePairingResponse = try await send(
+        let claim: HostClaimResponse = try await send(
             method: "POST",
-            path: "/v2/computers/\(identity.computer.computerID)/reverse-pairing-claims",
+            path: "/v2/computers/\(identity.computer.computerID)/pairing-codes/claim",
             bearer: identity.hostToken,
-            body: ClaimReversePairingRequest(
+            body: HostClaimRequest(
                 code: code.digits,
-                hostPublicKey: publicKey.base64URLEncodedString(),
+                publicKey: publicKey.base64URLEncodedString(),
                 computerName: name.isEmpty ? "Mac" : name
             )
         )
@@ -148,27 +141,26 @@ extension PedalsServiceAPI {
             secret: identity.computer.secret,
             hostPrivateKey: privateKey,
             clientPublicKey: clientPublicKey,
-            sessionID: claim.claimId,
-            salt: PairingKeyAgreement.reverseSalt
+            claimID: claim.claimId
         )
         let _: EmptyResponse = try await send(
             method: "POST",
-            path: "/v2/computers/\(identity.computer.computerID)/reverse-pairing-claims/\(claim.claimId)/complete",
+            path: "/v2/computers/\(identity.computer.computerID)/pairing-claims/\(claim.claimId)/complete",
             bearer: identity.hostToken,
-            body: CompleteReverseClaimRequest(
+            body: CompletePairingClaimRequest(
                 encryptedSecret: envelope.base64URLEncodedString()
             )
         )
     }
 
-    /// Lists completed claims awaiting the user's confirmation on the phone.
+    /// Sealed host-initiated claims awaiting the user's accept.
     public func reversePairingClaims(
         as client: ClientIdentity
     ) async throws -> [ReversePairingClaim] {
         guard client.serviceURL == serviceURL else { throw APIError.serviceMismatch }
-        let response: ReverseClaimsResponse = try await send(
+        let response: PendingClaimsResponse = try await send(
             method: "GET",
-            path: "/v2/clients/me/reverse-pairing-claims",
+            path: "/v2/clients/me/pairing-claims",
             bearer: client.clientToken
         )
         return try response.claims.map { claim in
@@ -199,8 +191,7 @@ extension PedalsServiceAPI {
             envelope: claim.encryptedSecret,
             clientPrivateKey: token.privateKey,
             hostPublicKey: claim.hostPublicKey,
-            sessionID: claim.claimID,
-            salt: PairingKeyAgreement.reverseSalt
+            claimID: claim.claimID
         )
         guard secret.count == ComputerBinding.secretByteCount else {
             throw APIError.invalidResponse
@@ -212,7 +203,7 @@ extension PedalsServiceAPI {
         )
     }
 
-    /// Confirms a claim on the phone, atomically creating the binding edge.
+    /// The user's accept: atomically creates the binding edge.
     public func confirmReversePairingClaim(
         claimID: String,
         as client: ClientIdentity
@@ -220,12 +211,12 @@ extension PedalsServiceAPI {
         guard client.serviceURL == serviceURL else { throw APIError.serviceMismatch }
         let _: EmptyResponse = try await send(
             method: "POST",
-            path: "/v2/clients/me/reverse-pairing-claims/\(claimID)/confirm",
+            path: "/v2/clients/me/pairing-claims/\(claimID)/accept",
             bearer: client.clientToken
         )
     }
 
-    /// Rejects a claim on the phone. The computer is never told.
+    /// Rejects a claim. The computer is never told.
     public func rejectReversePairingClaim(
         claimID: String,
         as client: ClientIdentity
@@ -233,7 +224,7 @@ extension PedalsServiceAPI {
         guard client.serviceURL == serviceURL else { throw APIError.serviceMismatch }
         let _: EmptyResponse = try await send(
             method: "DELETE",
-            path: "/v2/clients/me/reverse-pairing-claims/\(claimID)",
+            path: "/v2/clients/me/pairing-claims/\(claimID)",
             bearer: client.clientToken
         )
     }

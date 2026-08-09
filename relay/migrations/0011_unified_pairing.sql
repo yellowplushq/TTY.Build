@@ -1,28 +1,53 @@
 PRAGMA foreign_keys = ON;
 
--- Reverse pairing: the phone issues a long-lived 8-digit enrollment token
--- whose durable public key computers seal to. A computer's claim waits here
--- until the user confirms it on the phone; only confirmation creates a
--- client_computers edge. Rows hold code hashes, public keys, and ciphertext
--- only — never a plaintext code or secret.
+-- Unified pairing: either principal issues a code; the counterpart claims
+-- it; the computer (which owns the E2EE secret) seals an envelope onto the
+-- claim; and the client's explicit accept is the ONLY operation that creates
+-- a client_computers edge. A client's own claim is accepted by itself right
+-- after decryption (typing the computer's code was its consent); a
+-- host-initiated claim waits for the user's confirmation card. Rows hold
+-- code hashes, public keys, and ciphertext only — never a plaintext code or
+-- secret.
+--
+-- Replaces the forward-only pairing_sessions ceremony. In-flight sessions
+-- are 15-minute ephemera; dropping them at deploy time is harmless.
 
-CREATE TABLE reverse_pairing_tokens (
-  client_id TEXT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
-  code_hash TEXT NOT NULL UNIQUE CHECK (length(code_hash) = 64),
-  client_public_key TEXT NOT NULL CHECK (length(client_public_key) = 43),
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL
-) STRICT, WITHOUT ROWID;
+DROP TABLE pairing_sessions;
 
-CREATE INDEX reverse_pairing_tokens_expiry
-  ON reverse_pairing_tokens (expires_at);
-
-CREATE TABLE reverse_pairing_claims (
+CREATE TABLE pairing_codes (
   id TEXT PRIMARY KEY CHECK (length(id) = 32),
+  code_hash TEXT NOT NULL UNIQUE CHECK (length(code_hash) = 64),
+  issuer TEXT NOT NULL CHECK (issuer IN ('host', 'client')),
+  computer_id TEXT REFERENCES computers(id) ON DELETE CASCADE,
+  client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
+  public_key TEXT NOT NULL CHECK (length(public_key) = 43),
+  single_use INTEGER NOT NULL CHECK (single_use IN (0, 1)),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  CHECK (
+    (issuer = 'host' AND computer_id IS NOT NULL AND client_id IS NULL) OR
+    (issuer = 'client' AND client_id IS NOT NULL AND computer_id IS NULL)
+  )
+) STRICT;
+
+CREATE INDEX pairing_codes_by_computer ON pairing_codes (computer_id)
+  WHERE computer_id IS NOT NULL;
+CREATE INDEX pairing_codes_by_client ON pairing_codes (client_id)
+  WHERE client_id IS NOT NULL;
+CREATE INDEX pairing_codes_expiry ON pairing_codes (expires_at);
+
+CREATE TABLE pairing_claims (
+  id TEXT PRIMARY KEY CHECK (length(id) = 32),
+  -- Correlates a claim to the code it consumed for the issuing host's poll;
+  -- severed (not cascaded) when the code is replaced or expires, because a
+  -- sealed claim outlives its code and stays acceptable.
+  code_id TEXT REFERENCES pairing_codes(id) ON DELETE SET NULL,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   computer_id TEXT NOT NULL REFERENCES computers(id) ON DELETE CASCADE,
-  computer_name TEXT NOT NULL CHECK (length(computer_name) BETWEEN 1 AND 64),
+  claimed_by TEXT NOT NULL CHECK (claimed_by IN ('host', 'client')),
+  computer_name TEXT NOT NULL DEFAULT '' CHECK (length(computer_name) <= 64),
   host_public_key TEXT NOT NULL CHECK (length(host_public_key) = 43),
+  client_public_key TEXT NOT NULL CHECK (length(client_public_key) = 43),
   encrypted_secret TEXT CHECK (
     encrypted_secret IS NULL OR length(encrypted_secret) BETWEEN 64 AND 256
   ),
@@ -31,15 +56,12 @@ CREATE TABLE reverse_pairing_claims (
   UNIQUE (client_id, computer_id)
 ) STRICT;
 
-CREATE INDEX reverse_pairing_claims_by_client
-  ON reverse_pairing_claims (client_id, created_at);
+CREATE INDEX pairing_claims_by_client ON pairing_claims (client_id, created_at);
+CREATE INDEX pairing_claims_expiry ON pairing_claims (expires_at);
 
-CREATE INDEX reverse_pairing_claims_expiry
-  ON reverse_pairing_claims (expires_at);
-
--- Add the ios-app alert surface so a completed claim can raise a visible
--- "computer wants to connect" notification. SQLite cannot widen a CHECK, so
--- rebuild push_endpoints exactly as 0007/0008/0010 did.
+-- Add the ios-app alert surface so a host-initiated claim can raise a
+-- visible "computer wants to connect" notification. SQLite cannot widen a
+-- CHECK, so rebuild push_endpoints exactly as 0007/0008/0010 did.
 
 CREATE TABLE push_endpoints_v5 (
   id TEXT PRIMARY KEY CHECK (length(id) = 32),
