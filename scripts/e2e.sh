@@ -206,6 +206,18 @@ NODE
 # publishes the button before it is fully hit-testable, so wait for that
 # transition before driving the first visible control.
 sleep 3
+
+# iOS 26 simulators surface the notification permission prompt at first
+# launch (Live Activity push-to-start token observation). Clear it before
+# driving the app's own controls; absent prompt is not a failure.
+ALERT_UI_JSON="$PEDALS_E2E_HOME/alert-ui.json"
+for _ in $(seq 1 3); do
+  baguette describe-ui --udid "$SIM_UDID" --output "$ALERT_UI_JSON" >/dev/null 2>&1
+  grep -q '"label":"Allow"' "$ALERT_UI_JSON" || break
+  tap_accessibility_label "Allow"
+  sleep 1
+done
+
 tap_accessibility_label "pedals.onboarding.pair"
 
 # Simulator HID delivery can occasionally acknowledge a tap without UIKit

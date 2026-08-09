@@ -68,6 +68,8 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         UILaunchStoryboardName: LaunchScreen
         NSSupportsLiveActivities: true
+        UIBackgroundModes:
+          - remote-notification
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations:

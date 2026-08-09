@@ -6,6 +6,15 @@ import UIKit
 @MainActor
 final class PairingCodeViewController: UIViewController {
     var onPair: (@MainActor (PairingCode) async throws -> Void)?
+    /// Supplies the full install command, with this phone's enrollment code
+    /// embedded once the token is registered. The guide shows the plain
+    /// command until the provider resolves.
+    var installCommandProvider: (@MainActor () async -> String)?
+    /// Fired once when the screen appears — the presenting page uses it to
+    /// request notification permission for pairing-claim alerts.
+    var onAppearForPairing: (() -> Void)?
+
+    private var installCommandTask: Task<Void, Never>?
 
     private let closeButton = UIButton(type: .system)
     private let titleLabel = UILabel()
@@ -39,10 +48,24 @@ final class PairingCodeViewController: UIViewController {
         configureInput()
         observeKeyboard()
         codeChanged()
+        onAppearForPairing?()
+        if let installCommandProvider {
+            // Until the enrollment token resolves, the visible command lacks
+            // the pairing code — copying it would silently install without
+            // auto-pairing, so copying waits for the provider.
+            downloadGuide.setCopyEnabled(false)
+            installCommandTask = Task { @MainActor [weak self] in
+                let command = await installCommandProvider()
+                guard let self, !Task.isCancelled else { return }
+                downloadGuide.update(installCommand: command)
+                downloadGuide.setCopyEnabled(true)
+            }
+        }
     }
 
     deinit {
         pairingTask?.cancel()
+        installCommandTask?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -109,7 +132,9 @@ final class PairingCodeViewController: UIViewController {
         }
         view.addLayoutGuide(inputRegionGuide)
 
-        let downloadGuideHeightConstraint = downloadGuide.heightAnchor.constraint(equalToConstant: 160)
+        let downloadGuideHeightConstraint = downloadGuide.heightAnchor.constraint(
+            equalToConstant: PairingDownloadGuideView.preferredHeight
+        )
 
         let headerTopConstraint = closeButton.topAnchor.constraint(
             equalTo: view.safeAreaLayoutGuide.topAnchor,
@@ -325,12 +350,12 @@ final class PairingCodeViewController: UIViewController {
 
         let safeTop = view.safeAreaInsets.top
         let guideTop = safeTop + 14 + 44 + 18
-        let guideBottom = guideTop + 160
+        let guideBottom = guideTop + PairingDownloadGuideView.preferredHeight
         let pairButtonTop = keyboardTop - 16 - 48
         let requiredBottom = guideBottom + 12 + inputHeight + 12
         let shortage = max(0, requiredBottom - pairButtonTop)
 
-        // Keep the entire 160pt illustration card on-screen even when the
+        // Keep the entire illustration card on-screen even when the
         // navigation row needs to slide behind the status bar on a short phone.
         let maximumShiftKeepingGuideVisible = max(0, guideTop - 8)
         return min(shortage, maximumShiftKeepingGuideVisible)
@@ -467,6 +492,34 @@ extension PairingCodeViewController: AEOTPTextFieldDelegate {
 private final class PairingDownloadGuideView: UIView {
     private static let websiteURL = URL(string: "https://pedals.air.build")!
 
+    /// Fixed card height the pairing controller lays out around; the keyboard
+    /// avoidance math in `requiredUpwardShift` relies on this exact value.
+    static let preferredHeight: CGFloat = 208
+
+    /// Replaced with the `--pair <code>`-carrying command once the phone's
+    /// enrollment token resolves; the copy action always copies this value.
+    private var installCommand = "curl -fsSL https://pedals.air.build/i | bash"
+    private var copyEnabled = true
+    private let commandLabel = UILabel()
+    private let copyButton = UIButton(type: .system)
+    private var copyFeedbackTask: Task<Void, Never>?
+
+    func update(installCommand: String) {
+        self.installCommand = installCommand
+        commandLabel.text = installCommand
+        commandLabel.accessibilityValue = installCommand
+    }
+
+    func setCopyEnabled(_ enabled: Bool) {
+        copyEnabled = enabled
+        copyButton.isEnabled = enabled
+        copyButton.alpha = enabled ? 1 : 0.4
+    }
+
+    deinit {
+        copyFeedbackTask?.cancel()
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = PedalsTheme.uiSurface
@@ -540,19 +593,123 @@ private final class PairingDownloadGuideView: UIView {
         link.widthAnchor.constraint(lessThanOrEqualTo: text.widthAnchor).isActive = true
         link.heightAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
 
-        let stack = UIStackView(arrangedSubviews: [icons, text])
+        let command = makeInstallCommandRow()
+
+        let stack = UIStackView(arrangedSubviews: [icons, text, command])
         stack.axis = .vertical
         stack.alignment = .fill
         stack.spacing = 12
+        stack.setCustomSpacing(10, after: text)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
 
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: topAnchor, constant: 20),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -28),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
             icons.heightAnchor.constraint(equalToConstant: 58),
+            command.heightAnchor.constraint(equalToConstant: 38),
         ])
+    }
+
+    /// Terminal-style pill showing the one-line installer. The label may
+    /// truncate in the middle on narrow phones; the copy action always places
+    /// the full command on the pasteboard.
+    private func makeInstallCommandRow() -> UIView {
+        let pill = UIView()
+        pill.backgroundColor = PedalsTheme.uiCanvas
+        pill.layer.cornerRadius = 12
+        pill.layer.cornerCurve = .continuous
+        pill.layer.borderWidth = 1
+        pill.layer.borderColor = PedalsTheme.uiSeparator.cgColor
+        pill.accessibilityIdentifier = "pedals.pairing.installCommand"
+
+        let prompt = UILabel()
+        prompt.text = "$"
+        prompt.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
+        prompt.textColor = PedalsTheme.uiTertiaryContent
+        prompt.setContentCompressionResistancePriority(.required, for: .horizontal)
+        prompt.isAccessibilityElement = false
+
+        let command = commandLabel
+        command.text = installCommand
+        command.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        command.textColor = PedalsTheme.uiSecondaryContent
+        command.adjustsFontSizeToFitWidth = true
+        command.minimumScaleFactor = 0.75
+        command.baselineAdjustment = .alignCenters
+        command.lineBreakMode = .byTruncatingMiddle
+        command.accessibilityLabel = "Terminal install command"
+        command.accessibilityValue = installCommand
+
+        copyButton.setImage(
+            UIImage(
+                systemName: "doc.on.doc",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+            ),
+            for: .normal
+        )
+        copyButton.tintColor = PedalsTheme.uiContent
+        copyButton.accessibilityLabel = "Copy install command"
+        copyButton.accessibilityIdentifier = "pedals.pairing.copyInstall"
+        copyButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        copyButton.addAction(UIAction { [weak self] _ in self?.copyInstallCommand() }, for: .touchUpInside)
+
+        let row = UIStackView(arrangedSubviews: [prompt, command, copyButton])
+        row.axis = .horizontal
+        row.alignment = .center
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        pill.addSubview(row)
+
+        NSLayoutConstraint.activate([
+            row.topAnchor.constraint(equalTo: pill.topAnchor),
+            row.bottomAnchor.constraint(equalTo: pill.bottomAnchor),
+            row.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 12),
+            row.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -8),
+            copyButton.widthAnchor.constraint(equalToConstant: 34),
+        ])
+
+        // The tiny copy glyph is the affordance, but the whole pill is the target.
+        pill.addGestureRecognizer(
+            UITapGestureRecognizer(target: self, action: #selector(pillTapped))
+        )
+        return pill
+    }
+
+    @objc
+    private func pillTapped() {
+        copyInstallCommand()
+    }
+
+    private func copyInstallCommand() {
+        guard copyEnabled else { return }
+        UIPasteboard.general.string = installCommand
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        UIAccessibility.post(notification: .announcement, argument: "Install command copied")
+
+        copyButton.setImage(
+            UIImage(
+                systemName: "checkmark",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+            ),
+            for: .normal
+        )
+        copyButton.tintColor = PedalsTheme.uiSuccess
+
+        copyFeedbackTask?.cancel()
+        copyFeedbackTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.6))
+            guard !Task.isCancelled, let self else { return }
+            self.copyButton.setImage(
+                UIImage(
+                    systemName: "doc.on.doc",
+                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+                ),
+                for: .normal
+            )
+            self.copyButton.tintColor = PedalsTheme.uiContent
+        }
     }
 }

@@ -100,6 +100,9 @@ export class PushCoordinator extends DurableObject {
     if (request.method === "POST" && pathname === "/activity") {
       return this.handleActivity(request);
     }
+    if (request.method === "POST" && pathname === "/pairing-claim") {
+      return this.handlePairingClaim(request);
+    }
     if (request.method === "POST" && pathname === "/agent-activities") {
       return this.handleAgentActivities(request);
     }
@@ -511,6 +514,58 @@ export class PushCoordinator extends DurableObject {
     return new Response(null, { status: 202 });
   }
 
+  /// One visible "computer wants to connect" alert per completed reverse
+  /// pairing claim. Best-effort: invalid device tokens invalidate the
+  /// endpoint, transient failures are dropped — the phone re-lists pending
+  /// claims on every launch, so a lost alert never loses the claim.
+  async handlePairingClaim(request) {
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response("bad request", { status: 400 });
+    }
+    const { clientId, computerName } = body ?? {};
+    if (!isId(clientId) || typeof computerName !== "string" || computerName === "") {
+      return new Response("bad request", { status: 400 });
+    }
+
+    const result = await this.env.DB
+      .prepare(
+        `SELECT id, apns_environment AS environment, token
+           FROM push_endpoints
+          WHERE client_id = ?1 AND surface = 'ios-app' AND invalidated_at IS NULL
+          ORDER BY id`,
+      )
+      .bind(clientId)
+      .all();
+    const endpoints = result.results ?? [];
+    if (endpoints.length === 0) return new Response(null, { status: 202 });
+
+    const cached = await this.ctx.storage.get(TOKEN_CACHE_KEY);
+    const apns = createApnsClient(this.env, { tokenCache: cached ?? null });
+    for (const endpoint of endpoints) {
+      let outcome;
+      try {
+        outcome = await apns.send(
+          {
+            token: endpoint.token,
+            surface: "ios-app",
+            environment: endpoint.environment,
+          },
+          { computerName },
+        );
+      } catch {
+        continue;
+      }
+      if (outcome.outcome === "invalidate") {
+        await this.invalidateEndpoint(endpoint.id);
+      }
+    }
+    await this.ctx.storage.put(TOKEN_CACHE_KEY, apns.tokenCache);
+    return new Response(null, { status: 202 });
+  }
+
   async deliverClient(clientId, force) {
     const state = await aggregateClientState(this.env.DB, clientId);
     const totalAgents =
@@ -559,6 +614,9 @@ export class PushCoordinator extends DurableObject {
 
     for (const endpoint of endpoints) {
       const surface = endpoint.surface;
+      // The app alert surface is driven only by explicit pairing-claim
+      // events, never by aggregate state invalidations.
+      if (surface === "ios-app") continue;
       if (!force && Number(endpoint.lastSequence) >= state.sequence) continue;
       const retryNotBefore = Number(endpoint.retryNotBefore);
       if (Number.isFinite(retryNotBefore) && retryNotBefore > Math.floor(now / 1000)) {

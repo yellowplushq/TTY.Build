@@ -16,7 +16,12 @@ import {
 } from "./core.mjs";
 import { PushCoordinator } from "./push-coordinator.mjs";
 import { RelayChannel } from "./relay-channel.mjs";
-import { handleDesktopDownload, handleWebsiteAsset } from "./site.mjs";
+import { handleLegacyPairing } from "./legacy-pairing.mjs";
+import {
+  handleDesktopDownload,
+  handlePairedDownload,
+  handleWebsiteAsset,
+} from "./site.mjs";
 
 export { PushCoordinator, RelayChannel };
 
@@ -201,7 +206,10 @@ async function collectOrphans(env) {
   const computerCutoff = now - ORPHAN_COMPUTER_RETENTION_SECONDS;
   await env.DB.batch([
     env.DB
-      .prepare(`DELETE FROM pairing_sessions WHERE expires_at <= ?1`)
+      .prepare(`DELETE FROM pairing_codes WHERE expires_at <= ?1`)
+      .bind(now),
+    env.DB
+      .prepare(`DELETE FROM pairing_claims WHERE expires_at <= ?1`)
       .bind(now),
     env.DB
       .prepare(
@@ -213,11 +221,22 @@ async function collectOrphans(env) {
                AND NOT EXISTS (
                      SELECT 1 FROM client_computers b WHERE b.client_id = c.id
                    )
+               -- A live issued code or a claim in flight marks a real,
+               -- still-unpaired install; deleting the client would strand
+               -- its Keychain identity.
+               AND NOT EXISTS (
+                     SELECT 1 FROM pairing_codes p
+                      WHERE p.client_id = c.id AND p.expires_at > ?2
+                   )
+               AND NOT EXISTS (
+                     SELECT 1 FROM pairing_claims pc
+                      WHERE pc.client_id = c.id AND pc.expires_at > ?2
+                   )
              ORDER BY c.created_at, c.id
              LIMIT 100
           )`,
       )
-      .bind(clientCutoff),
+      .bind(clientCutoff, now),
     env.DB
       .prepare(
         `DELETE FROM computers
@@ -339,10 +358,20 @@ const worker = {
         });
       }
 
+      const paired = /^\/download\/(\d{8})\/macos\.zip$/.exec(url.pathname);
+      if (paired) {
+        const response = await handlePairedDownload(request, env, paired[1]);
+        if (response) return response;
+      }
       const download = handleDesktopDownload(request, env, url);
       if (download) return download;
 
       if (url.pathname.startsWith("/v2/")) {
+        // Pre-unification apps still speak the pairing-sessions endpoints;
+        // the shim translates them onto the unified tables. Remove with
+        // legacy-pairing.mjs once the installed fleet has updated.
+        const legacy = await handleLegacyPairing(request, env, ctx, url);
+        if (legacy) return legacy;
         const response = await handleApi(request, env, ctx, url);
         if (response) return response;
       }

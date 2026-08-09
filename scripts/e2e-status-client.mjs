@@ -38,18 +38,18 @@ async function bind(serviceURL, code, outputPath) {
 
   const { privateKey, publicKey } = generateKeyPairSync("x25519");
   const clientPublicKey = publicKey.export({ format: "jwk" }).x;
-  const claim = await request(serviceURL, "/v2/clients/me/pairing-sessions/claim", {
+  const claim = await request(serviceURL, "/v2/clients/me/pairing-codes/claim", {
     method: "POST",
     token: clientToken,
-    body: { code, clientPublicKey },
+    body: { code, publicKey: clientPublicKey },
   });
   assert.equal(claim.response.status, 200, JSON.stringify(claim.value));
-  const { sessionId, hostPublicKey } = claim.value;
+  const { claimId, hostPublicKey } = claim.value;
 
-  const replay = await request(serviceURL, "/v2/clients/me/pairing-sessions/claim", {
+  const replay = await request(serviceURL, "/v2/clients/me/pairing-codes/claim", {
     method: "POST",
     token: clientToken,
-    body: { code, clientPublicKey: "A".repeat(43) },
+    body: { code, publicKey: "A".repeat(43) },
   });
   assert.equal(replay.response.status, 400, "one-time pairing code was accepted twice");
 
@@ -58,11 +58,11 @@ async function bind(serviceURL, code, outputPath) {
   while (Date.now() < deadline) {
     const status = await request(
       serviceURL,
-      `/v2/clients/me/pairing-sessions/${sessionId}`,
+      `/v2/clients/me/pairing-claims/${claimId}`,
       { token: clientToken },
     );
     assert.equal(status.response.status, 200, JSON.stringify(status.value));
-    if (status.value.status === "completed") {
+    if (status.value.status === "sealed") {
       completed = status.value;
       break;
     }
@@ -78,8 +78,8 @@ async function bind(serviceURL, code, outputPath) {
   const key = Buffer.from(hkdfSync(
     "sha256",
     sharedSecret,
-    Buffer.from("Pedals pairing code v2"),
-    Buffer.from(sessionId),
+    Buffer.from("Pedals pairing v3"),
+    Buffer.from(claimId),
     32,
   ));
   const envelope = Buffer.from(completed.encryptedSecret, "base64url");
@@ -89,17 +89,18 @@ async function bind(serviceURL, code, outputPath) {
   const decipher = createDecipheriv("chacha20-poly1305", key, nonce, {
     authTagLength: 16,
   });
-  decipher.setAAD(Buffer.from(sessionId));
+  decipher.setAAD(Buffer.from(claimId));
   decipher.setAuthTag(tag);
   const secret = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   assert.equal(secret.length, 32, "pairing envelope did not contain the E2EE secret");
 
-  const acknowledged = await request(
+  // The accept is the edge-creating consent of the unified ceremony.
+  const accepted = await request(
     serviceURL,
-    `/v2/clients/me/pairing-sessions/${sessionId}`,
-    { method: "DELETE", token: clientToken },
+    `/v2/clients/me/pairing-claims/${claimId}/accept`,
+    { method: "POST", token: clientToken },
   );
-  assert.equal(acknowledged.response.status, 204);
+  assert.equal(accepted.response.status, 201, JSON.stringify(accepted.value));
 
   await writeFile(
     outputPath,

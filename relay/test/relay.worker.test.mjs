@@ -163,35 +163,43 @@ async function createClient() {
   return value;
 }
 
-async function createInvite(computer) {
+async function createInvite(computer, extra = {}) {
   const { response, value } = await apiJson(
-    `/v2/computers/${computer.computerId}/pairing-sessions`,
+    `/v2/computers/${computer.computerId}/pairing-codes`,
     {
       method: "POST",
       token: computer.hostToken,
-      body: { hostPublicKey: "A".repeat(43) },
+      body: { publicKey: "A".repeat(43), ...extra },
     },
   );
   expect(response.status).toBe(201);
   return value;
 }
 
+/// Full interactive ceremony: the client claims, the host seals, the client
+/// accepts. Returns the first non-2xx response, or the accept response.
 async function bind(client, computer, invite = undefined) {
   const grant = invite ?? (await createInvite(computer));
-  const claim = await api(`/v2/clients/me/pairing-sessions/claim`, {
+  const claim = await api(`/v2/clients/me/pairing-codes/claim`, {
     method: "POST",
     token: client.clientToken,
-    body: { code: grant.code, clientPublicKey: "B".repeat(43) },
+    body: { code: grant.code, publicKey: "B".repeat(43) },
   });
   if (claim.status < 200 || claim.status >= 300) return claim;
-  return api(
-    `/v2/computers/${computer.computerId}/pairing-sessions/${grant.sessionId}/complete`,
+  const { claimId } = await claim.json();
+  const complete = await api(
+    `/v2/computers/${computer.computerId}/pairing-claims/${claimId}/complete`,
     {
       method: "POST",
       token: computer.hostToken,
       body: { encryptedSecret: "C".repeat(80) },
     },
   );
+  if (complete.status < 200 || complete.status >= 300) return complete;
+  return api(`/v2/clients/me/pairing-claims/${claimId}/accept`, {
+    method: "POST",
+    token: client.clientToken,
+  });
 }
 
 async function connect(computerId, token, channel = "control", sid = undefined) {
@@ -420,9 +428,9 @@ describe("Pedals v2 Worker API", () => {
 
   test("JSON API enforces authorization, shape, and 16 KiB body cap", async () => {
     const computer = await createComputer();
-    const unauthorized = await api(`/v2/computers/${computer.computerId}/pairing-sessions`, {
+    const unauthorized = await api(`/v2/computers/${computer.computerId}/pairing-codes`, {
       method: "POST",
-      body: { hostPublicKey: "A".repeat(43) },
+      body: { publicKey: "A".repeat(43) },
     });
     expect(unauthorized.status).toBe(401);
 
@@ -446,10 +454,10 @@ describe("Pedals v2 Worker API", () => {
       (await api("/v2/clients/me/state", { token: client.clientToken })).status,
     ).toBe(401);
     expect(
-      (await api("/v2/clients/me/pairing-sessions/claim", {
+      (await api("/v2/clients/me/pairing-codes/claim", {
         method: "POST",
         token: client.statusToken,
-        body: { code: "12345678", clientPublicKey: "B".repeat(43) },
+        body: { code: "12345678", publicKey: "B".repeat(43) },
       })).status,
     ).toBe(401);
     expect((await connect(computer.computerId, client.statusToken)).response.status).toBe(401);
@@ -507,7 +515,7 @@ describe("Pedals v2 Worker API", () => {
     expect((await bind(client, computer, first)).status).toBe(400);
     expect(
       (await api(
-        `/v2/computers/${computer.computerId}/pairing-sessions/${second.sessionId}`,
+        `/v2/computers/${computer.computerId}/pairing-codes/${second.codeId}`,
         { method: "DELETE", token: computer.hostToken },
       )).status,
     ).toBe(204);
@@ -515,7 +523,7 @@ describe("Pedals v2 Worker API", () => {
     expect(
       Number(
         await env.DB.prepare(
-          `SELECT COUNT(*) AS count FROM pairing_sessions WHERE computer_id = ?1`,
+          `SELECT COUNT(*) AS count FROM pairing_codes WHERE computer_id = ?1`,
         ).bind(computer.computerId).first("count"),
       ),
     ).toBe(0);
@@ -527,52 +535,75 @@ describe("Pedals v2 Worker API", () => {
     const pairing = await createInvite(computer);
     expect(pairing.code).toMatch(/^\d{8}$/);
     expect(pairing.expiresAt - Math.floor(Date.now() / 1000)).toBeGreaterThan(890);
-    const claim = await apiJson("/v2/clients/me/pairing-sessions/claim", {
+    const claim = await apiJson("/v2/clients/me/pairing-codes/claim", {
       method: "POST",
       token: client.clientToken,
-      body: { code: pairing.code, clientPublicKey: "B".repeat(43) },
+      body: { code: pairing.code, publicKey: "B".repeat(43) },
     });
     expect(claim.response.status).toBe(200);
     expect(claim.value).toMatchObject({
-      sessionId: pairing.sessionId,
       computerId: computer.computerId,
       hostPublicKey: "A".repeat(43),
     });
+    const claimId = claim.value.claimId;
     const status = await apiJson(
-      `/v2/computers/${computer.computerId}/pairing-sessions/${pairing.sessionId}`,
+      `/v2/computers/${computer.computerId}/pairing-codes/${pairing.codeId}`,
       { token: computer.hostToken },
     );
-    expect(status.value).toMatchObject({ status: "claimed", clientPublicKey: "B".repeat(43) });
+    expect(status.value).toMatchObject({
+      status: "claimed",
+      claimId,
+      clientPublicKey: "B".repeat(43),
+    });
 
     const completed = await api(
-      `/v2/computers/${computer.computerId}/pairing-sessions/${pairing.sessionId}/complete`,
+      `/v2/computers/${computer.computerId}/pairing-claims/${claimId}/complete`,
       {
         method: "POST",
         token: computer.hostToken,
         body: { encryptedSecret: "C".repeat(80) },
       },
     );
-    expect(completed.status).toBe(201);
+    expect(completed.status).toBe(204);
+    const hostView = await apiJson(
+      `/v2/computers/${computer.computerId}/pairing-codes/${pairing.codeId}`,
+      { token: computer.hostToken },
+    );
+    expect(hostView.value.status).toBe("completed");
     const clientStatus = await apiJson(
-      `/v2/clients/me/pairing-sessions/${pairing.sessionId}`,
+      `/v2/clients/me/pairing-claims/${claimId}`,
       { token: client.clientToken },
     );
     expect(clientStatus.value).toMatchObject({
-      status: "completed",
+      status: "sealed",
       computerId: computer.computerId,
       encryptedSecret: "C".repeat(80),
     });
+    // The client's own claim is not on the confirmation list — it accepts
+    // itself as part of the interactive flow.
+    const pendingList = await apiJson("/v2/clients/me/pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(pendingList.value.claims).toEqual([]);
     expect(
-      (await api(`/v2/clients/me/pairing-sessions/${pairing.sessionId}`, {
-        method: "DELETE",
+      (await api(`/v2/clients/me/pairing-claims/${claimId}/accept`, {
+        method: "POST",
         token: client.clientToken,
       })).status,
-    ).toBe(204);
+    ).toBe(201);
     expect(
       Number(
         await env.DB.prepare(
-          `SELECT COUNT(*) AS count FROM pairing_sessions WHERE id = ?1`,
-        ).bind(pairing.sessionId).first("count"),
+          `SELECT COUNT(*) AS count FROM pairing_claims WHERE id = ?1`,
+        ).bind(claimId).first("count"),
+      ),
+    ).toBe(0);
+    // Accepting a single-use code retires the code itself.
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM pairing_codes WHERE id = ?1`,
+        ).bind(pairing.codeId).first("count"),
       ),
     ).toBe(0);
   });
@@ -607,16 +638,18 @@ describe("Pedals v2 Worker API", () => {
       const limited = await bind(client, target, invite);
       expect(limited.status).toBe(429);
       expect((await limited.json()).error.code).toBe("binding_limit");
+      // The capacity rejection happened at claim time, so the single-use
+      // code was never consumed.
       expect(
-        await env.DB
-          .prepare(
-            `SELECT claimed_by AS claimedBy
-               FROM pairing_sessions
-              WHERE computer_id = ?1`,
-          )
-          .bind(target.computerId)
-          .first("claimedBy"),
-      ).toBeNull();
+        Number(
+          await env.DB
+            .prepare(
+              `SELECT COUNT(*) AS count FROM pairing_codes WHERE computer_id = ?1`,
+            )
+            .bind(target.computerId)
+            .first("count"),
+        ),
+      ).toBe(1);
       expect(
         Number(
           await env.DB
@@ -2311,8 +2344,9 @@ describe("scheduled abuse cleanup and push reconciliation", () => {
     const retainedClient = await createClient();
     const orphanComputer = await createComputer();
     const retainedComputer = await createComputer();
-    const expiredInvite = await createInvite(retainedComputer);
     expect((await bind(retainedClient, retainedComputer)).status).toBe(201);
+    // Issued after the bind so the bind's own code creation cannot replace it.
+    const expiredInvite = await createInvite(retainedComputer);
     expect(
       (await api("/v2/clients/me/push-endpoints/ios-widget", {
         method: "PUT",
@@ -2336,18 +2370,8 @@ describe("scheduled abuse cleanup and push reconciliation", () => {
         .prepare(`UPDATE computers SET created_at = ?2 WHERE id = ?1`)
         .bind(retainedComputer.computerId, now - ORPHAN_COMPUTER_RETENTION_SECONDS - 1),
       env.DB
-        .prepare(`UPDATE pairing_sessions SET expires_at = 0 WHERE id = ?1`)
-        .bind(await (async () => {
-          const result = await env.DB
-            .prepare(
-              `SELECT id
-                 FROM pairing_sessions
-                WHERE computer_id = ?1`,
-            )
-            .bind(retainedComputer.computerId)
-            .first();
-          return result.id;
-        })()),
+        .prepare(`UPDATE pairing_codes SET expires_at = 0 WHERE id = ?1`)
+        .bind(expiredInvite.codeId),
     ]);
 
     await collectOrphans(env);
@@ -2396,7 +2420,7 @@ describe("scheduled abuse cleanup and push reconciliation", () => {
         await env.DB
           .prepare(
             `SELECT COUNT(*) AS count
-               FROM pairing_sessions
+               FROM pairing_codes
               WHERE computer_id = ?1 AND expires_at = 0`,
           )
           .bind(retainedComputer.computerId)
@@ -3360,6 +3384,571 @@ describe("agent counts and alerts", () => {
       });
     } finally {
       closeAll(host);
+    }
+  });
+});
+
+describe("client-issued pairing codes (reverse pairing)", () => {
+  async function registerToken(client, publicKey = "P".repeat(43)) {
+    const { response, value } = await apiJson("/v2/clients/me/pairing-codes", {
+      method: "POST",
+      token: client.clientToken,
+      body: { publicKey },
+    });
+    expect(response.status).toBe(201);
+    expect(value.code).toMatch(/^\d{8}$/);
+    expect(value.singleUse).toBe(false);
+    expect(value.expiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    return value;
+  }
+
+  async function claim(computer, code, name = "Studio Mac") {
+    return apiJson(`/v2/computers/${computer.computerId}/pairing-codes/claim`, {
+      method: "POST",
+      token: computer.hostToken,
+      body: { code, publicKey: "H".repeat(43), computerName: name },
+    });
+  }
+
+  async function complete(computer, claimId, envelope = "E".repeat(80)) {
+    return api(
+      `/v2/computers/${computer.computerId}/pairing-claims/${claimId}/complete`,
+      { method: "POST", token: computer.hostToken, body: { encryptedSecret: envelope } },
+    );
+  }
+
+  test("full ceremony: register, claim, complete, list, confirm creates the edge", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+
+    const claimed = await claim(computer, token.code);
+    expect(claimed.response.status).toBe(201);
+    expect(claimed.value.clientPublicKey).toBe("P".repeat(43));
+    expect(claimed.value.claimId).toMatch(/^[0-9a-f]{32}$/);
+
+    // Not listed until the envelope arrives.
+    const before = await apiJson("/v2/clients/me/pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(before.value.claims).toEqual([]);
+
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    const listed = await apiJson("/v2/clients/me/pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(listed.value.claims).toHaveLength(1);
+    expect(listed.value.claims[0]).toMatchObject({
+      claimId: claimed.value.claimId,
+      computerId: computer.computerId,
+      computerName: "Studio Mac",
+      hostPublicKey: "H".repeat(43),
+      encryptedSecret: "E".repeat(80),
+    });
+
+    expect(
+      (await api(`/v2/clients/me/pairing-claims/${claimed.value.claimId}/accept`, {
+        method: "POST",
+        token: client.clientToken,
+      })).status,
+    ).toBe(201);
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM client_computers
+            WHERE client_id = ?1 AND computer_id = ?2`,
+        ).bind(client.clientId, computer.computerId).first("count"),
+      ),
+    ).toBe(1);
+    // Claim row is consumed by confirmation.
+    const after = await apiJson("/v2/clients/me/pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(after.value.claims).toEqual([]);
+  });
+
+  test("the token is multi-use and a re-claim by the same computer replaces its claim", async () => {
+    const client = await createClient();
+    const first = await createComputer();
+    const second = await createComputer();
+    const token = await registerToken(client);
+
+    const claimA = await claim(first, token.code, "First");
+    expect((await complete(first, claimA.value.claimId)).status).toBe(204);
+    const claimB = await claim(second, token.code, "Second");
+    expect((await complete(second, claimB.value.claimId)).status).toBe(204);
+
+    // Same computer claims again: the pending envelope resets.
+    const claimA2 = await claim(first, token.code, "First Renamed");
+    expect(claimA2.response.status).toBe(201);
+    const listed = await apiJson("/v2/clients/me/pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(listed.value.claims).toHaveLength(1);
+    expect(listed.value.claims[0].computerName).toBe("Second");
+
+    expect((await complete(first, claimA2.value.claimId)).status).toBe(204);
+    const relisted = await apiJson("/v2/clients/me/pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(relisted.value.claims.map((entry) => entry.computerName).sort()).toEqual([
+      "First Renamed",
+      "Second",
+    ]);
+  });
+
+  test("rejecting a claim deletes it without creating an edge and stays invisible to the computer", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+    const claimed = await claim(computer, token.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    expect(
+      (await api(`/v2/clients/me/pairing-claims/${claimed.value.claimId}`, {
+        method: "DELETE",
+        token: client.clientToken,
+      })).status,
+    ).toBe(204);
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM client_computers
+            WHERE client_id = ?1 AND computer_id = ?2`,
+        ).bind(client.clientId, computer.computerId).first("count"),
+      ),
+    ).toBe(0);
+    // Confirming the deleted claim reports it gone.
+    expect(
+      (await api(`/v2/clients/me/pairing-claims/${claimed.value.claimId}/accept`, {
+        method: "POST",
+        token: client.clientToken,
+      })).status,
+    ).toBe(410);
+  });
+
+  test("an unknown code, invalid name, or wrong bearer is rejected", async () => {
+    const client = await createClient();
+    const stranger = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+
+    expect((await claim(computer, "00000000")).response.status).toBe(400);
+    expect((await claim(computer, token.code, "")).response.status).toBe(400);
+    expect((await claim(computer, token.code, "x".repeat(65))).response.status).toBe(400);
+
+    const claimed = await claim(computer, token.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+    // A different client cannot see, confirm, or reject the claim.
+    const foreign = await apiJson("/v2/clients/me/pairing-claims", {
+      token: stranger.clientToken,
+    });
+    expect(foreign.value.claims).toEqual([]);
+    expect(
+      (await api(`/v2/clients/me/pairing-claims/${claimed.value.claimId}/accept`, {
+        method: "POST",
+        token: stranger.clientToken,
+      })).status,
+    ).toBe(410);
+    // A second complete cannot overwrite the sealed envelope.
+    expect((await complete(computer, claimed.value.claimId, "F".repeat(80))).status).toBe(400);
+  });
+
+  test("replacing the token drops pending claims and retires the old code", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const first = await registerToken(client);
+    const claimed = await claim(computer, first.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    const second = await registerToken(client, "Q".repeat(43));
+    const listed = await apiJson("/v2/clients/me/pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(listed.value.claims).toEqual([]);
+    expect((await claim(computer, first.code)).response.status).toBe(400);
+    expect((await claim(computer, second.code)).response.status).toBe(201);
+  });
+
+  test("an expired code stops claiming but a same-key refresh keeps pending claims", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+    const claimed = await claim(computer, token.code, "Before Expiry");
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    await env.DB.prepare(
+      `UPDATE pairing_codes SET expires_at = 1 WHERE client_id = ?1`,
+    ).bind(client.clientId).run();
+    const late = await createComputer();
+    expect((await claim(late, token.code)).response.status).toBe(400);
+
+    // Refreshing with the SAME durable key mints a new code and keeps the
+    // pending claim confirmable.
+    const refreshed = await registerToken(client);
+    const listed = await apiJson("/v2/clients/me/pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(listed.value.claims.map((entry) => entry.computerName)).toEqual([
+      "Before Expiry",
+    ]);
+    expect((await claim(late, refreshed.code)).response.status).toBe(201);
+    expect(
+      (await api(`/v2/clients/me/pairing-claims/${claimed.value.claimId}/accept`, {
+        method: "POST",
+        token: client.clientToken,
+      })).status,
+    ).toBe(201);
+  });
+
+  test("expired enrollment tokens are swept and only live signals protect a client", async () => {
+    const spent = await createClient();
+    const awaiting = await createClient();
+    const computer = await createComputer();
+    await registerToken(spent);
+    const token = await registerToken(awaiting);
+    const claimed = await claim(computer, token.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE pairing_codes SET expires_at = 1
+          WHERE client_id IN (?1, ?2)`,
+      ).bind(spent.clientId, awaiting.clientId),
+      env.DB.prepare(`UPDATE clients SET created_at = ?2 WHERE id IN (?1, ?3)`).bind(
+        spent.clientId,
+        now - ORPHAN_CLIENT_RETENTION_SECONDS - 1,
+        awaiting.clientId,
+      ),
+    ]);
+    await collectOrphans(env);
+
+    // Both expired token rows are gone; the client with a pending claim
+    // survives, the one with nothing left does not.
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM pairing_codes
+            WHERE client_id IN (?1, ?2)`,
+        ).bind(spent.clientId, awaiting.clientId).first("count"),
+      ),
+    ).toBe(0);
+    const survivors = await env.DB.prepare(
+      `SELECT id FROM clients WHERE id IN (?1, ?2)`,
+    ).bind(spent.clientId, awaiting.clientId).all();
+    expect(survivors.results.map((row) => row.id)).toEqual([awaiting.clientId]);
+  });
+
+  test("an unpaired client holding an enrollment token survives the orphan sweep", async () => {
+    const tokenHolder = await createClient();
+    const plainOrphan = await createClient();
+    await registerToken(tokenHolder);
+
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      `UPDATE clients SET created_at = ?2 WHERE id IN (?1, ?3)`,
+    ).bind(
+      tokenHolder.clientId,
+      now - ORPHAN_CLIENT_RETENTION_SECONDS - 1,
+      plainOrphan.clientId,
+    ).run();
+    await collectOrphans(env);
+
+    const survivors = await env.DB.prepare(
+      `SELECT id FROM clients WHERE id IN (?1, ?2)`,
+    ).bind(tokenHolder.clientId, plainOrphan.clientId).all();
+    expect(survivors.results.map((row) => row.id)).toEqual([tokenHolder.clientId]);
+    // The token still claims after the sweep.
+    const computer = await createComputer();
+    const token = await registerToken(tokenHolder);
+    expect((await claim(computer, token.code)).response.status).toBe(201);
+  });
+
+  test("expired claims are swept by the cron sweep and cannot be confirmed", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+    const claimed = await claim(computer, token.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    await env.DB.prepare(
+      `UPDATE pairing_claims SET expires_at = 1 WHERE id = ?1`,
+    ).bind(claimed.value.claimId).run();
+    expect(
+      (await api(`/v2/clients/me/pairing-claims/${claimed.value.claimId}/accept`, {
+        method: "POST",
+        token: client.clientToken,
+      })).status,
+    ).toBe(410);
+    await collectOrphans(env);
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM pairing_claims WHERE id = ?1`,
+        ).bind(claimed.value.claimId).first("count"),
+      ),
+    ).toBe(0);
+  });
+
+  test("a completed claim raises one visible ios-app alert through the coordinator", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+    expect(
+      (await api("/v2/clients/me/push-endpoints/ios-app", {
+        method: "PUT",
+        token: client.statusToken,
+        body: { token: "ab".repeat(32), environment: "sandbox" },
+      })).status,
+    ).toBe(200);
+
+    const claimed = await claim(computer, token.code, "Push Mac");
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    // The endpoint survives (the fake APNs accepts tokens not starting with
+    // de/fa/fb) and remains valid for the next claim.
+    await waitFor(async () =>
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'ios-app' AND invalidated_at IS NULL`,
+        ).bind(client.clientId).first("count"),
+      ) === 1 ? true : null,
+    );
+  });
+
+  test("a dead device token invalidates the ios-app endpoint on claim delivery", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+    expect(
+      (await api("/v2/clients/me/push-endpoints/ios-app", {
+        method: "PUT",
+        token: client.statusToken,
+        body: { token: "de".repeat(32), environment: "sandbox" },
+      })).status,
+    ).toBe(200);
+
+    const claimed = await claim(computer, token.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    await waitFor(async () =>
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'ios-app' AND invalidated_at IS NOT NULL`,
+        ).bind(client.clientId).first("count"),
+      ) === 1 ? true : null,
+    );
+  });
+});
+
+describe("legacy pairing-sessions shim", () => {
+  async function createLegacySession(computer) {
+    const { response, value } = await apiJson(
+      `/v2/computers/${computer.computerId}/pairing-sessions`,
+      {
+        method: "POST",
+        token: computer.hostToken,
+        body: { hostPublicKey: "A".repeat(43) },
+      },
+    );
+    expect(response.status).toBe(201);
+    expect(value.sessionId).toMatch(/^[0-9a-f]{32}$/);
+    expect(value.code).toMatch(/^\d{8}$/);
+    return value;
+  }
+
+  test("old desktop and old iOS complete the full legacy ceremony", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    const session = await createLegacySession(computer);
+
+    const claim = await apiJson("/v2/clients/me/pairing-sessions/claim", {
+      method: "POST",
+      token: client.clientToken,
+      body: { code: session.code, clientPublicKey: "B".repeat(43) },
+    });
+    expect(claim.response.status).toBe(200);
+    expect(claim.value).toMatchObject({
+      sessionId: session.sessionId,
+      computerId: computer.computerId,
+      hostPublicKey: "A".repeat(43),
+    });
+
+    const hostView = await apiJson(
+      `/v2/computers/${computer.computerId}/pairing-sessions/${session.sessionId}`,
+      { token: computer.hostToken },
+    );
+    expect(hostView.value).toMatchObject({
+      status: "claimed",
+      clientPublicKey: "B".repeat(43),
+    });
+
+    // Legacy complete seals AND creates the edge — old clients never accept.
+    const completed = await apiJson(
+      `/v2/computers/${computer.computerId}/pairing-sessions/${session.sessionId}/complete`,
+      {
+        method: "POST",
+        token: computer.hostToken,
+        body: { encryptedSecret: "C".repeat(80) },
+      },
+    );
+    expect(completed.response.status).toBe(201);
+    expect(completed.value).toMatchObject({ computerId: computer.computerId, bound: true });
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM client_computers
+            WHERE client_id = ?1 AND computer_id = ?2`,
+        ).bind(client.clientId, computer.computerId).first("count"),
+      ),
+    ).toBe(1);
+
+    const clientView = await apiJson(
+      `/v2/clients/me/pairing-sessions/${session.sessionId}`,
+      { token: client.clientToken },
+    );
+    expect(clientView.value).toMatchObject({
+      status: "completed",
+      computerId: computer.computerId,
+      encryptedSecret: "C".repeat(80),
+    });
+
+    // Acknowledgement consumes the claim and retires the single-use code:
+    // the same code can never be claimed again.
+    expect(
+      (await api(`/v2/clients/me/pairing-sessions/${session.sessionId}`, {
+        method: "DELETE",
+        token: client.clientToken,
+      })).status,
+    ).toBe(204);
+    const replay = await api("/v2/clients/me/pairing-sessions/claim", {
+      method: "POST",
+      token: (await createClient()).clientToken,
+      body: { code: session.code, clientPublicKey: "D".repeat(43) },
+    });
+    expect(replay.status).toBe(400);
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM pairing_codes WHERE id = ?1`,
+        ).bind(session.sessionId).first("count"),
+      ),
+    ).toBe(0);
+  });
+
+  test("legacy cancel revokes the code and a second issue replaces the first", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    const first = await createLegacySession(computer);
+    const second = await createLegacySession(computer);
+
+    // Issuing replaced the first code entirely.
+    const staleClaim = await api("/v2/clients/me/pairing-sessions/claim", {
+      method: "POST",
+      token: client.clientToken,
+      body: { code: first.code, clientPublicKey: "B".repeat(43) },
+    });
+    expect(staleClaim.status).toBe(400);
+
+    expect(
+      (await api(
+        `/v2/computers/${computer.computerId}/pairing-sessions/${second.sessionId}`,
+        { method: "DELETE", token: computer.hostToken },
+      )).status,
+    ).toBe(204);
+    const cancelledClaim = await api("/v2/clients/me/pairing-sessions/claim", {
+      method: "POST",
+      token: client.clientToken,
+      body: { code: second.code, clientPublicKey: "B".repeat(43) },
+    });
+    expect(cancelledClaim.status).toBe(400);
+  });
+
+  test("legacy and unified endpoints see the same rendezvous state", async () => {
+    // An old phone claims a code issued through the unified endpoint…
+    const newDesktop = await createComputer();
+    const oldPhone = await createClient();
+    const unifiedCode = await createInvite(newDesktop);
+    const legacyClaim = await apiJson("/v2/clients/me/pairing-sessions/claim", {
+      method: "POST",
+      token: oldPhone.clientToken,
+      body: { code: unifiedCode.code, clientPublicKey: "B".repeat(43) },
+    });
+    expect(legacyClaim.response.status).toBe(200);
+    // …and the new desktop's unified poll observes that claim.
+    const unifiedPoll = await apiJson(
+      `/v2/computers/${newDesktop.computerId}/pairing-codes/${unifiedCode.codeId}`,
+      { token: newDesktop.hostToken },
+    );
+    expect(unifiedPoll.value.status).toBe("claimed");
+
+    // A new phone claims a legacy-issued session…
+    const oldDesktop = await createComputer();
+    const newPhone = await createClient();
+    const legacySession = await createLegacySession(oldDesktop);
+    const unifiedClaim = await apiJson("/v2/clients/me/pairing-codes/claim", {
+      method: "POST",
+      token: newPhone.clientToken,
+      body: { code: legacySession.code, publicKey: "E".repeat(43) },
+    });
+    expect(unifiedClaim.response.status).toBe(200);
+    // …and the old desktop's legacy poll observes it.
+    const legacyPoll = await apiJson(
+      `/v2/computers/${oldDesktop.computerId}/pairing-sessions/${legacySession.sessionId}`,
+      { token: oldDesktop.hostToken },
+    );
+    expect(legacyPoll.value).toMatchObject({
+      status: "claimed",
+      clientPublicKey: "E".repeat(43),
+    });
+  });
+
+  test("legacy claim rejects at binding capacity without consuming the code", async () => {
+    const client = await createClient();
+    const target = await createComputer();
+    const session = await createLegacySession(target);
+    try {
+      await env.DB
+        .prepare(
+          `WITH RECURSIVE seq(i) AS (
+             SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < ?1
+           )
+           INSERT INTO computers (id, host_token_hash, created_at)
+           SELECT printf('e1%030x', i), printf('e3%062x', i), -104 FROM seq`,
+        )
+        .bind(MAX_BINDINGS_PER_CLIENT)
+        .run();
+      await env.DB
+        .prepare(
+          `WITH RECURSIVE seq(i) AS (
+             SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < ?2
+           )
+           INSERT INTO client_computers
+             (client_id, computer_id, mutation_id, created_at)
+           SELECT ?1, printf('e1%030x', i), printf('e2%030x', i), -104 FROM seq`,
+        )
+        .bind(client.clientId, MAX_BINDINGS_PER_CLIENT)
+        .run();
+
+      const limited = await api("/v2/clients/me/pairing-sessions/claim", {
+        method: "POST",
+        token: client.clientToken,
+        body: { code: session.code, clientPublicKey: "B".repeat(43) },
+      });
+      expect(limited.status).toBe(429);
+      expect(
+        Number(
+          await env.DB.prepare(
+            `SELECT COUNT(*) AS count FROM pairing_codes WHERE id = ?1`,
+          ).bind(session.sessionId).first("count"),
+        ),
+      ).toBe(1);
+    } finally {
+      await env.DB.prepare(`DELETE FROM computers WHERE created_at = -104`).run();
     }
   });
 });

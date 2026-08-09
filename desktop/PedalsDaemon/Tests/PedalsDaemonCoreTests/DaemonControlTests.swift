@@ -88,6 +88,19 @@ final class DaemonControlTests: XCTestCase {
         daemon.cancelPairingInvitation()
     }
 
+    func testClaimReversePairingSubmitsCodeAndComputerNameAgainstCurrentIdentity() throws {
+        let identity = try XCTUnwrap(home.loadIdentity())
+        factory.clearEvents()
+        try daemon.claimReversePairing(
+            code: PairingCode("01234567"),
+            computerName: "Studio Mac"
+        )
+        XCTAssertEqual(
+            factory.events,
+            ["claim:01234567:Studio Mac:\(identity.computer.computerID)"]
+        )
+    }
+
     func testPairReturnsSingleUseCodesAndResetRotatesComputer() throws {
         let originalIdentity = try XCTUnwrap(home.loadIdentity())
         let first = try send(["cmd": "pair"])
@@ -247,21 +260,28 @@ private final class IdentityFactory: @unchecked Sendable {
                     }
                 }
             },
-            createPairingSession: { [self] identity in
+            createPairingCode: { [self] identity in
                 try lock.withLock {
                     recordedEvents.append("pairing:\(identity.computer.computerID)")
                     inviteCounter += 1
-                    return HostPairingSession(
-                        sessionID: String(format: "%032x", inviteCounter),
+                    return HostPairingCode(
+                        codeID: String(format: "%032x", inviteCounter),
                         code: try PairingCode(String(format: "%08d", inviteCounter)),
                         expiresAt: Int64(Date().timeIntervalSince1970) + 900,
                         privateKey: Data(repeating: UInt8(inviteCounter), count: 32)
                     )
                 }
             },
-            pairingSessionStatus: { _, _ in .waiting },
-            completePairingSession: { _, _, _ in },
-            cancelPairingSession: { _, _ in }
+            pairingCodeStatus: { _, _ in .waiting },
+            completePairingClaim: { _, _, _, _ in },
+            cancelPairingCode: { _, _ in },
+            claimReversePairing: { [self] code, computerName, identity in
+                lock.withLock {
+                    recordedEvents.append(
+                        "claim:\(code.digits):\(computerName):\(identity.computer.computerID)"
+                    )
+                }
+            }
         )
     }
 }

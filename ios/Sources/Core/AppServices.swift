@@ -3,6 +3,8 @@ import CryptoKit
 import Foundation
 import GhosttyTerminal
 import PedalsKit
+import UIKit
+import UserNotifications
 import WidgetKit
 
 /// Composition root: one instance owns every long-lived object in the app.
@@ -10,6 +12,10 @@ import WidgetKit
 final class AppServices {
     let preferences = TerminalPreferences()
     let pairingStore = PairingStore()
+    let reversePairing: ReversePairingStore
+    /// Completed reverse-pairing claims awaiting the user's confirmation.
+    /// MainViewController presents the confirmation card off this stream.
+    let pendingReverseClaims = CurrentValueSubject<[ReversePairingClaim], Never>([])
     let terminals: TerminalManager
     /// One controller per terminal view: TerminalSurfaceCoordinator installs
     /// itself as the controller's single onWakeup/shouldProcessWakeup closure,
@@ -30,8 +36,10 @@ final class AppServices {
         if forceReset || storedServiceURL.map({ $0 != Self.pairingServiceURL }) == true {
             PairingStore.resetKeychainForUITesting()
             WatchTerminalProvisioner.resetKeychainForUITesting()
+            ReversePairingStore.resetKeychainForUITesting()
         }
         #endif
+        reversePairing = ReversePairingStore(pairingStore: pairingStore)
         terminals = TerminalManager(pairingStore: pairingStore)
         terminals.$computers
             .sink { [weak self] computers in
@@ -70,6 +78,8 @@ final class AppServices {
         installSharedCredential()
         reconcileBindings()
         scheduleStatusRefresh(immediate: true)
+        refreshPendingReverseClaims()
+        registerForPairingNotificationsIfAuthorized()
     }
 
     func refreshStatusSurfaces() {
@@ -79,6 +89,114 @@ final class AppServices {
         reconcileBindings()
         synchronizeWatchTerminalContext()
         scheduleStatusRefresh(immediate: true)
+        refreshPendingReverseClaims()
+    }
+
+    // MARK: - Reverse pairing
+
+    /// The full one-line desktop install command for the pairing screen. The
+    /// enrollment code rides in the URL path — the service serves install.sh
+    /// with the code baked in — so the command stays as short as possible.
+    /// Falls back to the plain command when the token cannot be created
+    /// (offline first run).
+    func installCommand() async -> String {
+        guard let token = try? await reversePairing.ensureToken(
+            serviceURL: Self.pairingServiceURL
+        ) else { return "curl -fsSL https://pedals.air.build/i | bash" }
+        // Token registration may have just minted the client identity; the
+        // push-endpoint registrar needs its status credential installed.
+        installSharedCredential()
+        return "curl -fsSL https://pedals.air.build/\(token.code.digits) | bash"
+    }
+
+    func refreshPendingReverseClaims() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let claims = await reversePairing.pendingClaims(
+                serviceURL: Self.pairingServiceURL
+            )
+            pendingReverseClaims.send(claims)
+        }
+    }
+
+    /// Confirms one claim: decrypt, commit the binding locally, then create
+    /// the server edge — in that order, so a concurrent delete-only
+    /// reconcile can never remove the fresh edge. A failed confirmation
+    /// rolls the local commit back, so a later "Don't Allow" never strands
+    /// a computer the service will not serve.
+    func confirmReverseClaim(_ claim: ReversePairingClaim) async throws {
+        let binding = try reversePairing.openClaim(
+            claim, serviceURL: Self.pairingServiceURL
+        )
+        try await terminals.addReversePairedComputer(binding: binding)
+        do {
+            try await reversePairing.confirmClaim(
+                claimID: claim.claimID, serviceURL: Self.pairingServiceURL
+            )
+        } catch PedalsServiceAPI.APIError.rejected(let status, _) where status == 410 {
+            // Gone can mean either "this claim was already confirmed and the
+            // success response was lost" or "the claim expired". The edge
+            // set is the truth; keep the binding only when the edge exists.
+            // An unreachable verification keeps the optimistic commit — the
+            // computer shows offline at worst and can be unbound by hand.
+            if await pairingStore.serverHasBinding(computerID: binding.computerID) == false {
+                try? await terminals.removeComputer(id: binding.computerID)
+                throw PedalsServiceAPI.APIError.rejected(
+                    status: status, message: "pairing claim is closed or expired"
+                )
+            }
+        } catch {
+            try? await terminals.removeComputer(id: binding.computerID)
+            throw error
+        }
+        installSharedCredential()
+        scheduleStatusRefresh(immediate: true)
+        pendingReverseClaims.send(
+            pendingReverseClaims.value.filter { $0.claimID != claim.claimID }
+        )
+    }
+
+    func rejectReverseClaim(_ claim: ReversePairingClaim) async throws {
+        try await reversePairing.rejectClaim(
+            claimID: claim.claimID, serviceURL: Self.pairingServiceURL
+        )
+        pendingReverseClaims.send(
+            pendingReverseClaims.value.filter { $0.claimID != claim.claimID }
+        )
+    }
+
+    // MARK: - Pairing-claim notifications
+
+    /// Asks for notification permission (first time) and registers for a
+    /// device token. Called when the pairing screen appears — the moment the
+    /// enrollment command becomes relevant — never cold on first launch.
+    func enablePairingNotifications() {
+        Task { @MainActor in
+            let center = UNUserNotificationCenter.current()
+            let granted = (try? await center.requestAuthorization(
+                options: [.alert, .sound]
+            )) ?? false
+            guard granted else { return }
+            UIApplication.shared.registerForRemoteNotifications()
+        }
+    }
+
+    /// Refreshes the device token on launch when permission already exists.
+    private func registerForPairingNotificationsIfAuthorized() {
+        Task { @MainActor in
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
+            guard settings.authorizationStatus == .authorized else { return }
+            UIApplication.shared.registerForRemoteNotifications()
+        }
+    }
+
+    func handlePushDeviceToken(_ deviceToken: Data) {
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        Task {
+            await PushEndpointRegistrar.registerOrQueue(
+                PushEndpointRegistration(surface: .iOSApp, token: token)
+            )
+        }
     }
 
     /// Retries server-side convergence to the phone's authoritative binding

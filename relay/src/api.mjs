@@ -1,6 +1,9 @@
 import {
   ApiFailure,
-  PAIRING_CODE_TTL_SECONDS,
+  CLIENT_CLAIM_TTL_SECONDS,
+  CLIENT_CODE_TTL_SECONDS,
+  HOST_CLAIM_TTL_SECONDS,
+  HOST_CODE_TTL_SECONDS,
   MAX_BINDINGS_PER_CLIENT,
   MAX_CLIENTS,
   MAX_COMPUTERS,
@@ -19,7 +22,9 @@ import {
   isPushSurface,
   isoDate,
   json,
+  notifyPairingClaim,
   notifyPushCoordinator,
+  PAIRING_CODE_TTL_BOUNDS,
   randomId,
   randomPairingCode,
   randomToken,
@@ -34,6 +39,7 @@ const PAIRING_CODE = /^\d{8}$/;
 const CURVE25519_PUBLIC_KEY = /^[A-Za-z0-9_-]{43}$/;
 const ENCRYPTED_SECRET = /^[A-Za-z0-9_-]{64,256}$/;
 const CLIENT_TOKEN = /^[A-Za-z0-9_-]{32,128}$/;
+const COMPUTER_NAME = /^[^\u0000-\u001f\u007f]{1,64}$/;
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -153,122 +159,297 @@ async function createComputer(request, env) {
   return json({ computerId, hostToken }, 201);
 }
 
-async function createPairingSession(request, env, computerId) {
-  const host = await authenticateHost(request, env.DB, computerId);
-  if (!host) return apiError(401, "unauthorized", "valid host bearer required");
-  await limitAuthenticated(request, env, "INVITE_LIMITER", "pairing-session", host.id);
-  const body = await readJson(request);
-  requireBodyShape(body, ["hostPublicKey"]);
-  if (!CURVE25519_PUBLIC_KEY.test(body.hostPublicKey)) {
-    throw new ApiFailure(400, "invalid_public_key", "host public key is invalid");
+// ---- Unified pairing ----
+//
+// Either principal issues a code; the counterpart claims it; the computer
+// (which owns the E2EE secret) seals an envelope onto the claim; and the
+// client's accept is the only operation that creates a binding edge. A
+// client accepts its own claims immediately after decrypting (typing the
+// computer's code was its consent); host-initiated claims wait for the
+// user's confirmation card. TTL and single-use are creation parameters.
+
+function clampCodeTTL(value, fallback) {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value)) {
+    throw new ApiFailure(400, "invalid_ttl", "ttlSeconds must be an integer");
   }
+  const [floor, ceiling] = PAIRING_CODE_TTL_BOUNDS;
+  return Math.min(ceiling, Math.max(floor, value));
+}
 
-  const createdAt = nowSeconds();
-  const expiresAt = createdAt + PAIRING_CODE_TTL_SECONDS;
-  await env.DB.prepare(`DELETE FROM pairing_sessions WHERE computer_id = ?1`)
-    .bind(computerId)
-    .run();
+async function createPairingCode(request, env, principal) {
+  const body = await readJson(request);
+  requireBodyShape(body, ["publicKey"], ["ttlSeconds", "singleUse"]);
+  if (!CURVE25519_PUBLIC_KEY.test(body.publicKey)) {
+    throw new ApiFailure(400, "invalid_public_key", "public key is invalid");
+  }
+  if (body.singleUse !== undefined && typeof body.singleUse !== "boolean") {
+    throw new ApiFailure(400, "invalid_request", "singleUse must be a boolean");
+  }
+  const issuer = principal.issuer;
+  const ttl = clampCodeTTL(
+    body.ttlSeconds,
+    issuer === "host" ? HOST_CODE_TTL_SECONDS : CLIENT_CODE_TTL_SECONDS,
+  );
+  const singleUse = body.singleUse ?? (issuer === "host");
 
+  const now = nowSeconds();
+  const ownerColumn = issuer === "host" ? "computer_id" : "client_id";
+  const ownerId = issuer === "host" ? principal.computerId : principal.clientId;
+  const statements = [
+    env.DB.prepare(`DELETE FROM pairing_codes WHERE ${ownerColumn} = ?1`).bind(ownerId),
+  ];
+  if (issuer === "client") {
+    // Host-initiated claims are sealed to the client's issued key. They stay
+    // decryptable across a same-key code refresh; only an actual key
+    // rotation makes them garbage, so only then are they dropped.
+    const previous = await env.DB.prepare(
+      `SELECT public_key AS publicKey FROM pairing_codes WHERE client_id = ?1`,
+    ).bind(ownerId).first();
+    if (previous && previous.publicKey !== body.publicKey) {
+      statements.push(
+        env.DB.prepare(
+          `DELETE FROM pairing_claims WHERE client_id = ?1 AND claimed_by = 'host'`,
+        ).bind(ownerId),
+      );
+    }
+  }
+  await env.DB.batch(statements);
+
+  const expiresAt = now + ttl;
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const code = randomPairingCode();
     const codeHash = await tokenHash(code);
-    const sessionId = randomId();
+    const codeId = randomId();
     const inserted = await env.DB.prepare(
-      `INSERT OR IGNORE INTO pairing_sessions
-         (id, code_hash, computer_id, host_public_key, client_public_key,
-          claimed_by, encrypted_secret, created_at, expires_at, completed_at)
-       VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, ?5, ?6, NULL)`,
-    ).bind(sessionId, codeHash, computerId, body.hostPublicKey, createdAt, expiresAt).run();
+      `INSERT OR IGNORE INTO pairing_codes
+         (id, code_hash, issuer, computer_id, client_id, public_key,
+          single_use, created_at, expires_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    ).bind(
+      codeId,
+      codeHash,
+      issuer,
+      issuer === "host" ? ownerId : null,
+      issuer === "client" ? ownerId : null,
+      body.publicKey,
+      singleUse ? 1 : 0,
+      now,
+      expiresAt,
+    ).run();
     if (Number(inserted.meta?.changes ?? 0) === 1) {
-      return json({ sessionId, code, expiresAt }, 201);
+      return json({ codeId, code, expiresAt, singleUse }, 201);
     }
   }
   throw new ApiFailure(503, "pairing_code_unavailable", "could not allocate a pairing code");
 }
 
-async function getHostPairingSession(request, env, computerId, sessionId) {
+async function createHostPairingCode(request, env, computerId) {
   const host = await authenticateHost(request, env.DB, computerId);
   if (!host) return apiError(401, "unauthorized", "valid host bearer required");
-  const now = nowSeconds();
-  const row = await env.DB.prepare(
-    `SELECT client_public_key AS clientPublicKey,
-            encrypted_secret AS encryptedSecret,
-            expires_at AS expiresAt,
-            completed_at AS completedAt
-       FROM pairing_sessions
-      WHERE id = ?1 AND computer_id = ?2 AND expires_at > ?3`,
-  ).bind(sessionId, computerId, now).first();
-  if (!row) throw new ApiFailure(410, "pairing_session_expired", "pairing session is closed or expired");
-  const status = row.completedAt !== null
-    ? "completed"
-    : row.clientPublicKey === null ? "waiting" : "claimed";
-  return json({
-    status,
-    expiresAt: Number(row.expiresAt),
-    ...(row.clientPublicKey === null ? {} : { clientPublicKey: row.clientPublicKey }),
-  });
+  await limitAuthenticated(request, env, "INVITE_LIMITER", "pairing-code", host.id);
+  return createPairingCode(request, env, { issuer: "host", computerId });
 }
 
-async function cancelHostPairingSession(request, env, computerId, sessionId) {
-  const host = await authenticateHost(request, env.DB, computerId);
-  if (!host) return apiError(401, "unauthorized", "valid host bearer required");
-  await env.DB.prepare(
-    `DELETE FROM pairing_sessions WHERE id = ?1 AND computer_id = ?2`,
-  ).bind(sessionId, computerId).run();
-  return new Response(null, { status: 204 });
+async function createClientPairingCode(request, env) {
+  const client = await requireControlClient(request, env);
+  await limitAuthenticated(request, env, "INVITE_LIMITER", "pairing-code", client.id);
+  return createPairingCode(request, env, { issuer: "client", clientId: client.id });
 }
 
-async function claimPairingSession(request, env) {
+async function lookupLiveCode(env, code, issuer, now) {
+  const hash = await tokenHash(code);
+  return env.DB.prepare(
+    `SELECT id, computer_id AS computerId, client_id AS clientId,
+            public_key AS publicKey, single_use AS singleUse
+       FROM pairing_codes
+      WHERE code_hash = ?1 AND issuer = ?2 AND expires_at > ?3`,
+  ).bind(hash, issuer, now).first();
+}
+
+/// The phone claims a computer-issued code. The claim is the phone's own
+/// initiative, so its later accept is automatic; the claim row only bridges
+/// the seal-and-accept round trips of the interactive flow.
+async function claimPairingCodeAsClient(request, env) {
   const client = await requireControlClient(request, env);
   await limitAuthenticated(request, env, "MUTATION_LIMITER", "pairing-claim", client.id);
   const body = await readJson(request);
-  requireBodyShape(body, ["code", "clientPublicKey"]);
-  if (!PAIRING_CODE.test(body.code) || !CURVE25519_PUBLIC_KEY.test(body.clientPublicKey)) {
+  requireBodyShape(body, ["code", "publicKey"]);
+  if (!PAIRING_CODE.test(body.code) || !CURVE25519_PUBLIC_KEY.test(body.publicKey)) {
     throw new ApiFailure(400, "invalid_pairing_code", "pairing code is invalid or expired");
   }
 
-  const hash = await tokenHash(body.code);
   const now = nowSeconds();
-  await env.DB.prepare(
-    `UPDATE pairing_sessions
-        SET claimed_by = ?2, client_public_key = ?3
-      WHERE code_hash = ?1
-        AND expires_at > ?4
-        AND completed_at IS NULL
-        AND claimed_by IS NULL
-        AND (
-              SELECT COUNT(*) FROM client_computers WHERE client_id = ?2
-            ) < ?5`,
-  ).bind(hash, client.id, body.clientPublicKey, now, MAX_BINDINGS_PER_CLIENT).run();
+  const found = await lookupLiveCode(env, body.code, "host", now);
+  if (!found) {
+    throw new ApiFailure(400, "invalid_pairing_code", "pairing code is invalid or expired");
+  }
+  const atCapacity = await env.DB.prepare(
+    `SELECT COUNT(*) >= ?2 AS full FROM client_computers WHERE client_id = ?1`,
+  ).bind(client.id, MAX_BINDINGS_PER_CLIENT).first("full");
+  if (Number(atCapacity) === 1) {
+    throw new ApiFailure(
+      429,
+      "binding_limit",
+      `a client may bind at most ${MAX_BINDINGS_PER_CLIENT} computers`,
+    );
+  }
 
-  const row = await env.DB.prepare(
-    `SELECT id AS sessionId, computer_id AS computerId,
-            host_public_key AS hostPublicKey, expires_at AS expiresAt
-       FROM pairing_sessions
-      WHERE code_hash = ?1
-        AND claimed_by = ?2
-        AND client_public_key = ?3
-        AND expires_at > ?4
-        AND completed_at IS NULL`,
-  ).bind(hash, client.id, body.clientPublicKey, now).first();
-  if (!row) {
-    const atCapacity = await env.DB.prepare(
-      `SELECT COUNT(*) >= ?2 AS full FROM client_computers WHERE client_id = ?1`,
-    ).bind(client.id, MAX_BINDINGS_PER_CLIENT).first("full");
-    if (Number(atCapacity) === 1) {
-      throw new ApiFailure(429, "binding_limit", `a client may bind at most ${MAX_BINDINGS_PER_CLIENT} computers`);
-    }
+  const claimId = randomId();
+  const inserted = await env.DB.prepare(
+    `INSERT INTO pairing_claims
+       (id, code_id, client_id, computer_id, claimed_by, computer_name,
+        host_public_key, client_public_key, encrypted_secret,
+        created_at, expires_at)
+     SELECT ?1, ?2, ?3, ?4, 'client', '', ?5, ?6, NULL, ?7, ?8
+      WHERE (
+              SELECT single_use FROM pairing_codes WHERE id = ?2
+            ) = 0
+         OR NOT EXISTS (
+              SELECT 1 FROM pairing_claims WHERE code_id = ?2
+            )
+     ON CONFLICT(client_id, computer_id) DO UPDATE SET
+       id = excluded.id,
+       code_id = excluded.code_id,
+       claimed_by = excluded.claimed_by,
+       computer_name = excluded.computer_name,
+       host_public_key = excluded.host_public_key,
+       client_public_key = excluded.client_public_key,
+       encrypted_secret = NULL,
+       created_at = excluded.created_at,
+       expires_at = excluded.expires_at`,
+  ).bind(
+    claimId,
+    found.id,
+    client.id,
+    found.computerId,
+    found.publicKey,
+    body.publicKey,
+    now,
+    now + CLIENT_CLAIM_TTL_SECONDS,
+  ).run();
+  if (Number(inserted.meta?.changes ?? 0) !== 1) {
     throw new ApiFailure(400, "invalid_pairing_code", "pairing code is invalid or expired");
   }
   return json({
-    sessionId: row.sessionId,
-    computerId: row.computerId,
-    hostPublicKey: row.hostPublicKey,
-    expiresAt: Number(row.expiresAt),
+    claimId,
+    computerId: found.computerId,
+    hostPublicKey: found.publicKey,
+    expiresAt: now + CLIENT_CLAIM_TTL_SECONDS,
   });
 }
 
-async function completePairingSession(request, env, ctx, computerId, sessionId) {
+/// A computer claims a phone-issued code. The phone was not part of this
+/// exchange, so the claim waits for the user's explicit accept.
+async function claimPairingCodeAsHost(request, env, computerId) {
+  const host = await authenticateHost(request, env.DB, computerId);
+  if (!host) return apiError(401, "unauthorized", "valid host bearer required");
+  await limitAuthenticated(request, env, "MUTATION_LIMITER", "pairing-claim", host.id);
+  const body = await readJson(request);
+  requireBodyShape(body, ["code", "publicKey", "computerName"]);
+  if (!PAIRING_CODE.test(body.code)) {
+    throw new ApiFailure(400, "invalid_pairing_code", "pairing code is invalid or expired");
+  }
+  if (!CURVE25519_PUBLIC_KEY.test(body.publicKey)) {
+    throw new ApiFailure(400, "invalid_public_key", "host public key is invalid");
+  }
+  if (
+    typeof body.computerName !== "string" ||
+    !COMPUTER_NAME.test(body.computerName)
+  ) {
+    throw new ApiFailure(400, "invalid_computer_name", "computer name is invalid");
+  }
+
+  const now = nowSeconds();
+  const found = await lookupLiveCode(env, body.code, "client", now);
+  if (!found) {
+    throw new ApiFailure(400, "invalid_pairing_code", "pairing code is invalid or expired");
+  }
+
+  const claimId = randomId();
+  const inserted = await env.DB.prepare(
+    `INSERT INTO pairing_claims
+       (id, code_id, client_id, computer_id, claimed_by, computer_name,
+        host_public_key, client_public_key, encrypted_secret,
+        created_at, expires_at)
+     SELECT ?1, ?2, ?3, ?4, 'host', ?5, ?6, ?7, NULL, ?8, ?9
+      WHERE (
+              SELECT single_use FROM pairing_codes WHERE id = ?2
+            ) = 0
+         OR NOT EXISTS (
+              SELECT 1 FROM pairing_claims WHERE code_id = ?2
+            )
+     ON CONFLICT(client_id, computer_id) DO UPDATE SET
+       id = excluded.id,
+       code_id = excluded.code_id,
+       claimed_by = excluded.claimed_by,
+       computer_name = excluded.computer_name,
+       host_public_key = excluded.host_public_key,
+       client_public_key = excluded.client_public_key,
+       encrypted_secret = NULL,
+       created_at = excluded.created_at,
+       expires_at = excluded.expires_at`,
+  ).bind(
+    claimId,
+    found.id,
+    found.clientId,
+    computerId,
+    body.computerName,
+    body.publicKey,
+    found.publicKey,
+    now,
+    now + HOST_CLAIM_TTL_SECONDS,
+  ).run();
+  if (Number(inserted.meta?.changes ?? 0) !== 1) {
+    throw new ApiFailure(400, "invalid_pairing_code", "pairing code is invalid or expired");
+  }
+  return json({ claimId, clientPublicKey: found.publicKey }, 201);
+}
+
+/// The issuing computer polls its code while its pairing page is open.
+async function getHostPairingCode(request, env, computerId, codeId) {
+  const host = await authenticateHost(request, env.DB, computerId);
+  if (!host) return apiError(401, "unauthorized", "valid host bearer required");
+  const now = nowSeconds();
+  const code = await env.DB.prepare(
+    `SELECT expires_at AS expiresAt FROM pairing_codes
+      WHERE id = ?1 AND computer_id = ?2 AND expires_at > ?3`,
+  ).bind(codeId, computerId, now).first();
+  if (!code) {
+    throw new ApiFailure(410, "pairing_code_expired", "pairing code is closed or expired");
+  }
+  const claim = await env.DB.prepare(
+    `SELECT id, client_public_key AS clientPublicKey,
+            encrypted_secret AS encryptedSecret
+       FROM pairing_claims
+      WHERE code_id = ?1 AND expires_at > ?2
+      ORDER BY created_at DESC
+      LIMIT 1`,
+  ).bind(codeId, now).first();
+  const status = claim === null
+    ? "waiting"
+    : claim.encryptedSecret === null ? "claimed" : "completed";
+  return json({
+    status,
+    expiresAt: Number(code.expiresAt),
+    ...(claim === null
+      ? {}
+      : { claimId: claim.id, clientPublicKey: claim.clientPublicKey }),
+  });
+}
+
+async function cancelHostPairingCode(request, env, computerId, codeId) {
+  const host = await authenticateHost(request, env.DB, computerId);
+  if (!host) return apiError(401, "unauthorized", "valid host bearer required");
+  await env.DB.prepare(
+    `DELETE FROM pairing_codes WHERE id = ?1 AND computer_id = ?2`,
+  ).bind(codeId, computerId).run();
+  return new Response(null, { status: 204 });
+}
+
+/// The computer seals its E2EE secret onto a claim — its own claim of a
+/// phone-issued code, or a phone's claim of its code. One-shot either way.
+async function completePairingClaim(request, env, ctx, computerId, claimId) {
   const host = await authenticateHost(request, env.DB, computerId);
   if (!host) return apiError(401, "unauthorized", "valid host bearer required");
   const body = await readJson(request);
@@ -278,91 +459,179 @@ async function completePairingSession(request, env, ctx, computerId, sessionId) 
   }
 
   const now = nowSeconds();
-  const mutationId = randomId();
-  const results = await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE pairing_sessions
-          SET encrypted_secret = ?3, completed_at = ?4
-        WHERE id = ?1 AND computer_id = ?2
-          AND claimed_by IS NOT NULL
-          AND encrypted_secret IS NULL
-          AND expires_at > ?4
-          AND (
-                EXISTS (
-                  SELECT 1 FROM client_computers
-                   WHERE client_id = pairing_sessions.claimed_by AND computer_id = ?2
-                )
-                OR (
-                  SELECT COUNT(*) FROM client_computers
-                   WHERE client_id = pairing_sessions.claimed_by
-                ) < ?5
-              )`,
-    ).bind(sessionId, computerId, body.encryptedSecret, now, MAX_BINDINGS_PER_CLIENT),
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO client_computers
-         (client_id, computer_id, mutation_id, created_at)
-       SELECT claimed_by, computer_id, ?3, ?4
-         FROM pairing_sessions
-        WHERE id = ?1 AND computer_id = ?2
-          AND encrypted_secret = ?5 AND completed_at = ?4`,
-    ).bind(sessionId, computerId, mutationId, now, body.encryptedSecret),
-    env.DB.prepare(
-      `UPDATE client_delivery_state
-          SET sequence = sequence + 1, last_fingerprint = NULL
-        WHERE client_id = (
-          SELECT claimed_by FROM pairing_sessions WHERE id = ?1 AND computer_id = ?2
-        )
-          AND EXISTS (
-            SELECT 1 FROM client_computers
-             WHERE client_id = client_delivery_state.client_id
-               AND computer_id = ?2 AND mutation_id = ?3
-          )`,
-    ).bind(sessionId, computerId, mutationId),
-    env.DB.prepare(
-      `DELETE FROM relay_revocation_outbox
-        WHERE kind = 'client' AND computer_id = ?2
-          AND principal_id = (
-            SELECT claimed_by FROM pairing_sessions WHERE id = ?1 AND computer_id = ?2
-          )`,
-    ).bind(sessionId, computerId),
-    env.DB.prepare(
-      `SELECT claimed_by AS clientId, encrypted_secret AS encryptedSecret
-         FROM pairing_sessions
-        WHERE id = ?1 AND computer_id = ?2 AND expires_at > ?3`,
-    ).bind(sessionId, computerId, now),
-  ]);
-  const proof = results[4].results?.[0];
-  if (!proof || proof.encryptedSecret !== body.encryptedSecret) {
-    throw new ApiFailure(400, "invalid_pairing_session", "pairing session is closed or expired");
+  const updated = await env.DB.prepare(
+    `UPDATE pairing_claims
+        SET encrypted_secret = ?3
+      WHERE id = ?1 AND computer_id = ?2
+        AND encrypted_secret IS NULL
+        AND expires_at > ?4`,
+  ).bind(claimId, computerId, body.encryptedSecret, now).run();
+  if (Number(updated.meta?.changes ?? 0) !== 1) {
+    throw new ApiFailure(400, "invalid_pairing_claim", "pairing claim is closed or expired");
   }
-  const inserted = Number(results[1].meta?.changes ?? 0) === 1;
-  if (inserted) background(ctx, notifyPushCoordinator(env, [proof.clientId]), "binding push notify failed");
-  return json({ computerId, bound: true }, inserted ? 201 : 200);
+  const row = await env.DB.prepare(
+    `SELECT client_id AS clientId, claimed_by AS claimedBy,
+            computer_name AS computerName
+       FROM pairing_claims
+      WHERE id = ?1`,
+  ).bind(claimId).first();
+  if (row && row.claimedBy === "host") {
+    // A client-initiated claim is being polled interactively; only a claim
+    // the phone knows nothing about needs a visible announcement.
+    background(
+      ctx,
+      notifyPairingClaim(env, row.clientId, row.computerName),
+      "pairing claim push failed",
+    );
+  }
+  return new Response(null, { status: 204 });
 }
 
-async function getClientPairingSession(request, env, sessionId) {
+/// Sealed host-initiated claims awaiting the user's accept.
+async function listClientPairingClaims(request, env) {
+  const client = await requireControlClient(request, env);
+  const now = nowSeconds();
+  const result = await env.DB.prepare(
+    `SELECT id AS claimId, computer_id AS computerId, computer_name AS computerName,
+            host_public_key AS hostPublicKey, encrypted_secret AS encryptedSecret,
+            created_at AS createdAt
+       FROM pairing_claims
+      WHERE client_id = ?1 AND claimed_by = 'host'
+        AND encrypted_secret IS NOT NULL AND expires_at > ?2
+      ORDER BY created_at DESC, id`,
+  ).bind(client.id, now).all();
+  return json({
+    claims: (result.results ?? []).map((row) => ({
+      claimId: row.claimId,
+      computerId: row.computerId,
+      computerName: row.computerName,
+      hostPublicKey: row.hostPublicKey,
+      encryptedSecret: row.encryptedSecret,
+      createdAt: Number(row.createdAt),
+    })),
+  });
+}
+
+/// The phone polls its own claim during the interactive flow.
+async function getClientPairingClaim(request, env, claimId) {
   const client = await requireControlClient(request, env);
   const now = nowSeconds();
   const row = await env.DB.prepare(
     `SELECT computer_id AS computerId, encrypted_secret AS encryptedSecret,
-            expires_at AS expiresAt, completed_at AS completedAt
-       FROM pairing_sessions
-      WHERE id = ?1 AND claimed_by = ?2 AND expires_at > ?3`,
-  ).bind(sessionId, client.id, now).first();
-  if (!row) throw new ApiFailure(410, "pairing_session_expired", "pairing session is closed or expired");
+            expires_at AS expiresAt
+       FROM pairing_claims
+      WHERE id = ?1 AND client_id = ?2 AND expires_at > ?3`,
+  ).bind(claimId, client.id, now).first();
+  if (!row) {
+    throw new ApiFailure(410, "pairing_claim_expired", "pairing claim is closed or expired");
+  }
   return json({
-    status: row.completedAt === null ? "waiting" : "completed",
+    status: row.encryptedSecret === null ? "waiting" : "sealed",
     computerId: row.computerId,
     expiresAt: Number(row.expiresAt),
     ...(row.encryptedSecret === null ? {} : { encryptedSecret: row.encryptedSecret }),
   });
 }
 
-async function acknowledgeClientPairingSession(request, env, sessionId) {
+/// The single edge-creating operation of the whole pairing surface: the
+/// client accepts a sealed claim. Automatic for the client's own claims,
+/// explicit (the confirmation card) for host-initiated ones.
+async function acceptPairingClaim(request, env, ctx, claimId) {
+  const client = await requireControlClient(request, env);
+  await limitAuthenticated(request, env, "MUTATION_LIMITER", "pairing-accept", client.id);
+  const now = nowSeconds();
+  const mutationId = randomId();
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO client_computers
+         (client_id, computer_id, mutation_id, created_at)
+       SELECT client_id, computer_id, ?3, ?4
+         FROM pairing_claims
+        WHERE id = ?1 AND client_id = ?2
+          AND encrypted_secret IS NOT NULL
+          AND expires_at > ?4
+          AND (
+                EXISTS (
+                  SELECT 1 FROM client_computers
+                   WHERE client_id = ?2
+                     AND computer_id = pairing_claims.computer_id
+                )
+                OR (
+                  SELECT COUNT(*) FROM client_computers WHERE client_id = ?2
+                ) < ?5
+              )`,
+    ).bind(claimId, client.id, mutationId, now, MAX_BINDINGS_PER_CLIENT),
+    env.DB.prepare(
+      `UPDATE client_delivery_state
+          SET sequence = sequence + 1, last_fingerprint = NULL
+        WHERE client_id = ?1
+          AND EXISTS (
+            SELECT 1 FROM client_computers
+             WHERE client_id = ?1 AND mutation_id = ?2
+          )`,
+    ).bind(client.id, mutationId),
+    env.DB.prepare(
+      `DELETE FROM relay_revocation_outbox
+        WHERE kind = 'client' AND principal_id = ?2
+          AND computer_id = (
+            SELECT computer_id FROM pairing_claims
+             WHERE id = ?1 AND client_id = ?2
+          )`,
+    ).bind(claimId, client.id),
+    // A single-use code dies with the accept, so it can never admit a
+    // second claim after its first one was consumed.
+    env.DB.prepare(
+      `DELETE FROM pairing_codes
+        WHERE single_use = 1
+          AND id = (
+            SELECT code_id FROM pairing_claims
+             WHERE id = ?1 AND client_id = ?2
+               AND EXISTS (
+                 SELECT 1 FROM client_computers
+                  WHERE client_id = ?2
+                    AND computer_id = pairing_claims.computer_id
+               )
+          )`,
+    ).bind(claimId, client.id),
+    // The claim is consumed only once its edge exists, so a lost capacity
+    // race keeps it acceptable after the user unbinds another computer.
+    env.DB.prepare(
+      `DELETE FROM pairing_claims
+        WHERE id = ?1 AND client_id = ?2
+          AND EXISTS (
+            SELECT 1 FROM client_computers
+             WHERE client_id = ?2
+               AND computer_id = pairing_claims.computer_id
+          )`,
+    ).bind(claimId, client.id),
+  ]);
+
+  const consumed = Number(results[4].meta?.changes ?? 0) === 1;
+  if (!consumed) {
+    const atCapacity = await env.DB.prepare(
+      `SELECT COUNT(*) >= ?2 AS full FROM client_computers WHERE client_id = ?1`,
+    ).bind(client.id, MAX_BINDINGS_PER_CLIENT).first("full");
+    if (Number(atCapacity) === 1) {
+      throw new ApiFailure(
+        429,
+        "binding_limit",
+        `a client may bind at most ${MAX_BINDINGS_PER_CLIENT} computers`,
+      );
+    }
+    throw new ApiFailure(410, "invalid_pairing_claim", "pairing claim is closed or expired");
+  }
+  const inserted = Number(results[0].meta?.changes ?? 0) === 1;
+  if (inserted) {
+    background(ctx, notifyPushCoordinator(env, [client.id]), "binding push notify failed");
+  }
+  return new Response(null, { status: inserted ? 201 : 200 });
+}
+
+async function rejectPairingClaim(request, env, claimId) {
   const client = await requireControlClient(request, env);
   await env.DB.prepare(
-    `DELETE FROM pairing_sessions WHERE id = ?1 AND claimed_by = ?2 AND completed_at IS NOT NULL`,
-  ).bind(sessionId, client.id).run();
+    `DELETE FROM pairing_claims WHERE id = ?1 AND client_id = ?2`,
+  ).bind(claimId, client.id).run();
   return new Response(null, { status: 204 });
 }
 
@@ -1034,25 +1303,29 @@ export async function handleApi(request, env, ctx, url) {
     return createComputer(request, env);
   }
 
-  let match = /^\/v2\/computers\/([0-9a-f]{32})\/pairing-sessions$/.exec(pathname);
+  let match = /^\/v2\/computers\/([0-9a-f]{32})\/pairing-codes$/.exec(pathname);
   if (request.method === "POST" && match) {
     requireQueryShape(url);
-    return createPairingSession(request, env, match[1]);
+    return createHostPairingCode(request, env, match[1]);
   }
-
-  match = /^\/v2\/computers\/([0-9a-f]{32})\/pairing-sessions\/([0-9a-f]{32})$/.exec(pathname);
+  match = /^\/v2\/computers\/([0-9a-f]{32})\/pairing-codes\/claim$/.exec(pathname);
+  if (request.method === "POST" && match) {
+    requireQueryShape(url);
+    return claimPairingCodeAsHost(request, env, match[1]);
+  }
+  match = /^\/v2\/computers\/([0-9a-f]{32})\/pairing-codes\/([0-9a-f]{32})$/.exec(pathname);
   if (match && request.method === "GET") {
     requireQueryShape(url);
-    return getHostPairingSession(request, env, match[1], match[2]);
+    return getHostPairingCode(request, env, match[1], match[2]);
   }
   if (match && request.method === "DELETE") {
     requireQueryShape(url);
-    return cancelHostPairingSession(request, env, match[1], match[2]);
+    return cancelHostPairingCode(request, env, match[1], match[2]);
   }
-  match = /^\/v2\/computers\/([0-9a-f]{32})\/pairing-sessions\/([0-9a-f]{32})\/complete$/.exec(pathname);
+  match = /^\/v2\/computers\/([0-9a-f]{32})\/pairing-claims\/([0-9a-f]{32})\/complete$/.exec(pathname);
   if (match && request.method === "POST") {
     requireQueryShape(url);
-    return completePairingSession(request, env, ctx, match[1], match[2]);
+    return completePairingClaim(request, env, ctx, match[1], match[2]);
   }
 
   match = /^\/v2\/computers\/([0-9a-f]{32})$/.exec(pathname);
@@ -1065,18 +1338,31 @@ export async function handleApi(request, env, ctx, url) {
     requireQueryShape(url);
     return createClient(request, env);
   }
-  if (request.method === "POST" && pathname === "/v2/clients/me/pairing-sessions/claim") {
+  if (request.method === "POST" && pathname === "/v2/clients/me/pairing-codes") {
     requireQueryShape(url);
-    return claimPairingSession(request, env);
+    return createClientPairingCode(request, env);
   }
-  match = /^\/v2\/clients\/me\/pairing-sessions\/([0-9a-f]{32})$/.exec(pathname);
+  if (request.method === "POST" && pathname === "/v2/clients/me/pairing-codes/claim") {
+    requireQueryShape(url);
+    return claimPairingCodeAsClient(request, env);
+  }
+  if (request.method === "GET" && pathname === "/v2/clients/me/pairing-claims") {
+    requireQueryShape(url);
+    return listClientPairingClaims(request, env);
+  }
+  match = /^\/v2\/clients\/me\/pairing-claims\/([0-9a-f]{32})$/.exec(pathname);
   if (match && request.method === "GET") {
     requireQueryShape(url);
-    return getClientPairingSession(request, env, match[1]);
+    return getClientPairingClaim(request, env, match[1]);
   }
   if (match && request.method === "DELETE") {
     requireQueryShape(url);
-    return acknowledgeClientPairingSession(request, env, match[1]);
+    return rejectPairingClaim(request, env, match[1]);
+  }
+  match = /^\/v2\/clients\/me\/pairing-claims\/([0-9a-f]{32})\/accept$/.exec(pathname);
+  if (match && request.method === "POST") {
+    requireQueryShape(url);
+    return acceptPairingClaim(request, env, ctx, match[1]);
   }
 
   if (request.method === "PUT" && pathname === "/v2/clients/me/bindings") {

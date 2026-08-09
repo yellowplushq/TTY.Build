@@ -52,46 +52,50 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         let bindingCount: Int
     }
 
-    private struct CreatePairingSessionRequest: Encodable {
-        let hostPublicKey: String
+    private struct CreatePairingCodeRequest: Encodable {
+        let publicKey: String
+        let ttlSeconds: Int?
+        let singleUse: Bool?
     }
 
-    private struct CreatePairingSessionResponse: Decodable {
-        let sessionId: String
+    private struct CreatePairingCodeResponse: Decodable {
+        let codeId: String
         let code: String
         let expiresAt: Int64
+        let singleUse: Bool
     }
 
-    private struct HostPairingStatusResponse: Decodable {
+    private struct HostPairingCodeStatusResponse: Decodable {
         let status: String
         let expiresAt: Int64
+        let claimId: String?
         let clientPublicKey: String?
     }
 
-    private struct CompletePairingSessionRequest: Encodable {
+    struct CompletePairingClaimRequest: Encodable {
         let encryptedSecret: String
     }
 
-    private struct ClaimPairingSessionRequest: Encodable {
+    private struct ClaimPairingCodeRequest: Encodable {
         let code: String
-        let clientPublicKey: String
+        let publicKey: String
     }
 
-    private struct ClaimPairingSessionResponse: Decodable {
-        let sessionId: String
+    private struct ClaimPairingCodeResponse: Decodable {
+        let claimId: String
         let computerId: String
         let hostPublicKey: String
         let expiresAt: Int64
     }
 
-    private struct ClientPairingStatusResponse: Decodable {
+    private struct ClientPairingClaimStatusResponse: Decodable {
         let status: String
         let computerId: String
         let expiresAt: Int64
         let encryptedSecret: String?
     }
 
-    private let serviceURL: URL
+    let serviceURL: URL
     private let session: URLSession
     private let encoder = JSONEncoder()
     private let decoder: JSONDecoder
@@ -117,48 +121,58 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         return HostIdentity(computer: binding, hostToken: response.hostToken)
     }
 
-    public func createPairingSession(identity: HostIdentity) async throws -> HostPairingSession {
+    /// Issues a pairing code for this computer. TTL and single-use are
+    /// creation parameters of the unified ceremony; the desktop pairing page
+    /// uses the defaults (15 minutes, single-use).
+    public func createPairingCode(
+        identity: HostIdentity,
+        ttlSeconds: Int? = nil,
+        singleUse: Bool? = nil
+    ) async throws -> HostPairingCode {
         guard identity.computer.serviceURL == serviceURL else {
             throw APIError.serviceMismatch
         }
         let privateKey = PairingKeyAgreement.makePrivateKey()
         let publicKey = try PairingKeyAgreement.publicKey(for: privateKey)
-        let response: CreatePairingSessionResponse = try await send(
+        let response: CreatePairingCodeResponse = try await send(
             method: "POST",
-            path: "/v2/computers/\(identity.computer.computerID)/pairing-sessions",
+            path: "/v2/computers/\(identity.computer.computerID)/pairing-codes",
             bearer: identity.hostToken,
-            body: CreatePairingSessionRequest(
-                hostPublicKey: publicKey.base64URLEncodedString()
+            body: CreatePairingCodeRequest(
+                publicKey: publicKey.base64URLEncodedString(),
+                ttlSeconds: ttlSeconds,
+                singleUse: singleUse
             )
         )
-        return try HostPairingSession(
-            sessionID: response.sessionId,
+        return try HostPairingCode(
+            codeID: response.codeId,
             code: PairingCode(response.code),
             expiresAt: response.expiresAt,
             privateKey: privateKey
         )
     }
 
-    public func pairingSessionStatus(
-        _ pairing: HostPairingSession,
+    public func pairingCodeStatus(
+        _ pairing: HostPairingCode,
         identity: HostIdentity
-    ) async throws -> HostPairingSessionStatus {
+    ) async throws -> HostPairingCodeStatus {
         guard identity.computer.serviceURL == serviceURL else {
             throw APIError.serviceMismatch
         }
-        let response: HostPairingStatusResponse = try await send(
+        let response: HostPairingCodeStatusResponse = try await send(
             method: "GET",
-            path: "/v2/computers/\(identity.computer.computerID)/pairing-sessions/\(pairing.sessionID)",
+            path: "/v2/computers/\(identity.computer.computerID)/pairing-codes/\(pairing.codeID)",
             bearer: identity.hostToken
         )
         switch response.status {
         case "waiting":
             return .waiting
         case "claimed":
-            guard let encoded = response.clientPublicKey,
+            guard let claimID = response.claimId,
+                  let encoded = response.clientPublicKey,
                   let key = Data(base64URLEncoded: encoded), key.count == 32
             else { throw APIError.invalidResponse }
-            return .claimed(clientPublicKey: key)
+            return .claimed(claimID: claimID, clientPublicKey: key)
         case "completed":
             return .completed
         default:
@@ -166,9 +180,11 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         }
     }
 
-    public func completePairingSession(
-        _ pairing: HostPairingSession,
+    /// Seals this computer's E2EE secret onto a claim of its code.
+    public func completePairingClaim(
+        claimID: String,
         clientPublicKey: Data,
+        privateKey: Data,
         identity: HostIdentity
     ) async throws {
         guard identity.computer.serviceURL == serviceURL else {
@@ -176,22 +192,22 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         }
         let envelope = try PairingKeyAgreement.seal(
             secret: identity.computer.secret,
-            hostPrivateKey: pairing.privateKey,
+            hostPrivateKey: privateKey,
             clientPublicKey: clientPublicKey,
-            sessionID: pairing.sessionID
+            claimID: claimID
         )
         let _: EmptyResponse = try await send(
             method: "POST",
-            path: "/v2/computers/\(identity.computer.computerID)/pairing-sessions/\(pairing.sessionID)/complete",
+            path: "/v2/computers/\(identity.computer.computerID)/pairing-claims/\(claimID)/complete",
             bearer: identity.hostToken,
-            body: CompletePairingSessionRequest(
+            body: CompletePairingClaimRequest(
                 encryptedSecret: envelope.base64URLEncodedString()
             )
         )
     }
 
-    public func cancelPairingSession(
-        _ pairing: HostPairingSession,
+    public func cancelPairingCode(
+        _ pairing: HostPairingCode,
         identity: HostIdentity
     ) async throws {
         guard identity.computer.serviceURL == serviceURL else {
@@ -199,63 +215,60 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         }
         let _: EmptyResponse = try await send(
             method: "DELETE",
-            path: "/v2/computers/\(identity.computer.computerID)/pairing-sessions/\(pairing.sessionID)",
+            path: "/v2/computers/\(identity.computer.computerID)/pairing-codes/\(pairing.codeID)",
             bearer: identity.hostToken
         )
     }
 
+    /// The interactive client flow: claim the computer's code, wait for the
+    /// sealed envelope, decrypt, and accept. The accept is the ceremony's
+    /// only edge-creating step; a claim the client itself initiated is
+    /// accepted without further ceremony — typing the code was the consent.
     public func pair(code: PairingCode, as client: ClientIdentity) async throws -> ComputerBinding {
         guard client.serviceURL == serviceURL else { throw APIError.serviceMismatch }
         let privateKey = PairingKeyAgreement.makePrivateKey()
         let publicKey = try PairingKeyAgreement.publicKey(for: privateKey)
-        let response: ClaimPairingSessionResponse = try await send(
+        let response: ClaimPairingCodeResponse = try await send(
             method: "POST",
-            path: "/v2/clients/me/pairing-sessions/claim",
+            path: "/v2/clients/me/pairing-codes/claim",
             bearer: client.clientToken,
-            body: ClaimPairingSessionRequest(
+            body: ClaimPairingCodeRequest(
                 code: code.digits,
-                clientPublicKey: publicKey.base64URLEncodedString()
+                publicKey: publicKey.base64URLEncodedString()
             )
         )
         guard let hostPublicKey = Data(base64URLEncoded: response.hostPublicKey),
               hostPublicKey.count == 32
         else { throw APIError.invalidResponse }
-        let claim = ClientPairingClaim(
-            sessionID: response.sessionId,
-            computerID: response.computerId,
-            expiresAt: response.expiresAt,
-            hostPublicKey: hostPublicKey,
-            privateKey: privateKey
-        )
 
-        while Int64(Date().timeIntervalSince1970) < claim.expiresAt {
+        while Int64(Date().timeIntervalSince1970) < response.expiresAt {
             try Task.checkCancellation()
-            let status: ClientPairingStatusResponse = try await send(
+            let status: ClientPairingClaimStatusResponse = try await send(
                 method: "GET",
-                path: "/v2/clients/me/pairing-sessions/\(claim.sessionID)",
+                path: "/v2/clients/me/pairing-claims/\(response.claimId)",
                 bearer: client.clientToken
             )
-            if status.status == "completed",
+            if status.status == "sealed",
                let encodedEnvelope = status.encryptedSecret,
                let envelope = Data(base64URLEncoded: encodedEnvelope)
             {
                 let secret = try PairingKeyAgreement.open(
                     envelope: envelope,
-                    clientPrivateKey: claim.privateKey,
-                    hostPublicKey: claim.hostPublicKey,
-                    sessionID: claim.sessionID
+                    clientPrivateKey: privateKey,
+                    hostPublicKey: hostPublicKey,
+                    claimID: response.claimId
                 )
                 guard secret.count == ComputerBinding.secretByteCount else {
                     throw APIError.invalidResponse
                 }
                 let binding = try ComputerBinding(
                     serviceURL: serviceURL,
-                    computerID: claim.computerID,
+                    computerID: response.computerId,
                     secret: secret
                 )
                 let _: EmptyResponse = try await send(
-                    method: "DELETE",
-                    path: "/v2/clients/me/pairing-sessions/\(claim.sessionID)",
+                    method: "POST",
+                    path: "/v2/clients/me/pairing-claims/\(response.claimId)/accept",
                     bearer: client.clientToken
                 )
                 return binding
@@ -332,9 +345,9 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         return response.bindingCount
     }
 
-    private struct EmptyResponse: Decodable {}
+    struct EmptyResponse: Decodable {}
 
-    private func send<Response: Decodable>(
+    func send<Response: Decodable>(
         method: String,
         path: String,
         bearer: String? = nil
@@ -342,7 +355,7 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         try await send(method: method, path: path, bearer: bearer, encodedBody: nil)
     }
 
-    private func send<Body: Encodable, Response: Decodable>(
+    func send<Body: Encodable, Response: Decodable>(
         method: String,
         path: String,
         bearer: String? = nil,

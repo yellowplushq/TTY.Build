@@ -1,6 +1,8 @@
 import Foundation
 
 public enum PushSurface: String, Codable, CaseIterable, Sendable {
+    /// Visible alerts to the app itself (reverse-pairing claims).
+    case iOSApp = "ios-app"
     case iOSWidget = "ios-widget"
     case watchWidget = "watch-widget"
     case iOSLiveActivityStart = "liveactivity-start"

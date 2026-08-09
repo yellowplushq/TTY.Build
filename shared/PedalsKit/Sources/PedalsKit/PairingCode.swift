@@ -1,8 +1,8 @@
 import CryptoKit
 import Foundation
 
-/// The user-visible rendezvous handle. It authorizes one online pairing
-/// session for 15 minutes, but is never used as E2EE key material.
+/// The user-visible rendezvous handle. It admits pairing claims for its
+/// issuer-chosen lifetime, but is never used as E2EE key material.
 public struct PairingCode: Codable, Equatable, Hashable, Sendable {
     public static let digitCount = 8
     public let digits: String
@@ -24,50 +24,34 @@ public struct PairingCode: Codable, Equatable, Hashable, Sendable {
     }
 }
 
-/// Host-only state retained while the desktop pairing page is open.
-public struct HostPairingSession: Equatable, Sendable {
-    public let sessionID: String
+/// Host-side state retained while the desktop pairing page is open.
+public struct HostPairingCode: Equatable, Sendable {
+    public let codeID: String
     public let code: PairingCode
     public let expiresAt: Int64
     public let privateKey: Data
 
-    public init(sessionID: String, code: PairingCode, expiresAt: Int64, privateKey: Data) {
-        self.sessionID = sessionID
+    public init(codeID: String, code: PairingCode, expiresAt: Int64, privateKey: Data) {
+        self.codeID = codeID
         self.code = code
         self.expiresAt = expiresAt
         self.privateKey = privateKey
     }
 }
 
-public enum HostPairingSessionStatus: Equatable, Sendable {
+public enum HostPairingCodeStatus: Equatable, Sendable {
     case waiting
-    case claimed(clientPublicKey: Data)
+    case claimed(claimID: String, clientPublicKey: Data)
     case completed
 }
 
-public struct ClientPairingClaim: Equatable, Sendable {
-    public let sessionID: String
-    public let computerID: String
-    public let expiresAt: Int64
-    public let hostPublicKey: Data
-    public let privateKey: Data
-
-    public init(
-        sessionID: String,
-        computerID: String,
-        expiresAt: Int64,
-        hostPublicKey: Data,
-        privateKey: Data
-    ) {
-        self.sessionID = sessionID
-        self.computerID = computerID
-        self.expiresAt = expiresAt
-        self.hostPublicKey = hostPublicKey
-        self.privateKey = privateKey
-    }
-}
-
+/// One shared key-agreement construction for the whole pairing surface: the
+/// computer seals its 32-byte E2EE secret to a client-provided Curve25519
+/// public key, bound to the server-issued claim ID as both HKDF info and
+/// AEAD associated data.
 enum PairingKeyAgreement {
+    static let salt = Data("Pedals pairing v3".utf8)
+
     static func makePrivateKey() -> Data {
         Curve25519.KeyAgreement.PrivateKey().rawRepresentation
     }
@@ -81,15 +65,15 @@ enum PairingKeyAgreement {
         secret: Data,
         hostPrivateKey: Data,
         clientPublicKey: Data,
-        sessionID: String
+        claimID: String
     ) throws -> Data {
         let privateKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: hostPrivateKey)
         let publicKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: clientPublicKey)
-        let key = try deriveKey(privateKey: privateKey, publicKey: publicKey, sessionID: sessionID)
+        let key = try deriveKey(privateKey: privateKey, publicKey: publicKey, claimID: claimID)
         return try ChaChaPoly.seal(
             secret,
             using: key,
-            authenticating: Data(sessionID.utf8)
+            authenticating: Data(claimID.utf8)
         ).combined
     }
 
@@ -97,28 +81,28 @@ enum PairingKeyAgreement {
         envelope: Data,
         clientPrivateKey: Data,
         hostPublicKey: Data,
-        sessionID: String
+        claimID: String
     ) throws -> Data {
         let privateKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: clientPrivateKey)
         let publicKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: hostPublicKey)
-        let key = try deriveKey(privateKey: privateKey, publicKey: publicKey, sessionID: sessionID)
+        let key = try deriveKey(privateKey: privateKey, publicKey: publicKey, claimID: claimID)
         return try ChaChaPoly.open(
             ChaChaPoly.SealedBox(combined: envelope),
             using: key,
-            authenticating: Data(sessionID.utf8)
+            authenticating: Data(claimID.utf8)
         )
     }
 
     private static func deriveKey(
         privateKey: Curve25519.KeyAgreement.PrivateKey,
         publicKey: Curve25519.KeyAgreement.PublicKey,
-        sessionID: String
+        claimID: String
     ) throws -> SymmetricKey {
         let shared = try privateKey.sharedSecretFromKeyAgreement(with: publicKey)
         return shared.hkdfDerivedSymmetricKey(
             using: SHA256.self,
-            salt: Data("Pedals pairing code v2".utf8),
-            sharedInfo: Data(sessionID.utf8),
+            salt: salt,
+            sharedInfo: Data(claimID.utf8),
             outputByteCount: 32
         )
     }

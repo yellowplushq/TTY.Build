@@ -162,6 +162,18 @@ final class TerminalManager {
         ))
     }
 
+    /// Attaches a computer whose binding arrived through a confirmed
+    /// reverse-pairing claim. The Keychain commit happens here, before the
+    /// caller confirms server-side, so reconcile() can never race the edge.
+    func addReversePairedComputer(binding: ComputerBinding) async throws {
+        let identity = try await pairingStore.commitReversePairedBinding(binding)
+        finishAdding(
+            binding: binding,
+            identity: identity,
+            previousClientID: identity.clientID
+        )
+    }
+
     /// Unbind: forget the pairing and drop its terminals from the tab list.
     func removeComputer(id: String) async throws {
         try await pairingStore.unbind(computerID: id)
