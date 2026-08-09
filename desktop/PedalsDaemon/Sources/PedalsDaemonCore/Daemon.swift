@@ -198,6 +198,14 @@ public final class Daemon: @unchecked Sendable {
         cancelCurrentPairingSession(revoke: true)
     }
 
+    /// Claims a phone-issued enrollment token and submits this computer's
+    /// sealed E2EE secret. Fire-and-forget: the binding edge only appears
+    /// after the user confirms on the phone, which this computer never
+    /// observes, so there is no session or state to retain here.
+    public func claimReversePairing(code: PairingCode, computerName: String) throws {
+        try serviceActions.claimReversePairing(code, computerName, hostIdentity)
+    }
+
     deinit {
         startupIdentityLock?.unlock()
     }

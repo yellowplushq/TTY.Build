@@ -2,13 +2,19 @@
 # Pedals desktop installer for macOS.
 #
 # Usage:
-#   curl -fsSL https://pedals.air.build/install.sh | bash
+#   curl -fsSL https://pedals.air.build/i | bash
+#   curl -fsSL https://pedals.air.build/12345678 | bash
+#   curl -fsSL https://pedals.air.build/i | bash -s -- --pair 12345678
 #
 # Downloads the latest notarized Pedals-macOS.zip through the stable release
 # redirect, verifies it against the SHA-256 checksum published with the same
-# release, installs Pedals.app, and launches it. The script never escalates
-# privileges and never sends anything anywhere except the download requests.
-# Keep it compatible with the bash 3.2 that ships with macOS.
+# release, installs Pedals.app, and launches it. The 8-digit-path form serves
+# this same script with that enrollment code baked into the PEDALS_PAIR
+# default below; --pair and the PEDALS_PAIR environment variable do the same
+# by hand. With a code, the launched app claims it so the computer appears in
+# the iPhone app for confirmation without typing anything. The script never
+# escalates privileges and never sends anything anywhere except the download
+# requests. Keep it compatible with the bash 3.2 that ships with macOS.
 
 set -euo pipefail
 
@@ -16,6 +22,31 @@ BASE_URL="${PEDALS_INSTALL_BASE_URL:-https://pedals.air.build}"
 ZIP_NAME="Pedals-macOS.zip"
 CHECKSUM_NAME="$ZIP_NAME.sha256"
 APP_NAME="Pedals.app"
+
+pair_code="${PEDALS_PAIR:-}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --pair)
+      [[ $# -ge 2 ]] || { echo "pedals-install: --pair needs a code" >&2; exit 1; }
+      pair_code="$2"
+      shift 2
+      ;;
+    --pair=*)
+      pair_code="${1#--pair=}"
+      shift
+      ;;
+    *)
+      echo "pedals-install: unknown option: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+# Accept "1234 5678" / "1234-5678" the way the apps render codes.
+pair_code="${pair_code//[- ]/}"
+if [[ -n "$pair_code" && ! "$pair_code" =~ ^[0-9]{8}$ ]]; then
+  echo "pedals-install: --pair expects the 8-digit code from the iPhone app" >&2
+  exit 1
+fi
 
 # Color only when talking to an interactive ANSI terminal.
 if [[ -t 1 && "${TERM:-}" != "dumb" && -z "${NO_COLOR:-}" ]]; then
@@ -125,6 +156,14 @@ fi
 # a half-written Pedals.app behind.
 rm -rf "$staging"
 ditto "$workdir/extract/$APP_NAME" "$staging"
+if [[ -n "$pair_code" ]]; then
+  # Stamp the enrollment code as an extended attribute on the bundle. It is
+  # outside the code-signature seal, survives the swap below and Finder
+  # copies, and the app consumes it on launch — pairing completes even if
+  # Pedals only starts (or restarts) later.
+  xattr -w build.air.pedals.pairing-code "$pair_code" "$staging" \
+    || echo "pedals-install: could not stamp the pairing code; connect with a code instead" >&2
+fi
 rm -rf "${install_dir:?}/${APP_NAME:?}"
 mv "$staging" "$install_dir/$APP_NAME"
 
@@ -156,4 +195,12 @@ if pgrep -x Pedals >/dev/null 2>&1; then
   esac
 else
   open "$install_dir/$APP_NAME"
+fi
+
+if [[ -n "$pair_code" ]]; then
+  if pgrep -x Pedals >/dev/null 2>&1; then
+    step "Open Pedals on your iPhone and confirm this computer"
+  else
+    step "Pairing completes the next time Pedals starts; then confirm on your iPhone"
+  fi
 fi

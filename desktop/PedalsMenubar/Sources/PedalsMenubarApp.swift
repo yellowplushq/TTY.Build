@@ -39,7 +39,9 @@ struct PedalsMenubarApp: App {
 
 @MainActor
 final class PedalsAppDelegate: NSObject, NSApplicationDelegate {
-    let model = AppModel()
+    /// Lazy so a launch that immediately relocates to /Applications never
+    /// starts the relay service from the doomed location.
+    lazy var model = AppModel()
     let updater = UpdaterModel()
     let permissions = PermissionsModel()
 
@@ -47,6 +49,12 @@ final class PedalsAppDelegate: NSObject, NSApplicationDelegate {
     private var debugSettingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Self-install: launched from Downloads, the Desktop, or a DMG, the
+        // app moves itself into Applications, relaunches from there, and
+        // removes the original. Skip every other launch step — this process
+        // is about to exit.
+        if AppRelocator.relocateIfNeeded() { return }
+
         refreshManagedAgentHooks()
         model.updater = updater
         statusItemController = StatusItemController(

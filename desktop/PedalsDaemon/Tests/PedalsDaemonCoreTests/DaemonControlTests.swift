@@ -88,6 +88,19 @@ final class DaemonControlTests: XCTestCase {
         daemon.cancelPairingInvitation()
     }
 
+    func testClaimReversePairingSubmitsCodeAndComputerNameAgainstCurrentIdentity() throws {
+        let identity = try XCTUnwrap(home.loadIdentity())
+        factory.clearEvents()
+        try daemon.claimReversePairing(
+            code: PairingCode("01234567"),
+            computerName: "Studio Mac"
+        )
+        XCTAssertEqual(
+            factory.events,
+            ["claim:01234567:Studio Mac:\(identity.computer.computerID)"]
+        )
+    }
+
     func testPairReturnsSingleUseCodesAndResetRotatesComputer() throws {
         let originalIdentity = try XCTUnwrap(home.loadIdentity())
         let first = try send(["cmd": "pair"])
@@ -261,7 +274,14 @@ private final class IdentityFactory: @unchecked Sendable {
             },
             pairingSessionStatus: { _, _ in .waiting },
             completePairingSession: { _, _, _ in },
-            cancelPairingSession: { _, _ in }
+            cancelPairingSession: { _, _ in },
+            claimReversePairing: { [self] code, computerName, identity in
+                lock.withLock {
+                    recordedEvents.append(
+                        "claim:\(code.digits):\(computerName):\(identity.computer.computerID)"
+                    )
+                }
+            }
         )
     }
 }

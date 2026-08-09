@@ -91,7 +91,7 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         let encryptedSecret: String?
     }
 
-    private let serviceURL: URL
+    let serviceURL: URL
     private let session: URLSession
     private let encoder = JSONEncoder()
     private let decoder: JSONDecoder
@@ -332,9 +332,9 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         return response.bindingCount
     }
 
-    private struct EmptyResponse: Decodable {}
+    struct EmptyResponse: Decodable {}
 
-    private func send<Response: Decodable>(
+    func send<Response: Decodable>(
         method: String,
         path: String,
         bearer: String? = nil
@@ -342,7 +342,7 @@ public final class PedalsServiceAPI: @unchecked Sendable {
         try await send(method: method, path: path, bearer: bearer, encodedBody: nil)
     }
 
-    private func send<Body: Encodable, Response: Decodable>(
+    func send<Body: Encodable, Response: Decodable>(
         method: String,
         path: String,
         bearer: String? = nil,

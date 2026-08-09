@@ -18,6 +18,11 @@ export const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TTYActivityAttributes";
 const APPLE_REFERENCE_DATE_UNIX_SECONDS = 978_307_200;
 
 export const APNS_SURFACES = Object.freeze({
+  "ios-app": Object.freeze({
+    pushType: "alert",
+    topic: "air.build.pedals",
+    priority: "10",
+  }),
   "ios-widget": Object.freeze({
     pushType: "widgets",
     topic: "air.build.pedals.push-type.widgets",
@@ -395,6 +400,22 @@ export function buildApnsPayload(surface, payload, now = Date.now()) {
     }
     return { aps: { "content-changed": true } };
   }
+  if (surface === "ios-app") {
+    const value = plainObject(payload, "payload");
+    rejectUnknownKeys(value, new Set(["computerName"]), "payload");
+    const computerName = requiredString(value.computerName, "payload.computerName")
+      .slice(0, 64);
+    return {
+      aps: {
+        alert: {
+          title: "Pedals",
+          body: `“${computerName}” wants to connect to this iPhone`,
+        },
+        sound: "default",
+      },
+      pedals: { kind: "reverse-pairing-claim" },
+    };
+  }
   return liveActivityPayload(surface, payload, now);
 }
 
@@ -412,7 +433,14 @@ function endpointHost(environment) {
   throw new TypeError("endpoint.environment must be sandbox or production");
 }
 
+const PAIRING_CLAIM_EXPIRATION_SECONDS = 24 * 60 * 60;
+
 function expirationHeader(surface, payload, now) {
+  // A pairing-claim alert stays useful for a while: let APNs hold it for a
+  // phone that is briefly offline instead of discarding immediately.
+  if (surface === "ios-app") {
+    return String(Math.floor(now / 1000) + PAIRING_CLAIM_EXPIRATION_SECONDS);
+  }
   if (surface !== "liveactivity-start" && surface !== "liveactivity-update") {
     return "0";
   }

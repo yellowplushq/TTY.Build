@@ -16,7 +16,11 @@ import {
 } from "./core.mjs";
 import { PushCoordinator } from "./push-coordinator.mjs";
 import { RelayChannel } from "./relay-channel.mjs";
-import { handleDesktopDownload, handleWebsiteAsset } from "./site.mjs";
+import {
+  handleDesktopDownload,
+  handlePairedDownload,
+  handleWebsiteAsset,
+} from "./site.mjs";
 
 export { PushCoordinator, RelayChannel };
 
@@ -204,6 +208,9 @@ async function collectOrphans(env) {
       .prepare(`DELETE FROM pairing_sessions WHERE expires_at <= ?1`)
       .bind(now),
     env.DB
+      .prepare(`DELETE FROM reverse_pairing_claims WHERE expires_at <= ?1`)
+      .bind(now),
+    env.DB
       .prepare(
         `DELETE FROM clients
           WHERE id IN (
@@ -339,6 +346,11 @@ const worker = {
         });
       }
 
+      const paired = /^\/download\/(\d{8})\/macos\.zip$/.exec(url.pathname);
+      if (paired) {
+        const response = await handlePairedDownload(request, env, paired[1]);
+        if (response) return response;
+      }
       const download = handleDesktopDownload(request, env, url);
       if (download) return download;
 

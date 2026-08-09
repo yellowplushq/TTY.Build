@@ -88,8 +88,29 @@ final class PairingErrorPresentationTests: XCTestCase {
         )
         XCTAssertFalse(guide.isHidden)
         XCTAssertEqual(guide.alpha, 1)
-        XCTAssertEqual(guide.bounds.height, 160, accuracy: 0.5)
+        XCTAssertEqual(guide.bounds.height, 208, accuracy: 0.5)
         XCTAssertGreaterThanOrEqual(guide.frame.minY, 7.5)
+    }
+
+    @MainActor
+    func testCopyInstallButtonPutsFullCurlCommandOnPasteboard() throws {
+        let controller = PairingCodeViewController()
+        controller.loadViewIfNeeded()
+        controller.view.frame = CGRect(x: 0, y: 0, width: 320, height: 568)
+        controller.view.layoutIfNeeded()
+
+        let copy = try XCTUnwrap(
+            findSubview(
+                in: controller.view,
+                identifier: "pedals.pairing.copyInstall"
+            ) as? UIButton
+        )
+        UIPasteboard.general.string = ""
+        copy.sendActions(for: .touchUpInside)
+        XCTAssertEqual(
+            UIPasteboard.general.string,
+            "curl -fsSL https://pedals.air.build/i | bash"
+        )
     }
 
     @MainActor

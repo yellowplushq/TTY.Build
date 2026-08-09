@@ -68,6 +68,13 @@ public struct ClientPairingClaim: Equatable, Sendable {
 }
 
 enum PairingKeyAgreement {
+    /// Forward pairing: the desktop pairing surface seals to the phone's
+    /// ephemeral key, bound to the server pairing-session ID.
+    static let forwardSalt = Data("Pedals pairing code v2".utf8)
+    /// Reverse pairing: a computer claiming an enrollment token seals to the
+    /// phone's durable key, bound to the server claim ID.
+    static let reverseSalt = Data("Pedals reverse pairing v1".utf8)
+
     static func makePrivateKey() -> Data {
         Curve25519.KeyAgreement.PrivateKey().rawRepresentation
     }
@@ -81,11 +88,14 @@ enum PairingKeyAgreement {
         secret: Data,
         hostPrivateKey: Data,
         clientPublicKey: Data,
-        sessionID: String
+        sessionID: String,
+        salt: Data = PairingKeyAgreement.forwardSalt
     ) throws -> Data {
         let privateKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: hostPrivateKey)
         let publicKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: clientPublicKey)
-        let key = try deriveKey(privateKey: privateKey, publicKey: publicKey, sessionID: sessionID)
+        let key = try deriveKey(
+            privateKey: privateKey, publicKey: publicKey, sessionID: sessionID, salt: salt
+        )
         return try ChaChaPoly.seal(
             secret,
             using: key,
@@ -97,11 +107,14 @@ enum PairingKeyAgreement {
         envelope: Data,
         clientPrivateKey: Data,
         hostPublicKey: Data,
-        sessionID: String
+        sessionID: String,
+        salt: Data = PairingKeyAgreement.forwardSalt
     ) throws -> Data {
         let privateKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: clientPrivateKey)
         let publicKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: hostPublicKey)
-        let key = try deriveKey(privateKey: privateKey, publicKey: publicKey, sessionID: sessionID)
+        let key = try deriveKey(
+            privateKey: privateKey, publicKey: publicKey, sessionID: sessionID, salt: salt
+        )
         return try ChaChaPoly.open(
             ChaChaPoly.SealedBox(combined: envelope),
             using: key,
@@ -112,12 +125,13 @@ enum PairingKeyAgreement {
     private static func deriveKey(
         privateKey: Curve25519.KeyAgreement.PrivateKey,
         publicKey: Curve25519.KeyAgreement.PublicKey,
-        sessionID: String
+        sessionID: String,
+        salt: Data
     ) throws -> SymmetricKey {
         let shared = try privateKey.sharedSecretFromKeyAgreement(with: publicKey)
         return shared.hkdfDerivedSymmetricKey(
             using: SHA256.self,
-            salt: Data("Pedals pairing code v2".utf8),
+            salt: salt,
             sharedInfo: Data(sessionID.utf8),
             outputByteCount: 32
         )

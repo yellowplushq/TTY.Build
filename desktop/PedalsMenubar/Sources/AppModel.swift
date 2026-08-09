@@ -64,6 +64,8 @@ final class AppModel: ObservableObject {
     private var startupTask: Task<Void, Never>?
     private var monitoringTask: Task<Void, Never>?
     private var pairingTask: Task<Void, Never>?
+    private var reversePairingTask: Task<Void, Never>?
+    private var enrollmentStampTask: Task<Void, Never>?
     private var pairingRevocationTask: Task<Void, Never>?
     private var pairingRefreshTask: Task<Void, Never>?
     private var pairingPresentationIsFocused = false
@@ -90,6 +92,8 @@ final class AppModel: ObservableObject {
                 self?.pairingTask?.cancel()
                 self?.pairingRevocationTask?.cancel()
                 self?.pairingRefreshTask?.cancel()
+                self?.reversePairingTask?.cancel()
+                self?.enrollmentStampTask?.cancel()
                 self?.monitoringTask?.cancel()
                 self?.startupTask?.cancel()
                 self?.service?.shutdown()
@@ -154,6 +158,7 @@ final class AppModel: ObservableObject {
                 startupTask = nil
                 await refresh()
                 startMonitoring()
+                startEnrollmentStampMonitor()
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 monitoringTask?.cancel()
@@ -241,6 +246,61 @@ final class AppModel: ObservableObject {
             }.value
             await refresh()
             lastError = closed ? nil : "Session \(id) is no longer available"
+        }
+    }
+
+    // MARK: Reverse pairing (enrollment stamp)
+
+    /// The install script and paired downloads leave the enrollment code as
+    /// an extended attribute on the app bundle. Consume it whenever the
+    /// service is up: claim fire-and-forget, then remove the stamp on any
+    /// terminal outcome. A network failure keeps the stamp for the periodic
+    /// retry below and for the next launch. The phone is the only surface
+    /// that shows pairing state, so failures are logged rather than
+    /// displayed.
+    func consumeEnrollmentStamp(bundleURL: URL = Bundle.main.bundleURL) {
+        guard reversePairingTask == nil,
+              let code = EnrollmentCodeStamp.read(bundleURL: bundleURL),
+              let service
+        else { return }
+        reversePairingTask = Task { [weak self] in
+            defer { self?.reversePairingTask = nil }
+            let computerName = Host.current().localizedName ?? "Mac"
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try service.claimReversePairing(
+                        code: code,
+                        computerName: computerName
+                    )
+                }.value
+                NSLog("Pedals submitted an enrollment claim; confirm on the iPhone")
+            } catch let error as PedalsServiceAPI.APIError {
+                // A service rejection (unknown or replaced code) is
+                // authoritative — retrying cannot succeed.
+                NSLog("Pedals enrollment claim was rejected: %@", "\(error)")
+            } catch {
+                // Transient (offline, timeout): keep the stamp and retry.
+                NSLog(
+                    "Pedals enrollment claim failed, will retry: %@",
+                    error.localizedDescription
+                )
+                return
+            }
+            EnrollmentCodeStamp.clear(bundleURL: bundleURL)
+        }
+    }
+
+    private func startEnrollmentStampMonitor() {
+        enrollmentStampTask?.cancel()
+        consumeEnrollmentStamp()
+        // One getxattr syscall every 30 s: catches an install that ran while
+        // this instance kept running, and retries after transient failures.
+        enrollmentStampTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { return }
+                self?.consumeEnrollmentStamp()
+            }
         }
     }
 

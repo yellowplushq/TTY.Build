@@ -261,6 +261,8 @@ final class SettingsViewController: UITableViewController {
             try await services.bind(code: code)
             self?.tableView.reloadData()
         }
+        controller.installCommandProvider = { await services.installCommand() }
+        controller.onAppearForPairing = { services.enablePairingNotifications() }
         controller.modalPresentationStyle = .fullScreen
         present(controller, animated: true)
     }

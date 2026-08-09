@@ -112,6 +112,53 @@ test("website assets receive defense-in-depth response headers", async () => {
   assert.match(await response.text(), /Pedals/);
 });
 
+test("the short /i alias serves the install script without a redirect", async () => {
+  const fetched = [];
+  const req = request("/i");
+  const response = await handleWebsiteAsset(req, {
+    ASSETS: {
+      fetch: async (assetRequest) => {
+        fetched.push(new URL(assetRequest.url).pathname);
+        return new Response("#!/usr/bin/env bash\n", {
+          headers: { "content-type": "text/x-shellscript" },
+        });
+      },
+    },
+  });
+
+  assert.deepEqual(fetched, ["/install.sh"]);
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /^#!\/usr\/bin\/env bash/);
+});
+
+test("an 8-digit path serves the installer with that enrollment code baked in", async () => {
+  const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
+  const fetched = [];
+  const req = request("/90285513");
+  const response = await handleWebsiteAsset(req, {
+    ASSETS: {
+      fetch: async (assetRequest) => {
+        fetched.push(new URL(assetRequest.url).pathname);
+        return new Response(script, {
+          headers: {
+            "content-type": "text/x-shellscript",
+            "content-length": String(script.length),
+          },
+        });
+      },
+    },
+  });
+
+  assert.deepEqual(fetched, ["/install.sh"]);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-length"), null);
+  const rendered = await response.text();
+  assert.match(rendered, /pair_code="\$\{PEDALS_PAIR:-90285513\}"/);
+  // The template substitutes exactly one site; the rest of the script is
+  // byte-identical.
+  assert.equal(rendered.replace("90285513", ""), script);
+});
+
 test("the one-screen homepage exposes the product promise and download CTA", async () => {
   const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
   assert.match(html, /Your terminal\./);
@@ -126,7 +173,7 @@ test("the one-screen homepage exposes the product promise and download CTA", asy
 
 test("the homepage offers the curl installer with a self-hosted copy button", async () => {
   const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
-  assert.match(html, /curl -fsSL https:\/\/pedals\.air\.build\/install\.sh \| bash/);
+  assert.match(html, /curl -fsSL https:\/\/pedals\.air\.build\/i \| bash/);
   assert.match(html, /data-copy="install-command-text"/);
   assert.match(html, /<script src="\/site\.js" defer><\/script>/);
 
@@ -149,6 +196,18 @@ test("the curl installer downloads the zip release and verifies its checksum", a
   assert.match(script, /shasum -a 256 -c/);
   assert.match(script, /read -r answer .*\/dev\/tty/);
   assert.doesNotMatch(script, /sudo/);
+});
+
+test("the curl installer stamps the enrollment code onto the app bundle", async () => {
+  const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
+  assert.match(script, /--pair\)/);
+  assert.match(script, /PEDALS_PAIR/);
+  assert.match(script, /\[0-9\]\{8\}/);
+  assert.match(
+    script,
+    /xattr -w build\.air\.pedals\.pairing-code "\$pair_code" "\$staging"/,
+  );
+  assert.doesNotMatch(script, /pedals:\/\//);
 });
 
 test("support and privacy pages expose release-ready public information", async () => {

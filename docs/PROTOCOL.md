@@ -139,6 +139,81 @@ Neither the code nor either ephemeral private key is persisted. Pairing session
 rows contain only code hashes, public keys, ciphertext, identities, and expiry
 metadata, and are removed on acknowledgement or expiry.
 
+### Reverse pairing (enrollment tokens)
+
+The forward ceremony above requires typing a computer-issued code on the
+phone. Reverse pairing inverts who quotes the rendezvous value so a fresh
+desktop install can pair with zero typing: the phone registers a long-lived
+8-digit enrollment token whose durable Curve25519 public key computers seal
+to, and embeds the code in the one-line install command
+(`curl -fsSL https://pedals.air.build/12345678 | bash` — the service serves
+`install.sh` with that code baked in; `--pair 12345678` and `PEDALS_PAIR`
+are the manual equivalents).
+
+```http
+PUT /v2/clients/me/reverse-pairing-token
+Authorization: Bearer <clientToken>
+Content-Type: application/json
+
+{"clientPublicKey":"<base64url Curve25519 public key>"}
+```
+
+The response contains `code`. One token exists per client; replacing it
+rotates the durable key, retires the old code, and deletes every pending
+claim (their envelopes are sealed to the replaced key). Only the code hash
+and public key are stored server-side; the phone keeps the code and the
+durable private key in its Keychain.
+
+The code reaches the desktop app as an extended attribute
+(`build.air.pedals.pairing-code`) stamped on the app bundle — written by the
+install script after extraction, or already present in an archive served by
+`GET /download/<code>/macos.zip`, which injects an AppleDouble
+(`__MACOSX/._Pedals.app`) entry into the release zip so Archive Utility and
+`ditto` restore the attribute on extraction. Extended attributes live
+outside the code-signature seal, so the signed app stays byte-identical.
+The app consumes the stamp on launch (and on a slow periodic check), claims
+the code, and removes the stamp on any terminal outcome; a computer claims
+by sealing its existing 32-byte E2EE secret exactly as in the forward
+ceremony — ephemeral host
+Curve25519 key against the phone's durable key, HKDF-SHA256 with a distinct
+salt (`Pedals reverse pairing v1`), ChaChaPoly with the server-issued claim
+ID as AEAD associated data and HKDF info:
+
+```http
+POST /v2/computers/:computerId/reverse-pairing-claims
+Authorization: Bearer <hostToken>
+Content-Type: application/json
+
+{"code":"12345678","hostPublicKey":"<base64url>","computerName":"Studio"}
+```
+
+The response contains `claimId` and `clientPublicKey`; the computer submits
+the ciphertext to `POST …/reverse-pairing-claims/:claimId/complete
+{"encryptedSecret":…}` and is done. Claims are fire-and-forget for the
+computer: it never learns whether the phone confirmed or rejected.
+
+Crucially, **no binding edge exists yet**. A completed claim is a pending
+row (30-day expiry; one per client-computer pair — re-claiming replaces it)
+that the Worker announces with a visible APNs alert to the client's
+`ios-app` push endpoints. The phone lists pending claims on every launch and
+foreground (`GET /v2/clients/me/reverse-pairing-claims`), shows the claiming
+computer's self-declared name, and the user decides:
+
+```http
+POST /v2/clients/me/reverse-pairing-claims/:claimId/confirm
+DELETE /v2/clients/me/reverse-pairing-claims/:claimId
+```
+
+Confirmation atomically creates the `client_computers` edge (subject to the
+same binding capacity as forward pairing), bumps the delivery sequence,
+clears any stale revocation-outbox row, and consumes the claim; the phone
+decrypts the envelope and commits the `ComputerBinding` to its Keychain
+*before* confirming, so a concurrent delete-only binding declaration can
+never remove the fresh edge. Rejection deletes the claim silently. This
+explicit confirmation is the security boundary of reverse pairing: a leaked
+enrollment code lets a stranger's computer appear on the confirmation card,
+never bind.
+
 ## 3. Authenticated relay
 
 Relay WebSockets connect to:

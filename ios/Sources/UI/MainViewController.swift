@@ -350,6 +350,13 @@ final class MainViewController: UIViewController {
             .sink { [weak self] message in self?.presentError(message) }
             .store(in: &cancellables)
 
+        services.pendingReverseClaims
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] claims in
+                self?.presentReversePairingCardIfNeeded(claims: claims)
+            }
+            .store(in: &cancellables)
+
         manager.notices
             .sink { [weak self] message in self?.showToast(message) }
             .store(in: &cancellables)
@@ -1114,8 +1121,58 @@ final class MainViewController: UIViewController {
         controller.onPair = { code in
             try await services.bind(code: code)
         }
+        controller.installCommandProvider = { await services.installCommand() }
+        controller.onAppearForPairing = { services.enablePairingNotifications() }
         controller.modalPresentationStyle = .fullScreen
         present(controller, animated: true)
+    }
+
+    // MARK: - Reverse pairing confirmation
+
+    private var reversePairingCard: ReversePairingConfirmViewController?
+
+    /// One card at a time; the count of further claims shows on the card and
+    /// the next one presents as soon as this one resolves.
+    private func presentReversePairingCardIfNeeded(claims: [ReversePairingClaim]) {
+        guard reversePairingCard == nil, let claim = claims.first else { return }
+        // Never fight the pairing screen or another modal for presentation.
+        guard presentedViewController == nil else { return }
+
+        let card = ReversePairingConfirmViewController(
+            claim: claim,
+            remaining: claims.count - 1
+        )
+        let services = services
+        card.onConfirm = { [weak self, weak card] claim in
+            card?.show(.working(name: claim.computerName))
+            Task { @MainActor in
+                do {
+                    try await services.confirmReverseClaim(claim)
+                    card?.dismiss(animated: true)
+                } catch {
+                    card?.show(.failed(
+                        message: "Couldn't connect “\(claim.computerName)”. Check your connection and try again."
+                    ))
+                }
+            }
+        }
+        card.onReject = { [weak card] claim in
+            // Dismiss immediately; the server-side delete is fired behind it
+            // and an unreachable service just lets the claim expire instead.
+            card?.dismiss(animated: true)
+            Task { @MainActor in
+                try? await services.rejectReverseClaim(claim)
+            }
+        }
+        card.onDismissed = { [weak self] in
+            self?.reversePairingCard = nil
+            // Present the next pending claim, if any.
+            self?.presentReversePairingCardIfNeeded(
+                claims: self?.services.pendingReverseClaims.value ?? []
+            )
+        }
+        reversePairingCard = card
+        present(card, animated: true)
     }
 
     // MARK: - Settings

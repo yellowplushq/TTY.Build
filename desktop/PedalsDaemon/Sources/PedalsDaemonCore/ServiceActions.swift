@@ -19,6 +19,9 @@ public struct ServiceActions: @unchecked Sendable {
     public var cancelPairingSession: @Sendable (
         HostPairingSession, HostIdentity
     ) throws -> Void
+    public var claimReversePairing: @Sendable (
+        PairingCode, String, HostIdentity
+    ) throws -> Void
 
     public init(
         createComputer: @escaping @Sendable (URL) throws -> HostIdentity,
@@ -38,7 +41,12 @@ public struct ServiceActions: @unchecked Sendable {
         },
         cancelPairingSession: @escaping @Sendable (
             HostPairingSession, HostIdentity
-        ) throws -> Void = { _, _ in }
+        ) throws -> Void = { _, _ in },
+        claimReversePairing: @escaping @Sendable (
+            PairingCode, String, HostIdentity
+        ) throws -> Void = { _, _, _ in
+            throw ActionError.pairingCodesUnavailable
+        }
     ) {
         self.createComputer = createComputer
         self.deleteComputer = deleteComputer
@@ -46,6 +54,7 @@ public struct ServiceActions: @unchecked Sendable {
         self.pairingSessionStatus = pairingSessionStatus
         self.completePairingSession = completePairingSession
         self.cancelPairingSession = cancelPairingSession
+        self.claimReversePairing = claimReversePairing
     }
 
     public static let live = ServiceActions(
@@ -91,6 +100,17 @@ public struct ServiceActions: @unchecked Sendable {
                 try await PedalsServiceAPI(
                     serviceURL: identity.computer.serviceURL
                 ).cancelPairingSession(pairing, identity: identity)
+            }
+        },
+        claimReversePairing: { code, computerName, identity in
+            try blocking {
+                try await PedalsServiceAPI(
+                    serviceURL: identity.computer.serviceURL
+                ).claimReversePairing(
+                    code: code,
+                    computerName: computerName,
+                    identity: identity
+                )
             }
         }
     )

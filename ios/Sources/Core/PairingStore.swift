@@ -174,6 +174,44 @@ final class PairingStore {
         return (binding, identity)
     }
 
+    /// Loads the client identity, creating and persisting a fresh one (with
+    /// no bindings) when the installation has none yet. Reverse pairing needs
+    /// an identity before the first computer ever binds, so the enrollment
+    /// token can be registered from the onboarding screen.
+    func ensureClientIdentity(
+        serviceURL: URL = PedalsServiceAPI.productionServiceURL
+    ) async throws -> ClientIdentity {
+        await acquireMutation()
+        defer { releaseMutation() }
+        if let state = try loadState() {
+            guard state.identity.serviceURL == serviceURL else {
+                throw StoreError.serviceMismatch
+            }
+            return state.identity
+        }
+        let api = apiFactory(serviceURL)
+        let identity = try await api.createClient()
+        try saveState(PersistentState(identity: identity, bindings: []))
+        return identity
+    }
+
+    /// Commits a binding decrypted from a reverse-pairing envelope. The
+    /// caller confirms server-side AFTER this returns: with the binding in
+    /// the Keychain first, a concurrent delete-only `reconcile()` can never
+    /// remove the edge the confirmation creates.
+    func commitReversePairedBinding(_ binding: ComputerBinding) async throws -> ClientIdentity {
+        await acquireMutation()
+        defer { releaseMutation() }
+        guard let state = try loadState() else {
+            throw StoreError.missingClientIdentity
+        }
+        guard state.identity.serviceURL == binding.serviceURL else {
+            throw StoreError.serviceMismatch
+        }
+        _ = try commitBinding(binding, identity: state.identity, previousState: state)
+        return state.identity
+    }
+
     func unbind(computerID: String) async throws {
         await acquireMutation()
         do {

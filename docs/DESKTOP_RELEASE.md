@@ -56,14 +56,41 @@ and every 24 hours, and users can also run `Check for Updates…` from the menu
 or Settings. Both the feed and the update archive are verified with the app's
 pinned Ed25519 public key before an update is installed.
 
+## Self-install on launch
+
+A release build launched from anywhere outside an Applications folder
+(Downloads, the Desktop, a mounted DMG) moves itself to `/Applications`
+(falling back to `~/Applications` without write access), relaunches from the
+new location, and removes the original — resolving App Translocation to find
+the real source, and skipping when another instance already runs from the
+destination. Extended attributes survive the move, so a pairing-stamped
+download still pairs after relocating. Debug builds and
+`PEDALS_NO_RELOCATE=1` skip the behavior.
+
 ## Curl installation
 
-The website serves `relay/public/install.sh` at `/install.sh`, so users can
-install or reinstall the desktop app with one command:
+The website serves `relay/public/install.sh` at `/install.sh` and at the
+short alias `/i`, so users can install or reinstall the desktop app with one
+command:
 
 ```bash
-curl -fsSL https://pedals.air.build/install.sh | bash
+curl -fsSL https://pedals.air.build/i | bash
 ```
+
+The iPhone app's pairing screen embeds its enrollment code into the URL of
+the copied command (`curl -fsSL https://pedals.air.build/12345678 | bash`) —
+the service serves `install.sh` with that code baked in as the `PEDALS_PAIR`
+default; `--pair 12345678` and the `PEDALS_PAIR` environment variable are
+the manual equivalents. After extracting, the script stamps the code as an
+extended attribute on the installed bundle; the app consumes the stamp on
+launch, claims the code, and the computer then appears on the iPhone for a
+one-tap confirmation (PROTOCOL.md §2, "Reverse pairing").
+
+`GET /download/<code>/macos.zip` serves the release archive with the same
+stamp already injected as a sequestered-xattr (`__MACOSX/._Pedals.app`)
+entry — the signed app bytes pass through untouched, so Gatekeeper
+verification is unaffected. An archive downloaded that way (or AirDropped
+onward) pairs on first launch with zero typing.
 
 The script downloads `Pedals-macOS.zip` through the stable redirect, verifies
 it against the release's SHA-256 checksum before installing anything, copies

@@ -3363,3 +3363,263 @@ describe("agent counts and alerts", () => {
     }
   });
 });
+
+describe("reverse pairing (enrollment tokens)", () => {
+  async function registerToken(client, publicKey = "P".repeat(43)) {
+    const { response, value } = await apiJson("/v2/clients/me/reverse-pairing-token", {
+      method: "PUT",
+      token: client.clientToken,
+      body: { clientPublicKey: publicKey },
+    });
+    expect(response.status).toBe(200);
+    expect(value.code).toMatch(/^\d{8}$/);
+    return value;
+  }
+
+  async function claim(computer, code, name = "Studio Mac") {
+    return apiJson(`/v2/computers/${computer.computerId}/reverse-pairing-claims`, {
+      method: "POST",
+      token: computer.hostToken,
+      body: { code, hostPublicKey: "H".repeat(43), computerName: name },
+    });
+  }
+
+  async function complete(computer, claimId, envelope = "E".repeat(80)) {
+    return api(
+      `/v2/computers/${computer.computerId}/reverse-pairing-claims/${claimId}/complete`,
+      { method: "POST", token: computer.hostToken, body: { encryptedSecret: envelope } },
+    );
+  }
+
+  test("full ceremony: register, claim, complete, list, confirm creates the edge", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+
+    const claimed = await claim(computer, token.code);
+    expect(claimed.response.status).toBe(201);
+    expect(claimed.value.clientPublicKey).toBe("P".repeat(43));
+    expect(claimed.value.claimId).toMatch(/^[0-9a-f]{32}$/);
+
+    // Not listed until the envelope arrives.
+    const before = await apiJson("/v2/clients/me/reverse-pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(before.value.claims).toEqual([]);
+
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    const listed = await apiJson("/v2/clients/me/reverse-pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(listed.value.claims).toHaveLength(1);
+    expect(listed.value.claims[0]).toMatchObject({
+      claimId: claimed.value.claimId,
+      computerId: computer.computerId,
+      computerName: "Studio Mac",
+      hostPublicKey: "H".repeat(43),
+      encryptedSecret: "E".repeat(80),
+    });
+
+    expect(
+      (await api(`/v2/clients/me/reverse-pairing-claims/${claimed.value.claimId}/confirm`, {
+        method: "POST",
+        token: client.clientToken,
+      })).status,
+    ).toBe(201);
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM client_computers
+            WHERE client_id = ?1 AND computer_id = ?2`,
+        ).bind(client.clientId, computer.computerId).first("count"),
+      ),
+    ).toBe(1);
+    // Claim row is consumed by confirmation.
+    const after = await apiJson("/v2/clients/me/reverse-pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(after.value.claims).toEqual([]);
+  });
+
+  test("the token is multi-use and a re-claim by the same computer replaces its claim", async () => {
+    const client = await createClient();
+    const first = await createComputer();
+    const second = await createComputer();
+    const token = await registerToken(client);
+
+    const claimA = await claim(first, token.code, "First");
+    expect((await complete(first, claimA.value.claimId)).status).toBe(204);
+    const claimB = await claim(second, token.code, "Second");
+    expect((await complete(second, claimB.value.claimId)).status).toBe(204);
+
+    // Same computer claims again: the pending envelope resets.
+    const claimA2 = await claim(first, token.code, "First Renamed");
+    expect(claimA2.response.status).toBe(201);
+    const listed = await apiJson("/v2/clients/me/reverse-pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(listed.value.claims).toHaveLength(1);
+    expect(listed.value.claims[0].computerName).toBe("Second");
+
+    expect((await complete(first, claimA2.value.claimId)).status).toBe(204);
+    const relisted = await apiJson("/v2/clients/me/reverse-pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(relisted.value.claims.map((entry) => entry.computerName).sort()).toEqual([
+      "First Renamed",
+      "Second",
+    ]);
+  });
+
+  test("rejecting a claim deletes it without creating an edge and stays invisible to the computer", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+    const claimed = await claim(computer, token.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    expect(
+      (await api(`/v2/clients/me/reverse-pairing-claims/${claimed.value.claimId}`, {
+        method: "DELETE",
+        token: client.clientToken,
+      })).status,
+    ).toBe(204);
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM client_computers
+            WHERE client_id = ?1 AND computer_id = ?2`,
+        ).bind(client.clientId, computer.computerId).first("count"),
+      ),
+    ).toBe(0);
+    // Confirming the deleted claim reports it gone.
+    expect(
+      (await api(`/v2/clients/me/reverse-pairing-claims/${claimed.value.claimId}/confirm`, {
+        method: "POST",
+        token: client.clientToken,
+      })).status,
+    ).toBe(410);
+  });
+
+  test("an unknown code, invalid name, or wrong bearer is rejected", async () => {
+    const client = await createClient();
+    const stranger = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+
+    expect((await claim(computer, "00000000")).response.status).toBe(400);
+    expect((await claim(computer, token.code, "")).response.status).toBe(400);
+    expect((await claim(computer, token.code, "x".repeat(65))).response.status).toBe(400);
+
+    const claimed = await claim(computer, token.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+    // A different client cannot see, confirm, or reject the claim.
+    const foreign = await apiJson("/v2/clients/me/reverse-pairing-claims", {
+      token: stranger.clientToken,
+    });
+    expect(foreign.value.claims).toEqual([]);
+    expect(
+      (await api(`/v2/clients/me/reverse-pairing-claims/${claimed.value.claimId}/confirm`, {
+        method: "POST",
+        token: stranger.clientToken,
+      })).status,
+    ).toBe(410);
+    // A second complete cannot overwrite the sealed envelope.
+    expect((await complete(computer, claimed.value.claimId, "F".repeat(80))).status).toBe(400);
+  });
+
+  test("replacing the token drops pending claims and retires the old code", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const first = await registerToken(client);
+    const claimed = await claim(computer, first.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    const second = await registerToken(client, "Q".repeat(43));
+    const listed = await apiJson("/v2/clients/me/reverse-pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(listed.value.claims).toEqual([]);
+    expect((await claim(computer, first.code)).response.status).toBe(400);
+    expect((await claim(computer, second.code)).response.status).toBe(201);
+  });
+
+  test("expired claims are swept by the cron sweep and cannot be confirmed", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+    const claimed = await claim(computer, token.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    await env.DB.prepare(
+      `UPDATE reverse_pairing_claims SET expires_at = 1 WHERE id = ?1`,
+    ).bind(claimed.value.claimId).run();
+    expect(
+      (await api(`/v2/clients/me/reverse-pairing-claims/${claimed.value.claimId}/confirm`, {
+        method: "POST",
+        token: client.clientToken,
+      })).status,
+    ).toBe(410);
+    await collectOrphans(env);
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM reverse_pairing_claims WHERE id = ?1`,
+        ).bind(claimed.value.claimId).first("count"),
+      ),
+    ).toBe(0);
+  });
+
+  test("a completed claim raises one visible ios-app alert through the coordinator", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+    expect(
+      (await api("/v2/clients/me/push-endpoints/ios-app", {
+        method: "PUT",
+        token: client.statusToken,
+        body: { token: "ab".repeat(32), environment: "sandbox" },
+      })).status,
+    ).toBe(200);
+
+    const claimed = await claim(computer, token.code, "Push Mac");
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    // The endpoint survives (the fake APNs accepts tokens not starting with
+    // de/fa/fb) and remains valid for the next claim.
+    await waitFor(async () =>
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'ios-app' AND invalidated_at IS NULL`,
+        ).bind(client.clientId).first("count"),
+      ) === 1 ? true : null,
+    );
+  });
+
+  test("a dead device token invalidates the ios-app endpoint on claim delivery", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+    expect(
+      (await api("/v2/clients/me/push-endpoints/ios-app", {
+        method: "PUT",
+        token: client.statusToken,
+        body: { token: "de".repeat(32), environment: "sandbox" },
+      })).status,
+    ).toBe(200);
+
+    const claimed = await claim(computer, token.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    await waitFor(async () =>
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM push_endpoints
+            WHERE client_id = ?1 AND surface = 'ios-app' AND invalidated_at IS NOT NULL`,
+        ).bind(client.clientId).first("count"),
+      ) === 1 ? true : null,
+    );
+  });
+});

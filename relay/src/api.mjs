@@ -20,8 +20,10 @@ import {
   isoDate,
   json,
   notifyPushCoordinator,
+  notifyReversePairingClaim,
   randomId,
   randomPairingCode,
+  REVERSE_CLAIM_TTL_SECONDS,
   randomToken,
   rateLimitKey,
   readJson,
@@ -34,6 +36,7 @@ const PAIRING_CODE = /^\d{8}$/;
 const CURVE25519_PUBLIC_KEY = /^[A-Za-z0-9_-]{43}$/;
 const ENCRYPTED_SECRET = /^[A-Za-z0-9_-]{64,256}$/;
 const CLIENT_TOKEN = /^[A-Za-z0-9_-]{32,128}$/;
+const COMPUTER_NAME = /^[^\u0000-\u001f\u007f]{1,64}$/;
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -363,6 +366,237 @@ async function acknowledgeClientPairingSession(request, env, sessionId) {
   await env.DB.prepare(
     `DELETE FROM pairing_sessions WHERE id = ?1 AND claimed_by = ?2 AND completed_at IS NOT NULL`,
   ).bind(sessionId, client.id).run();
+  return new Response(null, { status: 204 });
+}
+
+// Reverse pairing: the phone registers a durable enrollment token; a computer
+// claims it and submits a sealed envelope; nothing becomes a binding edge
+// until the phone confirms. The computer never learns whether the phone
+// confirmed or rejected — a rejected claim simply disappears.
+
+async function putReversePairingToken(request, env) {
+  const client = await requireControlClient(request, env);
+  await limitAuthenticated(request, env, "MUTATION_LIMITER", "reverse-pairing-token", client.id);
+  const body = await readJson(request);
+  requireBodyShape(body, ["clientPublicKey"]);
+  if (!CURVE25519_PUBLIC_KEY.test(body.clientPublicKey)) {
+    throw new ApiFailure(400, "invalid_public_key", "client public key is invalid");
+  }
+
+  const now = nowSeconds();
+  // Replacing the token rotates the durable key, which makes every pending
+  // envelope undecryptable — drop those claims in the same breath.
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM reverse_pairing_tokens WHERE client_id = ?1`).bind(client.id),
+    env.DB.prepare(`DELETE FROM reverse_pairing_claims WHERE client_id = ?1`).bind(client.id),
+  ]);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const code = randomPairingCode();
+    const codeHash = await tokenHash(code);
+    const inserted = await env.DB.prepare(
+      `INSERT OR IGNORE INTO reverse_pairing_tokens
+         (client_id, code_hash, client_public_key, created_at)
+       VALUES (?1, ?2, ?3, ?4)`,
+    ).bind(client.id, codeHash, body.clientPublicKey, now).run();
+    if (Number(inserted.meta?.changes ?? 0) === 1) {
+      return json({ code });
+    }
+  }
+  throw new ApiFailure(503, "pairing_code_unavailable", "could not allocate an enrollment code");
+}
+
+async function claimReversePairing(request, env, computerId) {
+  const host = await authenticateHost(request, env.DB, computerId);
+  if (!host) return apiError(401, "unauthorized", "valid host bearer required");
+  await limitAuthenticated(request, env, "MUTATION_LIMITER", "reverse-pairing-claim", host.id);
+  const body = await readJson(request);
+  requireBodyShape(body, ["code", "hostPublicKey", "computerName"]);
+  if (!PAIRING_CODE.test(body.code)) {
+    throw new ApiFailure(400, "invalid_pairing_code", "enrollment code is invalid");
+  }
+  if (!CURVE25519_PUBLIC_KEY.test(body.hostPublicKey)) {
+    throw new ApiFailure(400, "invalid_public_key", "host public key is invalid");
+  }
+  if (typeof body.computerName !== "string" || !COMPUTER_NAME.test(body.computerName)) {
+    throw new ApiFailure(400, "invalid_computer_name", "computer name is invalid");
+  }
+
+  const hash = await tokenHash(body.code);
+  const token = await env.DB.prepare(
+    `SELECT client_id AS clientId, client_public_key AS clientPublicKey
+       FROM reverse_pairing_tokens
+      WHERE code_hash = ?1`,
+  ).bind(hash).first();
+  if (!token) {
+    throw new ApiFailure(400, "invalid_pairing_code", "enrollment code is invalid");
+  }
+
+  const now = nowSeconds();
+  const claimId = randomId();
+  await env.DB.prepare(
+    `INSERT INTO reverse_pairing_claims
+       (id, client_id, computer_id, computer_name, host_public_key,
+        encrypted_secret, created_at, expires_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7)
+     ON CONFLICT(client_id, computer_id) DO UPDATE SET
+       id = excluded.id,
+       computer_name = excluded.computer_name,
+       host_public_key = excluded.host_public_key,
+       encrypted_secret = NULL,
+       created_at = excluded.created_at,
+       expires_at = excluded.expires_at`,
+  ).bind(
+    claimId,
+    token.clientId,
+    computerId,
+    body.computerName,
+    body.hostPublicKey,
+    now,
+    now + REVERSE_CLAIM_TTL_SECONDS,
+  ).run();
+  return json({ claimId, clientPublicKey: token.clientPublicKey }, 201);
+}
+
+async function completeReversePairingClaim(request, env, ctx, computerId, claimId) {
+  const host = await authenticateHost(request, env.DB, computerId);
+  if (!host) return apiError(401, "unauthorized", "valid host bearer required");
+  const body = await readJson(request);
+  requireBodyShape(body, ["encryptedSecret"]);
+  if (!ENCRYPTED_SECRET.test(body.encryptedSecret)) {
+    throw new ApiFailure(400, "invalid_envelope", "encrypted pairing envelope is invalid");
+  }
+
+  const now = nowSeconds();
+  const updated = await env.DB.prepare(
+    `UPDATE reverse_pairing_claims
+        SET encrypted_secret = ?3
+      WHERE id = ?1 AND computer_id = ?2
+        AND encrypted_secret IS NULL
+        AND expires_at > ?4`,
+  ).bind(claimId, computerId, body.encryptedSecret, now).run();
+  if (Number(updated.meta?.changes ?? 0) !== 1) {
+    throw new ApiFailure(400, "invalid_pairing_claim", "pairing claim is closed or expired");
+  }
+  const row = await env.DB.prepare(
+    `SELECT client_id AS clientId, computer_name AS computerName
+       FROM reverse_pairing_claims
+      WHERE id = ?1`,
+  ).bind(claimId).first();
+  if (row) {
+    background(
+      ctx,
+      notifyReversePairingClaim(env, row.clientId, row.computerName),
+      "pairing claim push failed",
+    );
+  }
+  return new Response(null, { status: 204 });
+}
+
+async function listReversePairingClaims(request, env) {
+  const client = await requireControlClient(request, env);
+  const now = nowSeconds();
+  const result = await env.DB.prepare(
+    `SELECT id AS claimId, computer_id AS computerId, computer_name AS computerName,
+            host_public_key AS hostPublicKey, encrypted_secret AS encryptedSecret,
+            created_at AS createdAt
+       FROM reverse_pairing_claims
+      WHERE client_id = ?1 AND encrypted_secret IS NOT NULL AND expires_at > ?2
+      ORDER BY created_at DESC, id`,
+  ).bind(client.id, now).all();
+  return json({
+    claims: (result.results ?? []).map((row) => ({
+      claimId: row.claimId,
+      computerId: row.computerId,
+      computerName: row.computerName,
+      hostPublicKey: row.hostPublicKey,
+      encryptedSecret: row.encryptedSecret,
+      createdAt: Number(row.createdAt),
+    })),
+  });
+}
+
+async function confirmReversePairingClaim(request, env, ctx, claimId) {
+  const client = await requireControlClient(request, env);
+  await limitAuthenticated(request, env, "MUTATION_LIMITER", "reverse-pairing-confirm", client.id);
+  const now = nowSeconds();
+  const mutationId = randomId();
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO client_computers
+         (client_id, computer_id, mutation_id, created_at)
+       SELECT client_id, computer_id, ?3, ?4
+         FROM reverse_pairing_claims
+        WHERE id = ?1 AND client_id = ?2
+          AND encrypted_secret IS NOT NULL
+          AND expires_at > ?4
+          AND (
+                EXISTS (
+                  SELECT 1 FROM client_computers
+                   WHERE client_id = ?2
+                     AND computer_id = reverse_pairing_claims.computer_id
+                )
+                OR (
+                  SELECT COUNT(*) FROM client_computers WHERE client_id = ?2
+                ) < ?5
+              )`,
+    ).bind(claimId, client.id, mutationId, now, MAX_BINDINGS_PER_CLIENT),
+    env.DB.prepare(
+      `UPDATE client_delivery_state
+          SET sequence = sequence + 1, last_fingerprint = NULL
+        WHERE client_id = ?1
+          AND EXISTS (
+            SELECT 1 FROM client_computers
+             WHERE client_id = ?1 AND mutation_id = ?2
+          )`,
+    ).bind(client.id, mutationId),
+    env.DB.prepare(
+      `DELETE FROM relay_revocation_outbox
+        WHERE kind = 'client' AND principal_id = ?2
+          AND computer_id = (
+            SELECT computer_id FROM reverse_pairing_claims
+             WHERE id = ?1 AND client_id = ?2
+          )`,
+    ).bind(claimId, client.id),
+    // The claim row is consumed only once its edge exists, so a lost
+    // capacity race keeps the claim confirmable after the user unbinds
+    // another computer.
+    env.DB.prepare(
+      `DELETE FROM reverse_pairing_claims
+        WHERE id = ?1 AND client_id = ?2
+          AND EXISTS (
+            SELECT 1 FROM client_computers
+             WHERE client_id = ?2
+               AND computer_id = reverse_pairing_claims.computer_id
+          )`,
+    ).bind(claimId, client.id),
+  ]);
+
+  const consumed = Number(results[3].meta?.changes ?? 0) === 1;
+  if (!consumed) {
+    const atCapacity = await env.DB.prepare(
+      `SELECT COUNT(*) >= ?2 AS full FROM client_computers WHERE client_id = ?1`,
+    ).bind(client.id, MAX_BINDINGS_PER_CLIENT).first("full");
+    if (Number(atCapacity) === 1) {
+      throw new ApiFailure(
+        429,
+        "binding_limit",
+        `a client may bind at most ${MAX_BINDINGS_PER_CLIENT} computers`,
+      );
+    }
+    throw new ApiFailure(410, "invalid_pairing_claim", "pairing claim is closed or expired");
+  }
+  const inserted = Number(results[0].meta?.changes ?? 0) === 1;
+  if (inserted) {
+    background(ctx, notifyPushCoordinator(env, [client.id]), "binding push notify failed");
+  }
+  return new Response(null, { status: inserted ? 201 : 200 });
+}
+
+async function rejectReversePairingClaim(request, env, claimId) {
+  const client = await requireControlClient(request, env);
+  await env.DB.prepare(
+    `DELETE FROM reverse_pairing_claims WHERE id = ?1 AND client_id = ?2`,
+  ).bind(claimId, client.id).run();
   return new Response(null, { status: 204 });
 }
 
@@ -1077,6 +1311,35 @@ export async function handleApi(request, env, ctx, url) {
   if (match && request.method === "DELETE") {
     requireQueryShape(url);
     return acknowledgeClientPairingSession(request, env, match[1]);
+  }
+
+  if (request.method === "PUT" && pathname === "/v2/clients/me/reverse-pairing-token") {
+    requireQueryShape(url);
+    return putReversePairingToken(request, env);
+  }
+  if (request.method === "GET" && pathname === "/v2/clients/me/reverse-pairing-claims") {
+    requireQueryShape(url);
+    return listReversePairingClaims(request, env);
+  }
+  match = /^\/v2\/clients\/me\/reverse-pairing-claims\/([0-9a-f]{32})\/confirm$/.exec(pathname);
+  if (match && request.method === "POST") {
+    requireQueryShape(url);
+    return confirmReversePairingClaim(request, env, ctx, match[1]);
+  }
+  match = /^\/v2\/clients\/me\/reverse-pairing-claims\/([0-9a-f]{32})$/.exec(pathname);
+  if (match && request.method === "DELETE") {
+    requireQueryShape(url);
+    return rejectReversePairingClaim(request, env, match[1]);
+  }
+  match = /^\/v2\/computers\/([0-9a-f]{32})\/reverse-pairing-claims$/.exec(pathname);
+  if (match && request.method === "POST") {
+    requireQueryShape(url);
+    return claimReversePairing(request, env, match[1]);
+  }
+  match = /^\/v2\/computers\/([0-9a-f]{32})\/reverse-pairing-claims\/([0-9a-f]{32})\/complete$/.exec(pathname);
+  if (match && request.method === "POST") {
+    requireQueryShape(url);
+    return completeReversePairingClaim(request, env, ctx, match[1], match[2]);
   }
 
   if (request.method === "PUT" && pathname === "/v2/clients/me/bindings") {

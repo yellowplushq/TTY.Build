@@ -90,6 +90,30 @@ D1 stores the code hash, public keys, ciphertext, identities, and timestamps;
 it never receives the E2EE secret or either ephemeral private key. Completed,
 cancelled, acknowledged, and expired sessions cannot be claimed again.
 
+### Reverse pairing (enrollment tokens)
+
+The mirrored ceremony lets a computer initiate against a phone-issued token
+(embedded in the install command) with the phone offline; see PROTOCOL.md §2
+for the full flow and crypto. Endpoints:
+
+- `PUT /v2/clients/me/reverse-pairing-token` (control bearer,
+  `{clientPublicKey}` → `{code}`) — one durable token per client; replacing
+  it retires the old code and deletes pending claims.
+- `POST /v2/computers/:computerId/reverse-pairing-claims` (host bearer,
+  `{code, hostPublicKey, computerName}` → `{claimId, clientPublicKey}`),
+  then `POST …/reverse-pairing-claims/:claimId/complete
+  {encryptedSecret}`. One pending claim per client-computer pair; 30-day
+  expiry swept by cron. A completed claim triggers a visible APNs alert to
+  the client's `ios-app` push endpoints.
+- `GET /v2/clients/me/reverse-pairing-claims` lists completed claims;
+  `POST …/:claimId/confirm` atomically creates the binding edge (the only
+  edge-creating path besides the forward ceremony and Watch delegation);
+  `DELETE …/:claimId` rejects silently.
+- `GET /download/<code>/macos.zip` proxies the latest release archive with
+  the code injected as a sequestered-xattr (`__MACOSX/._Pedals.app`) entry;
+  the signed app bytes pass through untouched and the code is never checked
+  against the token table.
+
 ### `DELETE /v2/computers/:computerId`
 
 Host bearer required. Atomically deletes the computer, its state, pairing sessions, and
