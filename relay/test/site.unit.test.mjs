@@ -198,6 +198,36 @@ test("the curl installer downloads the zip release and verifies its checksum", a
   assert.doesNotMatch(script, /sudo/);
 });
 
+test("the curl installer distinguishes the desktop app from iOS Simulator", async () => {
+  const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
+  assert.match(script, /APP_BUNDLE_ID="air\.build\.pedals\.menubar"/);
+  assert.match(
+    script,
+    /application id \\"\$APP_BUNDLE_ID\\" is running/,
+  );
+  assert.match(
+    script,
+    /tell application id \\"\$APP_BUNDLE_ID\\" to quit/,
+  );
+  assert.match(script, /command_line=.*ps -ww -p "\$pid" -o command=/);
+  assert.match(script, /"\$command_line" == "\$executable"/);
+});
+
+test("the curl installer relaunches after a graceful quit timeout", async () => {
+  const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
+  assert.match(script, /Pedals did not quit normally; stopping it before relaunch/);
+  assert.match(script, /terminate_desktop_app/);
+  assert.match(script, /close it and rerun the installer/);
+});
+
+test("the curl installer does not infer launch success from process state", async () => {
+  const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
+  const launchApp = script.match(/launch_app\(\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  assert.match(launchApp, /open "\$install_dir\/\$APP_NAME"/);
+  assert.doesNotMatch(launchApp, /app_is_running/);
+  assert.doesNotMatch(launchApp, /Launched Pedals/);
+});
+
 test("the curl installer stamps the enrollment code onto the app bundle", async () => {
   const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
   assert.match(script, /--pair\)/);

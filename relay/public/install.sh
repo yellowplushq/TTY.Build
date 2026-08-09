@@ -22,6 +22,7 @@ BASE_URL="${PEDALS_INSTALL_BASE_URL:-https://pedals.air.build}"
 ZIP_NAME="Pedals-macOS.zip"
 CHECKSUM_NAME="$ZIP_NAME.sha256"
 APP_NAME="Pedals.app"
+APP_BUNDLE_ID="air.build.pedals.menubar"
 
 pair_code="${PEDALS_PAIR:-}"
 while [[ $# -gt 0 ]]; do
@@ -88,6 +89,42 @@ download() {
   else
     curl -fsSL "$1" -o "$2"
   fi
+}
+
+app_is_running() {
+  # The iPhone app in Simulator also has the process name "Pedals", so a
+  # name-only pgrep reports a false positive whenever that simulator is open.
+  # The desktop bundle identifier uniquely identifies the menu bar app and
+  # remains stable while its bundle is replaced during an update.
+  [[ "$(osascript -e "application id \"$APP_BUNDLE_ID\" is running" 2>/dev/null || true)" == "true" ]]
+}
+
+running_desktop_app_pids() {
+  # Limit the name match to processes whose full command starts with the
+  # executable inside the installed desktop bundle. Simulator apps share the
+  # Pedals process name but have a different executable path.
+  local executable pid command_line
+  executable="$install_dir/$APP_NAME/Contents/MacOS/Pedals"
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    command_line="$(ps -ww -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$command_line" == "$executable" || "$command_line" == "$executable "* ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done < <(pgrep -x Pedals 2>/dev/null || true)
+}
+
+terminate_desktop_app() {
+  local pid
+  while IFS= read -r pid; do
+    kill "$pid" 2>/dev/null || true
+  done < <(running_desktop_app_pids)
+}
+
+launch_app() {
+  step "Opening Pedals"
+  open "$install_dir/$APP_NAME" \
+    || fail "macOS could not open $install_dir/$APP_NAME"
 }
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "this installer supports macOS only"
@@ -169,7 +206,7 @@ mv "$staging" "$install_dir/$APP_NAME"
 
 step "Installed $install_dir/$APP_NAME"
 
-if pgrep -x Pedals >/dev/null 2>&1; then
+if app_is_running; then
   # Never quit a running app without an explicit yes from a real terminal.
   answer=""
   printf 'Pedals is running. Press return to relaunch it now, or q to keep the current session: '
@@ -179,26 +216,32 @@ if pgrep -x Pedals >/dev/null 2>&1; then
       echo "Quit and reopen Pedals whenever you're ready to use the new version."
       ;;
     *)
-      osascript -e 'tell application "Pedals" to quit' >/dev/null 2>&1 || true
+      osascript -e "tell application id \"$APP_BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
       tries=0
-      while pgrep -x Pedals >/dev/null 2>&1 && (( tries < 20 )); do
+      while app_is_running && (( tries < 20 )); do
         sleep 0.5
         tries=$(( tries + 1 ))
       done
-      if pgrep -x Pedals >/dev/null 2>&1; then
-        echo "Pedals didn't quit; close it and reopen to finish the update."
-      else
-        open "$install_dir/$APP_NAME"
-        step "Relaunched Pedals"
+      if app_is_running; then
+        step "Pedals did not quit normally; stopping it before relaunch"
+        terminate_desktop_app
+        tries=0
+        while app_is_running && (( tries < 20 )); do
+          sleep 0.25
+          tries=$(( tries + 1 ))
+        done
       fi
+      app_is_running \
+        && fail "Pedals did not quit; close it and rerun the installer"
+      launch_app
       ;;
   esac
 else
-  open "$install_dir/$APP_NAME"
+  launch_app
 fi
 
 if [[ -n "$pair_code" ]]; then
-  if pgrep -x Pedals >/dev/null 2>&1; then
+  if app_is_running; then
     step "Open Pedals on your iPhone and confirm this computer"
   else
     step "Pairing completes the next time Pedals starts; then confirm on your iPhone"

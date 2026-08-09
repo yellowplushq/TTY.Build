@@ -48,7 +48,7 @@ struct MenuView: View {
             if !openedSettingsForTesting,
                ProcessInfo.processInfo.environment["PEDALS_OPEN_SETTINGS_FROM_MENU"] == "1" {
                 openedSettingsForTesting = true
-                openWindow(id: SettingsWindow.id, value: SettingsWindow.main)
+                showSettings()
             }
             #endif
         }
@@ -78,7 +78,7 @@ struct MenuView: View {
             Spacer()
 
             Button {
-                openWindow(id: SettingsWindow.id, value: SettingsWindow.main)
+                showSettings()
             } label: {
                 Image(systemName: "gearshape")
             }
@@ -92,6 +92,14 @@ struct MenuView: View {
     private var statusLine: String {
         if model.clientConnected { return "iPhone connected" }
         return model.relayState.label
+    }
+
+    /// `openWindow` reuses the value-backed Settings scene; activating from
+    /// the user action also brings an already-open window in this menu bar
+    /// app to the foreground. `SettingsView.onAppear` is not called on reuse.
+    private func showSettings() {
+        openWindow(id: SettingsWindow.id, value: SettingsWindow.main)
+        NSApp.activate()
     }
 
     // MARK: Sessions
@@ -139,7 +147,7 @@ struct MenuView: View {
 
     private var permissionsReminder: some View {
         Button {
-            openWindow(id: SettingsWindow.id, value: SettingsWindow.main)
+            showSettings()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")

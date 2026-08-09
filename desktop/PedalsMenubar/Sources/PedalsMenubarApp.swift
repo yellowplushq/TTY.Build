@@ -76,7 +76,6 @@ final class PedalsAppDelegate: NSObject, NSApplicationDelegate {
             opener.contentViewController = NSHostingController(rootView: DebugSettingsOpener())
             opener.orderFront(nil)
             debugSettingsWindow = opener
-            NSApp.activate(ignoringOtherApps: true)
 
             // Self-render the settings window to a PNG: capture the composited
             // window pixels (own-process windows are exempt from the
@@ -155,6 +154,7 @@ private struct DebugSettingsOpener: View {
         Color.clear
             .onAppear {
                 openWindow(id: SettingsWindow.id, value: SettingsWindow.main)
+                NSApp.activate()
             }
     }
 }
