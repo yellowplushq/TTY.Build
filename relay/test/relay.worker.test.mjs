@@ -3744,3 +3744,211 @@ describe("client-issued pairing codes (reverse pairing)", () => {
     );
   });
 });
+
+describe("legacy pairing-sessions shim", () => {
+  async function createLegacySession(computer) {
+    const { response, value } = await apiJson(
+      `/v2/computers/${computer.computerId}/pairing-sessions`,
+      {
+        method: "POST",
+        token: computer.hostToken,
+        body: { hostPublicKey: "A".repeat(43) },
+      },
+    );
+    expect(response.status).toBe(201);
+    expect(value.sessionId).toMatch(/^[0-9a-f]{32}$/);
+    expect(value.code).toMatch(/^\d{8}$/);
+    return value;
+  }
+
+  test("old desktop and old iOS complete the full legacy ceremony", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    const session = await createLegacySession(computer);
+
+    const claim = await apiJson("/v2/clients/me/pairing-sessions/claim", {
+      method: "POST",
+      token: client.clientToken,
+      body: { code: session.code, clientPublicKey: "B".repeat(43) },
+    });
+    expect(claim.response.status).toBe(200);
+    expect(claim.value).toMatchObject({
+      sessionId: session.sessionId,
+      computerId: computer.computerId,
+      hostPublicKey: "A".repeat(43),
+    });
+
+    const hostView = await apiJson(
+      `/v2/computers/${computer.computerId}/pairing-sessions/${session.sessionId}`,
+      { token: computer.hostToken },
+    );
+    expect(hostView.value).toMatchObject({
+      status: "claimed",
+      clientPublicKey: "B".repeat(43),
+    });
+
+    // Legacy complete seals AND creates the edge — old clients never accept.
+    const completed = await apiJson(
+      `/v2/computers/${computer.computerId}/pairing-sessions/${session.sessionId}/complete`,
+      {
+        method: "POST",
+        token: computer.hostToken,
+        body: { encryptedSecret: "C".repeat(80) },
+      },
+    );
+    expect(completed.response.status).toBe(201);
+    expect(completed.value).toMatchObject({ computerId: computer.computerId, bound: true });
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM client_computers
+            WHERE client_id = ?1 AND computer_id = ?2`,
+        ).bind(client.clientId, computer.computerId).first("count"),
+      ),
+    ).toBe(1);
+
+    const clientView = await apiJson(
+      `/v2/clients/me/pairing-sessions/${session.sessionId}`,
+      { token: client.clientToken },
+    );
+    expect(clientView.value).toMatchObject({
+      status: "completed",
+      computerId: computer.computerId,
+      encryptedSecret: "C".repeat(80),
+    });
+
+    // Acknowledgement consumes the claim and retires the single-use code:
+    // the same code can never be claimed again.
+    expect(
+      (await api(`/v2/clients/me/pairing-sessions/${session.sessionId}`, {
+        method: "DELETE",
+        token: client.clientToken,
+      })).status,
+    ).toBe(204);
+    const replay = await api("/v2/clients/me/pairing-sessions/claim", {
+      method: "POST",
+      token: (await createClient()).clientToken,
+      body: { code: session.code, clientPublicKey: "D".repeat(43) },
+    });
+    expect(replay.status).toBe(400);
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM pairing_codes WHERE id = ?1`,
+        ).bind(session.sessionId).first("count"),
+      ),
+    ).toBe(0);
+  });
+
+  test("legacy cancel revokes the code and a second issue replaces the first", async () => {
+    const computer = await createComputer();
+    const client = await createClient();
+    const first = await createLegacySession(computer);
+    const second = await createLegacySession(computer);
+
+    // Issuing replaced the first code entirely.
+    const staleClaim = await api("/v2/clients/me/pairing-sessions/claim", {
+      method: "POST",
+      token: client.clientToken,
+      body: { code: first.code, clientPublicKey: "B".repeat(43) },
+    });
+    expect(staleClaim.status).toBe(400);
+
+    expect(
+      (await api(
+        `/v2/computers/${computer.computerId}/pairing-sessions/${second.sessionId}`,
+        { method: "DELETE", token: computer.hostToken },
+      )).status,
+    ).toBe(204);
+    const cancelledClaim = await api("/v2/clients/me/pairing-sessions/claim", {
+      method: "POST",
+      token: client.clientToken,
+      body: { code: second.code, clientPublicKey: "B".repeat(43) },
+    });
+    expect(cancelledClaim.status).toBe(400);
+  });
+
+  test("legacy and unified endpoints see the same rendezvous state", async () => {
+    // An old phone claims a code issued through the unified endpoint…
+    const newDesktop = await createComputer();
+    const oldPhone = await createClient();
+    const unifiedCode = await createInvite(newDesktop);
+    const legacyClaim = await apiJson("/v2/clients/me/pairing-sessions/claim", {
+      method: "POST",
+      token: oldPhone.clientToken,
+      body: { code: unifiedCode.code, clientPublicKey: "B".repeat(43) },
+    });
+    expect(legacyClaim.response.status).toBe(200);
+    // …and the new desktop's unified poll observes that claim.
+    const unifiedPoll = await apiJson(
+      `/v2/computers/${newDesktop.computerId}/pairing-codes/${unifiedCode.codeId}`,
+      { token: newDesktop.hostToken },
+    );
+    expect(unifiedPoll.value.status).toBe("claimed");
+
+    // A new phone claims a legacy-issued session…
+    const oldDesktop = await createComputer();
+    const newPhone = await createClient();
+    const legacySession = await createLegacySession(oldDesktop);
+    const unifiedClaim = await apiJson("/v2/clients/me/pairing-codes/claim", {
+      method: "POST",
+      token: newPhone.clientToken,
+      body: { code: legacySession.code, publicKey: "E".repeat(43) },
+    });
+    expect(unifiedClaim.response.status).toBe(200);
+    // …and the old desktop's legacy poll observes it.
+    const legacyPoll = await apiJson(
+      `/v2/computers/${oldDesktop.computerId}/pairing-sessions/${legacySession.sessionId}`,
+      { token: oldDesktop.hostToken },
+    );
+    expect(legacyPoll.value).toMatchObject({
+      status: "claimed",
+      clientPublicKey: "E".repeat(43),
+    });
+  });
+
+  test("legacy claim rejects at binding capacity without consuming the code", async () => {
+    const client = await createClient();
+    const target = await createComputer();
+    const session = await createLegacySession(target);
+    try {
+      await env.DB
+        .prepare(
+          `WITH RECURSIVE seq(i) AS (
+             SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < ?1
+           )
+           INSERT INTO computers (id, host_token_hash, created_at)
+           SELECT printf('e1%030x', i), printf('e3%062x', i), -104 FROM seq`,
+        )
+        .bind(MAX_BINDINGS_PER_CLIENT)
+        .run();
+      await env.DB
+        .prepare(
+          `WITH RECURSIVE seq(i) AS (
+             SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < ?2
+           )
+           INSERT INTO client_computers
+             (client_id, computer_id, mutation_id, created_at)
+           SELECT ?1, printf('e1%030x', i), printf('e2%030x', i), -104 FROM seq`,
+        )
+        .bind(client.clientId, MAX_BINDINGS_PER_CLIENT)
+        .run();
+
+      const limited = await api("/v2/clients/me/pairing-sessions/claim", {
+        method: "POST",
+        token: client.clientToken,
+        body: { code: session.code, clientPublicKey: "B".repeat(43) },
+      });
+      expect(limited.status).toBe(429);
+      expect(
+        Number(
+          await env.DB.prepare(
+            `SELECT COUNT(*) AS count FROM pairing_codes WHERE id = ?1`,
+          ).bind(session.sessionId).first("count"),
+        ),
+      ).toBe(1);
+    } finally {
+      await env.DB.prepare(`DELETE FROM computers WHERE created_at = -104`).run();
+    }
+  });
+});

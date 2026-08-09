@@ -16,6 +16,7 @@ import {
 } from "./core.mjs";
 import { PushCoordinator } from "./push-coordinator.mjs";
 import { RelayChannel } from "./relay-channel.mjs";
+import { handleLegacyPairing } from "./legacy-pairing.mjs";
 import {
   handleDesktopDownload,
   handlePairedDownload,
@@ -366,6 +367,11 @@ const worker = {
       if (download) return download;
 
       if (url.pathname.startsWith("/v2/")) {
+        // Pre-unification apps still speak the pairing-sessions endpoints;
+        // the shim translates them onto the unified tables. Remove with
+        // legacy-pairing.mjs once the installed fleet has updated.
+        const legacy = await handleLegacyPairing(request, env, ctx, url);
+        if (legacy) return legacy;
         const response = await handleApi(request, env, ctx, url);
         if (response) return response;
       }

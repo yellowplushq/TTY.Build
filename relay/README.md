@@ -82,6 +82,12 @@ the claim; the client's accept is the only edge-creating operation.
 D1 stores code hashes, public keys, ciphertext, identities, and timestamps;
 it never receives the E2EE secret or any private key.
 
+A temporary shim (`src/legacy-pairing.mjs`) serves the pre-unification
+`pairing-sessions` endpoints on top of the same tables so already-installed
+apps keep pairing with each other (mixed old/new pairs cannot work — the
+E2EE derivation changed and ciphertext cannot be translated). Delete the
+shim once the installed fleet speaks the unified ceremony.
+
 
 ### `DELETE /v2/computers/:computerId`
 

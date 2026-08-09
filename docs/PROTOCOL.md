@@ -143,6 +143,13 @@ Neither codes nor private keys are persisted server-side. Code and claim
 rows contain only code hashes, public keys, ciphertext, identities, and
 expiry metadata; the cron sweep removes them at expiry.
 
+A temporary service-side shim keeps the pre-unification `pairing-sessions`
+endpoints alive on top of the unified tables, so apps shipped before this
+ceremony still pair with each other. Mixed old/new pairs rendezvous but
+fail decryption (the derivation changed, and the service cannot re-encrypt
+what it cannot read); each side recovers by updating. The shim is deleted
+once the installed fleet has updated.
+
 The phone's Keychain list is the authoritative client-side binding set, and
 unbinding commits there first. The client then declares its full remaining
 set through:
