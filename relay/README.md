@@ -97,8 +97,9 @@ The mirrored ceremony lets a computer initiate against a phone-issued token
 for the full flow and crypto. Endpoints:
 
 - `PUT /v2/clients/me/reverse-pairing-token` (control bearer,
-  `{clientPublicKey}` → `{code}`) — one durable token per client; replacing
-  it retires the old code and deletes pending claims.
+  `{clientPublicKey}` → `{code, expiresAt}`) — one token per client, codes
+  valid for one hour. A same-key refresh keeps pending claims; only a key
+  rotation deletes them.
 - `POST /v2/computers/:computerId/reverse-pairing-claims` (host bearer,
   `{code, hostPublicKey, computerName}` → `{claimId, clientPublicKey}`),
   then `POST …/reverse-pairing-claims/:claimId/complete

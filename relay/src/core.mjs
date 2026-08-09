@@ -11,6 +11,7 @@ const PUSH_SURFACES = new Set([
 export const MAX_JSON_BODY = 16 * 1024;
 export const PAIRING_CODE_TTL_SECONDS = 15 * 60;
 export const REVERSE_CLAIM_TTL_SECONDS = 30 * 24 * 60 * 60;
+export const REVERSE_TOKEN_TTL_SECONDS = 60 * 60;
 export const SNAPSHOT_VERSION = 2;
 export const MAX_COMPUTERS = 128;
 export const MAX_CLIENTS = 512;

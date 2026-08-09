@@ -22,6 +22,41 @@ final class ReversePairingStoreTests: XCTestCase {
         XCTAssertEqual(api.registerCount, 1)
     }
 
+    func testEnsureTokenRefreshesAnExpiredCodeReusingTheDurableKey() async throws {
+        let memory = MemoryState()
+        let api = MockAPI(token: try makeToken(code: "01234567", expiresIn: -10))
+        let store = makeStore(memory: memory, api: api)
+
+        let expired = try await store.ensureToken(serviceURL: serviceURL)
+        XCTAssertEqual(api.registerCount, 1)
+        XCTAssertFalse(expired.isUsable())
+
+        // The stored code is stale: the next call re-registers, handing the
+        // service the SAME durable private key so pending envelopes sealed
+        // under the old code stay confirmable.
+        api.token = try makeToken(code: "76543210", expiresIn: 3_600)
+        let refreshed = try await store.ensureToken(serviceURL: serviceURL)
+        XCTAssertEqual(refreshed.code.digits, "76543210")
+        XCTAssertEqual(api.registerCount, 2)
+        XCTAssertEqual(api.reusedKeys.last ?? nil, expired.privateKey)
+
+        // The refreshed token is fresh — no third registration.
+        _ = try await store.ensureToken(serviceURL: serviceURL)
+        XCTAssertEqual(api.registerCount, 2)
+    }
+
+    func testEnsureTokenRecreatesASweptClientIdentityOnce() async throws {
+        let memory = MemoryState()
+        let api = MockAPI(token: try makeToken(code: "01234567"))
+        api.registerErrors = [PedalsServiceAPI.APIError.rejected(status: 401, message: "unauthorized")]
+        let store = makeStore(memory: memory, api: api)
+
+        let token = try await store.ensureToken(serviceURL: serviceURL)
+        XCTAssertEqual(token.code.digits, "01234567")
+        XCTAssertEqual(api.registerCount, 2)
+        XCTAssertEqual(api.recreations, 1)
+    }
+
     func testPendingClaimsAreEmptyBeforeATokenExists() async throws {
         let memory = MemoryState()
         let api = MockAPI(token: try makeToken(code: "01234567"))
@@ -102,19 +137,34 @@ final class ReversePairingStoreTests: XCTestCase {
     private final class MockAPI: ReversePairingServiceClient {
         var registerCount = 0
         var identityRequests = 0
+        var recreations = 0
         var claims: [ReversePairingClaim] = []
         var confirmed: [String] = []
         var rejected: [String] = []
-        private let token: ReversePairingToken
+        var reusedKeys: [Data?] = []
+        var registerErrors: [Error] = []
+        var token: ReversePairingToken
 
         init(token: ReversePairingToken) {
             self.token = token
         }
 
         func registerReversePairingToken(
-            as client: ClientIdentity
+            as client: ClientIdentity,
+            reusingPrivateKey: Data?
         ) async throws -> ReversePairingToken {
             registerCount += 1
+            reusedKeys.append(reusingPrivateKey)
+            if !registerErrors.isEmpty {
+                throw registerErrors.removeFirst()
+            }
+            if let reusingPrivateKey {
+                return ReversePairingToken(
+                    code: token.code,
+                    privateKey: reusingPrivateKey,
+                    expiresAt: token.expiresAt
+                )
+            }
             return token
         }
 
@@ -174,22 +224,34 @@ final class ReversePairingStoreTests: XCTestCase {
             apiFactory: { _ in api },
             identityProvider: { [weak api] serviceURL in
                 api?.identityRequests += 1
-                return try ClientIdentity(
-                    serviceURL: serviceURL,
-                    clientID: String(repeating: "8", count: 32),
-                    clientToken: "token-reverse-pairing-client-000",
-                    statusToken: "status-reverse-pairing-client-00"
-                )
+                return try Self.identity(serviceURL: serviceURL, marker: "8")
+            },
+            identityRecreator: { [weak api] serviceURL in
+                api?.recreations += 1
+                return try Self.identity(serviceURL: serviceURL, marker: "7")
             },
             stateReader: { memory.data },
             stateWriter: { memory.data = $0 }
         )
     }
 
-    private func makeToken(code: String) throws -> ReversePairingToken {
+    private static func identity(serviceURL: URL, marker: Character) throws -> ClientIdentity {
+        try ClientIdentity(
+            serviceURL: serviceURL,
+            clientID: String(repeating: String(marker), count: 32),
+            clientToken: "token-reverse-pairing-client-00\(marker)",
+            statusToken: "status-reverse-pairing-client-0\(marker)"
+        )
+    }
+
+    private func makeToken(
+        code: String,
+        expiresIn: TimeInterval = 3_600
+    ) throws -> ReversePairingToken {
         ReversePairingToken(
             code: try PairingCode(code),
-            privateKey: Data(repeating: 3, count: 32)
+            privateKey: Data(repeating: 3, count: 32),
+            expiresAt: Int64(Date().timeIntervalSince1970 + expiresIn)
         )
     }
 

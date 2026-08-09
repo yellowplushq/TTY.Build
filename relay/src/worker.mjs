@@ -211,6 +211,9 @@ async function collectOrphans(env) {
       .prepare(`DELETE FROM reverse_pairing_claims WHERE expires_at <= ?1`)
       .bind(now),
     env.DB
+      .prepare(`DELETE FROM reverse_pairing_tokens WHERE expires_at <= ?1`)
+      .bind(now),
+    env.DB
       .prepare(
         `DELETE FROM clients
           WHERE id IN (
@@ -220,17 +223,22 @@ async function collectOrphans(env) {
                AND NOT EXISTS (
                      SELECT 1 FROM client_computers b WHERE b.client_id = c.id
                    )
-               -- An enrollment token marks a real, still-unpaired install:
-               -- its embedded install command must keep working, so the
-               -- client is not an orphan even without bindings.
+               -- A live enrollment code or a claim awaiting the user's
+               -- confirmation marks a real, still-unpaired install; deleting
+               -- the client would strand its Keychain identity.
                AND NOT EXISTS (
-                     SELECT 1 FROM reverse_pairing_tokens t WHERE t.client_id = c.id
+                     SELECT 1 FROM reverse_pairing_tokens t
+                      WHERE t.client_id = c.id AND t.expires_at > ?2
+                   )
+               AND NOT EXISTS (
+                     SELECT 1 FROM reverse_pairing_claims rc
+                      WHERE rc.client_id = c.id AND rc.expires_at > ?2
                    )
              ORDER BY c.created_at, c.id
              LIMIT 100
           )`,
       )
-      .bind(clientCutoff),
+      .bind(clientCutoff, now),
     env.DB
       .prepare(
         `DELETE FROM computers

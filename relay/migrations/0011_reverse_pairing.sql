@@ -10,8 +10,12 @@ CREATE TABLE reverse_pairing_tokens (
   client_id TEXT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
   code_hash TEXT NOT NULL UNIQUE CHECK (length(code_hash) = 64),
   client_public_key TEXT NOT NULL CHECK (length(client_public_key) = 43),
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
 ) STRICT, WITHOUT ROWID;
+
+CREATE INDEX reverse_pairing_tokens_expiry
+  ON reverse_pairing_tokens (expires_at);
 
 CREATE TABLE reverse_pairing_claims (
   id TEXT PRIMARY KEY CHECK (length(id) = 32),

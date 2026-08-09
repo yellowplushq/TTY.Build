@@ -24,6 +24,7 @@ import {
   randomId,
   randomPairingCode,
   REVERSE_CLAIM_TTL_SECONDS,
+  REVERSE_TOKEN_TTL_SECONDS,
   randomToken,
   rateLimitKey,
   readJson,
@@ -384,22 +385,35 @@ async function putReversePairingToken(request, env) {
   }
 
   const now = nowSeconds();
-  // Replacing the token rotates the durable key, which makes every pending
-  // envelope undecryptable — drop those claims in the same breath.
-  await env.DB.batch([
+  // Codes are short-lived, but the durable key is meant to stay stable so
+  // envelopes sealed under earlier codes remain confirmable. Pending claims
+  // are only dropped when the key actually rotates — then they could never
+  // be decrypted again anyway.
+  const existing = await env.DB.prepare(
+    `SELECT client_public_key AS clientPublicKey
+       FROM reverse_pairing_tokens
+      WHERE client_id = ?1`,
+  ).bind(client.id).first();
+  const statements = [
     env.DB.prepare(`DELETE FROM reverse_pairing_tokens WHERE client_id = ?1`).bind(client.id),
-    env.DB.prepare(`DELETE FROM reverse_pairing_claims WHERE client_id = ?1`).bind(client.id),
-  ]);
+  ];
+  if (existing && existing.clientPublicKey !== body.clientPublicKey) {
+    statements.push(
+      env.DB.prepare(`DELETE FROM reverse_pairing_claims WHERE client_id = ?1`).bind(client.id),
+    );
+  }
+  await env.DB.batch(statements);
+  const expiresAt = now + REVERSE_TOKEN_TTL_SECONDS;
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const code = randomPairingCode();
     const codeHash = await tokenHash(code);
     const inserted = await env.DB.prepare(
       `INSERT OR IGNORE INTO reverse_pairing_tokens
-         (client_id, code_hash, client_public_key, created_at)
-       VALUES (?1, ?2, ?3, ?4)`,
-    ).bind(client.id, codeHash, body.clientPublicKey, now).run();
+         (client_id, code_hash, client_public_key, created_at, expires_at)
+       VALUES (?1, ?2, ?3, ?4, ?5)`,
+    ).bind(client.id, codeHash, body.clientPublicKey, now, expiresAt).run();
     if (Number(inserted.meta?.changes ?? 0) === 1) {
-      return json({ code });
+      return json({ code, expiresAt });
     }
   }
   throw new ApiFailure(503, "pairing_code_unavailable", "could not allocate an enrollment code");
@@ -421,17 +435,17 @@ async function claimReversePairing(request, env, computerId) {
     throw new ApiFailure(400, "invalid_computer_name", "computer name is invalid");
   }
 
+  const now = nowSeconds();
   const hash = await tokenHash(body.code);
   const token = await env.DB.prepare(
     `SELECT client_id AS clientId, client_public_key AS clientPublicKey
        FROM reverse_pairing_tokens
-      WHERE code_hash = ?1`,
-  ).bind(hash).first();
+      WHERE code_hash = ?1 AND expires_at > ?2`,
+  ).bind(hash, now).first();
   if (!token) {
-    throw new ApiFailure(400, "invalid_pairing_code", "enrollment code is invalid");
+    throw new ApiFailure(400, "invalid_pairing_code", "enrollment code is invalid or expired");
   }
 
-  const now = nowSeconds();
   const claimId = randomId();
   await env.DB.prepare(
     `INSERT INTO reverse_pairing_claims

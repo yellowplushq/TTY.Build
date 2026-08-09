@@ -54,7 +54,8 @@ final class ReversePairingTests: XCTestCase {
         let api = PedalsServiceAPI(serviceURL: serviceURL)
         let token = ReversePairingToken(
             code: try PairingCode("01234567"),
-            privateKey: PairingKeyAgreement.makePrivateKey()
+            privateKey: PairingKeyAgreement.makePrivateKey(),
+            expiresAt: Int64(Date().timeIntervalSince1970) + 3_600
         )
         let hostPrivateKey = PairingKeyAgreement.makePrivateKey()
         let secret = Data(repeating: 7, count: 32)

@@ -143,9 +143,10 @@ metadata, and are removed on acknowledgement or expiry.
 
 The forward ceremony above requires typing a computer-issued code on the
 phone. Reverse pairing inverts who quotes the rendezvous value so a fresh
-desktop install can pair with zero typing: the phone registers a long-lived
-8-digit enrollment token whose durable Curve25519 public key computers seal
-to, and embeds the code in the one-line install command
+desktop install can pair with zero typing: the phone registers an 8-digit
+enrollment code (valid for one hour, multi-use within that window) whose
+durable Curve25519 public key computers seal to, and embeds the code in the
+one-line install command
 (`curl -fsSL https://pedals.air.build/12345678 | bash` — the service serves
 `install.sh` with that code baked in; `--pair 12345678` and `PEDALS_PAIR`
 are the manual equivalents).
@@ -158,11 +159,16 @@ Content-Type: application/json
 {"clientPublicKey":"<base64url Curve25519 public key>"}
 ```
 
-The response contains `code`. One token exists per client; replacing it
-rotates the durable key, retires the old code, and deletes every pending
-claim (their envelopes are sealed to the replaced key). Only the code hash
-and public key are stored server-side; the phone keeps the code and the
-durable private key in its Keychain.
+The response contains `code` and `expiresAt`. One token exists per client;
+re-registering mints a fresh code. The durable key is meant to stay stable
+across refreshes — the phone re-submits the same public key when its code
+expires, and pending claims survive because their envelopes still decrypt.
+Only a re-registration that actually rotates the key deletes pending claims
+(their envelopes could never be opened again). An expired code stops
+admitting new claims but existing pending claims remain confirmable for
+their own 30-day lifetime. Only the code hash and public key are stored
+server-side; the phone keeps the code and the durable private key in its
+Keychain.
 
 The code reaches the desktop app as an extended attribute
 (`build.air.pedals.pairing-code`) stamped on the app bundle — written by the

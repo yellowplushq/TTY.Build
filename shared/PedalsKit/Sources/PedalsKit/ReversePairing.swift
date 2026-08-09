@@ -1,17 +1,25 @@
 import Foundation
 
 /// Phone-issued enrollment credential embedded in the desktop install
-/// command. Unlike a forward pairing code it is long-lived and multi-use:
-/// the private key is durable so a computer can claim and seal while the
-/// phone app is not running. Each claimed computer still requires an
-/// explicit confirmation on the phone before a binding edge exists.
+/// command. The code admits new claims for one hour and is multi-use within
+/// that window; the private key is durable — it survives code refreshes so
+/// claims sealed under an earlier code stay confirmable, and a computer can
+/// claim while the phone app is not running. Each claimed computer still
+/// requires an explicit confirmation on the phone before a binding edge
+/// exists.
 public struct ReversePairingToken: Codable, Equatable, Sendable {
     public let code: PairingCode
     public let privateKey: Data
+    public let expiresAt: Int64
 
-    public init(code: PairingCode, privateKey: Data) {
+    public init(code: PairingCode, privateKey: Data, expiresAt: Int64) {
         self.code = code
         self.privateKey = privateKey
+        self.expiresAt = expiresAt
+    }
+
+    public func isUsable(at date: Date = Date(), margin: TimeInterval = 60) -> Bool {
+        Int64(date.timeIntervalSince1970 + margin) < expiresAt
     }
 }
 
@@ -49,6 +57,7 @@ extension PedalsServiceAPI {
 
     private struct RegisterReverseTokenResponse: Decodable {
         let code: String
+        let expiresAt: Int64
     }
 
     private struct ClaimReversePairingRequest: Encodable {
@@ -79,14 +88,18 @@ extension PedalsServiceAPI {
         let claims: [Claim]
     }
 
-    /// Registers (or replaces) the client's enrollment token. The durable
-    /// private key never leaves the device; callers persist the returned
-    /// token in the Keychain.
+    /// Registers (or refreshes) the client's enrollment token. Pass the
+    /// stored private key when refreshing an expired code: keeping the key
+    /// stable keeps envelopes sealed under earlier codes confirmable (the
+    /// service only drops pending claims when the key rotates). The private
+    /// key never leaves the device; callers persist the returned token in
+    /// the Keychain.
     public func registerReversePairingToken(
-        as client: ClientIdentity
+        as client: ClientIdentity,
+        reusingPrivateKey: Data? = nil
     ) async throws -> ReversePairingToken {
         guard client.serviceURL == serviceURL else { throw APIError.serviceMismatch }
-        let privateKey = PairingKeyAgreement.makePrivateKey()
+        let privateKey = reusingPrivateKey ?? PairingKeyAgreement.makePrivateKey()
         let publicKey = try PairingKeyAgreement.publicKey(for: privateKey)
         let response: RegisterReverseTokenResponse = try await send(
             method: "PUT",
@@ -98,7 +111,8 @@ extension PedalsServiceAPI {
         )
         return try ReversePairingToken(
             code: PairingCode(response.code),
-            privateKey: privateKey
+            privateKey: privateKey,
+            expiresAt: response.expiresAt
         )
     }
 

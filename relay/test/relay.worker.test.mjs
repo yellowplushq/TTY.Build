@@ -3373,6 +3373,7 @@ describe("reverse pairing (enrollment tokens)", () => {
     });
     expect(response.status).toBe(200);
     expect(value.code).toMatch(/^\d{8}$/);
+    expect(value.expiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000));
     return value;
   }
 
@@ -3543,6 +3544,76 @@ describe("reverse pairing (enrollment tokens)", () => {
     expect(listed.value.claims).toEqual([]);
     expect((await claim(computer, first.code)).response.status).toBe(400);
     expect((await claim(computer, second.code)).response.status).toBe(201);
+  });
+
+  test("an expired code stops claiming but a same-key refresh keeps pending claims", async () => {
+    const client = await createClient();
+    const computer = await createComputer();
+    const token = await registerToken(client);
+    const claimed = await claim(computer, token.code, "Before Expiry");
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    await env.DB.prepare(
+      `UPDATE reverse_pairing_tokens SET expires_at = 1 WHERE client_id = ?1`,
+    ).bind(client.clientId).run();
+    const late = await createComputer();
+    expect((await claim(late, token.code)).response.status).toBe(400);
+
+    // Refreshing with the SAME durable key mints a new code and keeps the
+    // pending claim confirmable.
+    const refreshed = await registerToken(client);
+    const listed = await apiJson("/v2/clients/me/reverse-pairing-claims", {
+      token: client.clientToken,
+    });
+    expect(listed.value.claims.map((entry) => entry.computerName)).toEqual([
+      "Before Expiry",
+    ]);
+    expect((await claim(late, refreshed.code)).response.status).toBe(201);
+    expect(
+      (await api(`/v2/clients/me/reverse-pairing-claims/${claimed.value.claimId}/confirm`, {
+        method: "POST",
+        token: client.clientToken,
+      })).status,
+    ).toBe(201);
+  });
+
+  test("expired enrollment tokens are swept and only live signals protect a client", async () => {
+    const spent = await createClient();
+    const awaiting = await createClient();
+    const computer = await createComputer();
+    await registerToken(spent);
+    const token = await registerToken(awaiting);
+    const claimed = await claim(computer, token.code);
+    expect((await complete(computer, claimed.value.claimId)).status).toBe(204);
+
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE reverse_pairing_tokens SET expires_at = 1
+          WHERE client_id IN (?1, ?2)`,
+      ).bind(spent.clientId, awaiting.clientId),
+      env.DB.prepare(`UPDATE clients SET created_at = ?2 WHERE id IN (?1, ?3)`).bind(
+        spent.clientId,
+        now - ORPHAN_CLIENT_RETENTION_SECONDS - 1,
+        awaiting.clientId,
+      ),
+    ]);
+    await collectOrphans(env);
+
+    // Both expired token rows are gone; the client with a pending claim
+    // survives, the one with nothing left does not.
+    expect(
+      Number(
+        await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM reverse_pairing_tokens
+            WHERE client_id IN (?1, ?2)`,
+        ).bind(spent.clientId, awaiting.clientId).first("count"),
+      ),
+    ).toBe(0);
+    const survivors = await env.DB.prepare(
+      `SELECT id FROM clients WHERE id IN (?1, ?2)`,
+    ).bind(spent.clientId, awaiting.clientId).all();
+    expect(survivors.results.map((row) => row.id)).toEqual([awaiting.clientId]);
   });
 
   test("an unpaired client holding an enrollment token survives the orphan sweep", async () => {

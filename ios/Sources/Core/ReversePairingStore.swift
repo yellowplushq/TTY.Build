@@ -5,7 +5,8 @@ import Security
 @MainActor
 protocol ReversePairingServiceClient: AnyObject {
     func registerReversePairingToken(
-        as client: ClientIdentity
+        as client: ClientIdentity,
+        reusingPrivateKey: Data?
     ) async throws -> ReversePairingToken
     func reversePairingClaims(
         as client: ClientIdentity
@@ -49,6 +50,9 @@ final class ReversePairingStore {
 
     private let apiFactory: APIFactory
     private let identityProvider: IdentityProvider
+    /// Recovers from a 401 during registration: an unpaired install whose
+    /// client was swept as an orphan mints a fresh identity and retries.
+    private let identityRecreator: IdentityProvider
     private let stateReader: StateReader
     private let stateWriter: StateWriter
     private var registrationTask: Task<ReversePairingToken, Error>?
@@ -61,6 +65,9 @@ final class ReversePairingStore {
     ) {
         self.apiFactory = apiFactory
         self.identityProvider = { try await pairingStore.ensureClientIdentity(serviceURL: $0) }
+        self.identityRecreator = {
+            try await pairingStore.replaceClientIdentityIfUnpaired(serviceURL: $0)
+        }
         self.stateReader = stateReader
         self.stateWriter = stateWriter
     }
@@ -68,11 +75,13 @@ final class ReversePairingStore {
     init(
         apiFactory: @escaping APIFactory,
         identityProvider: @escaping IdentityProvider,
+        identityRecreator: IdentityProvider? = nil,
         stateReader: @escaping StateReader,
         stateWriter: @escaping StateWriter
     ) {
         self.apiFactory = apiFactory
         self.identityProvider = identityProvider
+        self.identityRecreator = identityRecreator ?? identityProvider
         self.stateReader = stateReader
         self.stateWriter = stateWriter
     }
@@ -83,20 +92,41 @@ final class ReversePairingStore {
     }
     #endif
 
-    /// Returns the enrollment token for the install command, registering one
-    /// (and a client identity, when the installation has neither) on first
-    /// use. Concurrent callers share a single registration.
+    /// Returns a usable enrollment token for the install command,
+    /// registering one (and a client identity, when the installation has
+    /// neither) on first use and refreshing the code when it has expired.
+    /// A refresh reuses the stored durable key, so envelopes sealed under
+    /// earlier codes stay confirmable. Concurrent callers share a single
+    /// registration.
     func ensureToken(serviceURL: URL) async throws -> ReversePairingToken {
-        if let state = try? loadState(), state.serviceURL == serviceURL {
-            return state.token
+        var stored: PersistentState?
+        if let state = ((try? loadState()) ?? nil), state.serviceURL == serviceURL {
+            stored = state
+        }
+        if let stored, stored.token.isUsable() {
+            return stored.token
         }
         if let running = registrationTask {
             return try await running.value
         }
-        let task = Task { [apiFactory, identityProvider, stateWriter] in
-            let identity = try await identityProvider(serviceURL)
+        let reusedKey = stored?.token.privateKey
+        let task = Task {
+            [apiFactory, identityProvider, identityRecreator, stateWriter] in
             let api = apiFactory(serviceURL)
-            let token = try await api.registerReversePairingToken(as: identity)
+            let token: ReversePairingToken
+            do {
+                let identity = try await identityProvider(serviceURL)
+                token = try await api.registerReversePairingToken(
+                    as: identity, reusingPrivateKey: reusedKey
+                )
+            } catch PedalsServiceAPI.APIError.rejected(let status, _) where status == 401 {
+                // The stored identity was swept while unpaired; mint a fresh
+                // one and retry once.
+                let identity = try await identityRecreator(serviceURL)
+                token = try await api.registerReversePairingToken(
+                    as: identity, reusingPrivateKey: reusedKey
+                )
+            }
             let state = PersistentState(serviceURL: serviceURL, token: token)
             try stateWriter(try JSONEncoder().encode(state))
             return token

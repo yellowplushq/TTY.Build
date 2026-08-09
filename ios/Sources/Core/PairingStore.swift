@@ -242,6 +242,25 @@ final class PairingStore {
         )
     }
 
+    /// Replaces a client identity the service no longer recognizes (e.g. an
+    /// unpaired install swept as an orphan). Only safe while no bindings
+    /// exist — bindings prove the identity is live, so a 401 then means
+    /// something else and the stored identity is kept.
+    func replaceClientIdentityIfUnpaired(serviceURL: URL) async throws -> ClientIdentity {
+        await acquireMutation()
+        defer { releaseMutation() }
+        if let state = try loadState() {
+            guard state.identity.serviceURL == serviceURL else {
+                throw StoreError.serviceMismatch
+            }
+            guard state.bindings.isEmpty else { return state.identity }
+        }
+        let api = apiFactory(serviceURL)
+        let identity = try await api.createClient()
+        try saveState(PersistentState(identity: identity, bindings: []))
+        return identity
+    }
+
     /// Reconciles, then reports whether the service currently serves an edge
     /// for the given computer. Disambiguates a reverse-pairing confirmation
     /// whose success response was lost: reconciliation is delete-only, so a
