@@ -488,9 +488,20 @@ jobs:
             --output json > "$PEDALS_RELEASE_DIR/internal-group-builds.json"
           if ! jq -e --arg build "$build_id" 'any(.data[]; .id == $build)' \
             "$PEDALS_RELEASE_DIR/internal-group-builds.json" >/dev/null; then
-            asc builds add-groups \
-              --build-id "$build_id" \
-              --group "$PEDALS_INTERNAL_GROUP_ID"
+            # A freshly VALID build can briefly be unaddressable for
+            # relationship writes; retry until App Store Connect catches up.
+            linked=false
+            for attempt in 1 2 3 4 5 6; do
+              if asc builds add-groups \
+                --build-id "$build_id" \
+                --group "$PEDALS_INTERNAL_GROUP_ID"; then
+                linked=true
+                break
+              fi
+              echo "add-groups attempt $attempt failed; retrying in 30s..."
+              sleep 30
+            done
+            [[ "$linked" == "true" ]]
             asc testflight groups links view \
               --group-id "$PEDALS_INTERNAL_GROUP_ID" \
               --type builds \
