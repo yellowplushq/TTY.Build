@@ -3545,6 +3545,31 @@ describe("reverse pairing (enrollment tokens)", () => {
     expect((await claim(computer, second.code)).response.status).toBe(201);
   });
 
+  test("an unpaired client holding an enrollment token survives the orphan sweep", async () => {
+    const tokenHolder = await createClient();
+    const plainOrphan = await createClient();
+    await registerToken(tokenHolder);
+
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      `UPDATE clients SET created_at = ?2 WHERE id IN (?1, ?3)`,
+    ).bind(
+      tokenHolder.clientId,
+      now - ORPHAN_CLIENT_RETENTION_SECONDS - 1,
+      plainOrphan.clientId,
+    ).run();
+    await collectOrphans(env);
+
+    const survivors = await env.DB.prepare(
+      `SELECT id FROM clients WHERE id IN (?1, ?2)`,
+    ).bind(tokenHolder.clientId, plainOrphan.clientId).all();
+    expect(survivors.results.map((row) => row.id)).toEqual([tokenHolder.clientId]);
+    // The token still claims after the sweep.
+    const computer = await createComputer();
+    const token = await registerToken(tokenHolder);
+    expect((await claim(computer, token.code)).response.status).toBe(201);
+  });
+
   test("expired claims are swept by the cron sweep and cannot be confirmed", async () => {
     const client = await createClient();
     const computer = await createComputer();

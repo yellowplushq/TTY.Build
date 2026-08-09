@@ -61,6 +61,15 @@ enum AppRelocator {
             NSLog("Pedals could not move itself to Applications: %@", "\(error)")
             return false
         }
+
+        // Start the relaunch helper before deleting anything: if it cannot
+        // spawn, keep running from the original location instead of leaving
+        // the moved copy installed but never launched.
+        guard startRelaunchHelper(at: plan.destinationURL) else {
+            try? fileManager.removeItem(at: plan.destinationURL)
+            NSLog("Pedals could not relaunch from Applications; continuing in place")
+            return false
+        }
         if plan.deleteSource {
             do {
                 try fileManager.removeItem(at: plan.sourceURL)
@@ -68,8 +77,9 @@ enum AppRelocator {
                 NSLog("Pedals moved to Applications but could not remove %@", plan.sourceURL.path)
             }
         }
-
-        relaunch(at: plan.destinationURL)
+        DispatchQueue.main.async {
+            NSApp.terminate(nil)
+        }
         return true
         #endif
     }
@@ -96,10 +106,10 @@ enum AppRelocator {
         return (original as URL).standardizedFileURL
     }
 
-    /// Waits (detached) for this process to exit, then opens the moved copy.
-    /// Waiting first means LaunchServices sees one instance, not a relaunch
-    /// racing a shutdown.
-    private static func relaunch(at destination: URL) {
+    /// Spawns a detached helper that waits for this process to exit, then
+    /// opens the moved copy. Waiting first means LaunchServices sees one
+    /// instance, not a relaunch racing a shutdown.
+    private static func startRelaunchHelper(at destination: URL) -> Bool {
         let pid = ProcessInfo.processInfo.processIdentifier
         let script = """
         while /bin/kill -0 \(pid) 2>/dev/null; do /bin/sleep 0.1; done
@@ -108,9 +118,12 @@ enum AppRelocator {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", script, destination.path]
-        try? process.run()
-        DispatchQueue.main.async {
-            NSApp.terminate(nil)
+        do {
+            try process.run()
+            return true
+        } catch {
+            NSLog("Pedals could not start its relaunch helper: %@", "\(error)")
+            return false
         }
     }
 }

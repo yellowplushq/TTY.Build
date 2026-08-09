@@ -274,20 +274,28 @@ final class AppModel: ObservableObject {
                     )
                 }.value
                 NSLog("Pedals submitted an enrollment claim; confirm on the iPhone")
-            } catch let error as PedalsServiceAPI.APIError {
-                // A service rejection (unknown or replaced code) is
-                // authoritative — retrying cannot succeed.
-                NSLog("Pedals enrollment claim was rejected: %@", "\(error)")
             } catch {
-                // Transient (offline, timeout): keep the stamp and retry.
-                NSLog(
-                    "Pedals enrollment claim failed, will retry: %@",
-                    error.localizedDescription
-                )
-                return
+                // Only a definitive service rejection (unknown or replaced
+                // code) is terminal. Rate limits, service errors, and
+                // transport failures keep the stamp for the periodic retry.
+                guard Self.isTerminalClaimRejection(error) else {
+                    NSLog(
+                        "Pedals enrollment claim failed, will retry: %@",
+                        error.localizedDescription
+                    )
+                    return
+                }
+                NSLog("Pedals enrollment claim was rejected: %@", "\(error)")
             }
             EnrollmentCodeStamp.clear(bundleURL: bundleURL)
         }
+    }
+
+    private static func isTerminalClaimRejection(_ error: Error) -> Bool {
+        guard case PedalsServiceAPI.APIError.rejected(let status, _) = error else {
+            return false
+        }
+        return (400 ..< 500).contains(status) && status != 429
     }
 
     private func startEnrollmentStampMonitor() {

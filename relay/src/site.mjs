@@ -1,6 +1,8 @@
+import { clientAddress, enforceRateLimit } from "./core.mjs";
 import { injectPairingCode } from "./paired-zip.mjs";
 
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const UPSTREAM_ZIP_CACHE_SECONDS = 5 * 60;
 const MACOS_ASSET = "Pedals-macOS.dmg";
 const MACOS_ZIP_ASSET = "Pedals-macOS.zip";
 const APPCAST_ASSET = "appcast.xml";
@@ -102,19 +104,41 @@ export async function handlePairedDownload(
     return new Response(null, { status: 200, headers });
   }
 
-  const upstream = await fetchImpl(
-    `https://github.com/${repository}/releases/latest/download/${MACOS_ZIP_ASSET}`,
-    { redirect: "follow" },
-  );
-  if (!upstream.ok) {
-    return new Response("The Pedals release download failed upstream.\n", {
-      status: 502,
-      headers: {
-        "cache-control": "no-store",
-        "content-type": "text/plain; charset=utf-8",
-        "retry-after": "300",
-      },
-    });
+  // The stamped response itself must never be cached (it is per-code), but
+  // the untouched upstream archive can be, bounding upstream bandwidth when
+  // codes are fetched in bursts. Per-address rate limiting bounds the
+  // archive-sized buffers a single caller can force.
+  await enforceRateLimit(env, "INVITE_LIMITER", clientAddress(request), {
+    code: "download_rate_limited",
+    message: "too many paired downloads from this address",
+  });
+
+  const upstreamURL =
+    `https://github.com/${repository}/releases/latest/download/${MACOS_ZIP_ASSET}`;
+  const cache = globalThis.caches?.default;
+  const cacheKey = new Request(upstreamURL);
+  let upstream = await cache?.match(cacheKey);
+  if (!upstream) {
+    upstream = await fetchImpl(upstreamURL, { redirect: "follow" });
+    if (!upstream.ok) {
+      return new Response("The Pedals release download failed upstream.\n", {
+        status: 502,
+        headers: {
+          "cache-control": "no-store",
+          "content-type": "text/plain; charset=utf-8",
+          "retry-after": "300",
+        },
+      });
+    }
+    if (cache) {
+      const cacheable = new Response(upstream.body, upstream);
+      cacheable.headers.set(
+        "cache-control",
+        `public, max-age=${UPSTREAM_ZIP_CACHE_SECONDS}`,
+      );
+      upstream = cacheable;
+      await cache.put(cacheKey, cacheable.clone());
+    }
   }
   const original = new Uint8Array(await upstream.arrayBuffer());
   const injected = injectPairingCode(original, code) ?? original;

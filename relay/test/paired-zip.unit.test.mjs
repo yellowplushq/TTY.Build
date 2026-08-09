@@ -162,7 +162,7 @@ test("the paired download endpoint stamps the upstream release zip", async () =>
   const fetched = [];
   const response = await handlePairedDownload(
     new Request("https://pedals.air.build/download/90285513/macos.zip"),
-    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/pedals" },
+    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/pedals", TEST_BYPASS_RATE_LIMITS: "true" },
     "90285513",
     async (url) => {
       fetched.push(String(url));
@@ -189,7 +189,7 @@ test("the paired download endpoint answers HEAD and unconfigured repos safely", 
     new Request("https://pedals.air.build/download/90285513/macos.zip", {
       method: "HEAD",
     }),
-    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/pedals" },
+    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/pedals", TEST_BYPASS_RATE_LIMITS: "true" },
     "90285513",
     async () => {
       throw new Error("HEAD must not fetch upstream");

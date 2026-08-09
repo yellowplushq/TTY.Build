@@ -220,6 +220,12 @@ async function collectOrphans(env) {
                AND NOT EXISTS (
                      SELECT 1 FROM client_computers b WHERE b.client_id = c.id
                    )
+               -- An enrollment token marks a real, still-unpaired install:
+               -- its embedded install command must keep working, so the
+               -- client is not an orphan even without bindings.
+               AND NOT EXISTS (
+                     SELECT 1 FROM reverse_pairing_tokens t WHERE t.client_id = c.id
+                   )
              ORDER BY c.created_at, c.id
              LIMIT 100
           )`,

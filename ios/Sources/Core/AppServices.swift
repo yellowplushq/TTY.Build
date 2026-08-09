@@ -121,15 +121,34 @@ final class AppServices {
 
     /// Confirms one claim: decrypt, commit the binding locally, then create
     /// the server edge — in that order, so a concurrent delete-only
-    /// reconcile can never remove the fresh edge.
+    /// reconcile can never remove the fresh edge. A failed confirmation
+    /// rolls the local commit back, so a later "Don't Allow" never strands
+    /// a computer the service will not serve.
     func confirmReverseClaim(_ claim: ReversePairingClaim) async throws {
         let binding = try reversePairing.openClaim(
             claim, serviceURL: Self.pairingServiceURL
         )
         try await terminals.addReversePairedComputer(binding: binding)
-        try await reversePairing.confirmClaim(
-            claimID: claim.claimID, serviceURL: Self.pairingServiceURL
-        )
+        do {
+            try await reversePairing.confirmClaim(
+                claimID: claim.claimID, serviceURL: Self.pairingServiceURL
+            )
+        } catch PedalsServiceAPI.APIError.rejected(let status, _) where status == 410 {
+            // Gone can mean either "this claim was already confirmed and the
+            // success response was lost" or "the claim expired". The edge
+            // set is the truth; keep the binding only when the edge exists.
+            // An unreachable verification keeps the optimistic commit — the
+            // computer shows offline at worst and can be unbound by hand.
+            if await pairingStore.serverHasBinding(computerID: binding.computerID) == false {
+                try? await terminals.removeComputer(id: binding.computerID)
+                throw PedalsServiceAPI.APIError.rejected(
+                    status: status, message: "pairing claim is closed or expired"
+                )
+            }
+        } catch {
+            try? await terminals.removeComputer(id: binding.computerID)
+            throw error
+        }
         installSharedCredential()
         scheduleStatusRefresh(immediate: true)
         pendingReverseClaims.send(

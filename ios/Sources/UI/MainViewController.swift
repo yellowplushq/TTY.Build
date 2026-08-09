@@ -1131,12 +1131,37 @@ final class MainViewController: UIViewController {
 
     private var reversePairingCard: ReversePairingConfirmViewController?
 
+    private var reversePairingCardRetryTask: Task<Void, Never>?
+
     /// One card at a time; the count of further claims shows on the card and
     /// the next one presents as soon as this one resolves.
     private func presentReversePairingCardIfNeeded(claims: [ReversePairingClaim]) {
         guard reversePairingCard == nil, let claim = claims.first else { return }
-        // Never fight the pairing screen or another modal for presentation.
-        guard presentedViewController == nil else { return }
+        if let presented = presentedViewController {
+            // The manual code-entry screen just became obsolete — the claim
+            // it was waiting for arrived. Replace it with the confirmation.
+            if presented is PairingCodeViewController {
+                presented.dismiss(animated: true) { [weak self] in
+                    guard let self else { return }
+                    presentReversePairingCardIfNeeded(
+                        claims: self.services.pendingReverseClaims.value
+                    )
+                }
+                return
+            }
+            // Another modal (settings, updates…) owns the screen. Retry
+            // shortly instead of dropping the presentation.
+            reversePairingCardRetryTask?.cancel()
+            reversePairingCardRetryTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, let self else { return }
+                reversePairingCardRetryTask = nil
+                presentReversePairingCardIfNeeded(
+                    claims: self.services.pendingReverseClaims.value
+                )
+            }
+            return
+        }
 
         let card = ReversePairingConfirmViewController(
             claim: claim,

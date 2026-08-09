@@ -242,6 +242,23 @@ final class PairingStore {
         )
     }
 
+    /// Reconciles, then reports whether the service currently serves an edge
+    /// for the given computer. Disambiguates a reverse-pairing confirmation
+    /// whose success response was lost: reconciliation is delete-only, so a
+    /// computer present in the returned set has a confirmed edge. Returns
+    /// nil when the service is unreachable.
+    func serverHasBinding(computerID: String) async -> Bool? {
+        await acquireMutation()
+        defer { releaseMutation() }
+        guard let state = try? loadState() else { return nil }
+        let api = apiFactory(state.identity.serviceURL)
+        guard let confirmed = try? await api.reconcileBindings(
+            computerIDs: state.bindings.map(\.computerID),
+            as: state.identity
+        ) else { return nil }
+        return confirmed.contains(computerID)
+    }
+
     /// Pushes the local binding list to the service so server-side edges for
     /// this client (and its delegated Watch) converge to the Keychain state.
     /// Delete-only and idempotent; safe to call on foreground or after any

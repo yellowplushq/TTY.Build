@@ -50,10 +50,15 @@ final class PairingCodeViewController: UIViewController {
         codeChanged()
         onAppearForPairing?()
         if let installCommandProvider {
+            // Until the enrollment token resolves, the visible command lacks
+            // the pairing code — copying it would silently install without
+            // auto-pairing, so copying waits for the provider.
+            downloadGuide.setCopyEnabled(false)
             installCommandTask = Task { @MainActor [weak self] in
                 let command = await installCommandProvider()
                 guard let self, !Task.isCancelled else { return }
                 downloadGuide.update(installCommand: command)
+                downloadGuide.setCopyEnabled(true)
             }
         }
     }
@@ -494,6 +499,7 @@ private final class PairingDownloadGuideView: UIView {
     /// Replaced with the `--pair <code>`-carrying command once the phone's
     /// enrollment token resolves; the copy action always copies this value.
     private var installCommand = "curl -fsSL https://pedals.air.build/i | bash"
+    private var copyEnabled = true
     private let commandLabel = UILabel()
     private let copyButton = UIButton(type: .system)
     private var copyFeedbackTask: Task<Void, Never>?
@@ -502,6 +508,12 @@ private final class PairingDownloadGuideView: UIView {
         self.installCommand = installCommand
         commandLabel.text = installCommand
         commandLabel.accessibilityValue = installCommand
+    }
+
+    func setCopyEnabled(_ enabled: Bool) {
+        copyEnabled = enabled
+        copyButton.isEnabled = enabled
+        copyButton.alpha = enabled ? 1 : 0.4
     }
 
     deinit {
@@ -672,6 +684,7 @@ private final class PairingDownloadGuideView: UIView {
     }
 
     private func copyInstallCommand() {
+        guard copyEnabled else { return }
         UIPasteboard.general.string = installCommand
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         UIAccessibility.post(notification: .announcement, argument: "Install command copied")
