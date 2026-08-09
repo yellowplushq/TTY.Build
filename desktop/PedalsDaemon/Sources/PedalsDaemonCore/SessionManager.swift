@@ -37,10 +37,10 @@ public final class SessionManager: @unchecked Sendable {
     }
 
     public struct Options: Sendable {
-        /// Shell binary. Default: `$SHELL`, fallback `/bin/zsh`.
-        public var shell: String
-        /// Arguments after the shell path. Default: interactive login shell.
-        public var shellArguments: [String]
+        /// The private tmux server backing every session (spawn argv, control
+        /// subprocesses, metadata polling).
+        public var tmux: TmuxConfiguration
+        /// Extra environment forwarded to panes via `new-session -e`.
         public var extraEnvironment: [String: String]
         public var defaultCols: UInt16 = 120
         public var defaultRows: UInt16 = 40
@@ -61,13 +61,10 @@ public final class SessionManager: @unchecked Sendable {
         public var metadataSampleInterval: TimeInterval = 2
 
         public init(
-            shell: String? = nil,
-            shellArguments: [String] = ["-il"],
+            tmux: TmuxConfiguration,
             extraEnvironment: [String: String] = [:]
         ) {
-            let env = ProcessInfo.processInfo.environment["SHELL"]
-            self.shell = shell ?? (env?.isEmpty == false ? env! : "/bin/zsh")
-            self.shellArguments = shellArguments
+            self.tmux = tmux
             self.extraEnvironment = extraEnvironment
         }
     }
@@ -75,7 +72,7 @@ public final class SessionManager: @unchecked Sendable {
     private final class Session {
         let id: Int
         /// Live working directory: seeded with the spawn cwd, refreshed by the
-        /// 2 s poll from the shell process (PROTOCOL.md §4).
+        /// tmux `list-panes` poll (PROTOCOL.md §4).
         var cwd: String
         let createdAt: Date
         let pty: PTYProcess
@@ -85,11 +82,17 @@ public final class SessionManager: @unchecked Sendable {
         var oscParser = OSCTitleParser()
         var outputOffset: UInt64 = 0
         var title: String
-        /// Once an OSC 0/2 title arrives it wins over the process-name fallback.
+        /// Once an OSC 0/2 title arrives (passed through by tmux `set-titles`)
+        /// it wins over the pane-command fallback.
         var titleFromOSC = false
         /// Latest uncommitted OSC title. Animated spinners overwrite this
         /// value instead of flooding the control channel.
         var pendingOSCTitle: String?
+        /// The pane's own tty / shell pid inside the tmux server, refreshed by
+        /// the `list-panes` poll. These (not the daemon's client PTY) identify
+        /// the session for coding-agent ownership matching.
+        var paneTTY: String?
+        var panePID: pid_t?
         var alive = true
         var exitCode: Int?
 
@@ -130,15 +133,14 @@ public final class SessionManager: @unchecked Sendable {
     }
     private var _onEvent: (@Sendable (SessionEvent) -> Void)?
 
-    public init(options: Options = Options()) {
+    public init(options: Options) {
         self.options = options
         nextId = max(options.firstSessionId, 1)
         let timer = DispatchSource.makeTimerSource(queue: queue)
         let sampleInterval = max(options.metadataSampleInterval, 0.05)
         timer.schedule(deadline: .now() + sampleInterval, repeating: sampleInterval)
         timer.setEventHandler { [weak self] in
-            self?.pollLiveCwds()
-            self?.pollFallbackTitles()
+            self?.pollPanes()
             self?.flushPendingOSCTitles()
         }
         timer.resume()
@@ -169,19 +171,21 @@ public final class SessionManager: @unchecked Sendable {
             // is safe; a failed persistence prevents key/sid reuse entirely.
             try options.onIdAllocated?(id)
             nextId += 1
+            let argv = options.tmux.newSessionArguments(
+                id: id, cwd: directory, cols: max(cols, 2), rows: max(rows, 2),
+                extraEnvironment: options.extraEnvironment
+            )
             let pty = try PTYProcess(
-                shell: options.shell,
-                arguments: options.shellArguments,
+                executable: argv[0],
+                arguments: Array(argv.dropFirst()),
                 cwd: directory,
                 cols: max(cols, 2),
                 rows: max(rows, 2),
-                extraEnvironment: options.extraEnvironment,
                 queue: queue
             )
-            let shellName = (options.shell as NSString).lastPathComponent
             let session = Session(
                 id: id, cwd: directory, pty: pty, cols: max(cols, 2), rows: max(rows, 2),
-                title: "\(shellName) — \(Self.abbreviate(path: directory))"
+                title: Self.abbreviate(path: directory)
             )
             sessions[id] = session
 
@@ -197,12 +201,17 @@ public final class SessionManager: @unchecked Sendable {
         }
     }
 
-    /// Closes (kills) a session and removes it from the list.
+    /// Closes a session: kills the tmux session (which exits our client) and
+    /// removes it from the list. The client SIGHUP remains as a backstop for
+    /// an unreachable server.
     @discardableResult
     public func close(id: Int) -> Bool {
         queue.sync {
             guard let session = sessions.removeValue(forKey: id) else { return false }
-            if session.alive { terminateAndReapLocked(session.pty) }
+            if session.alive {
+                options.tmux.killSession(id: id)
+                terminateAndReapLocked(session.pty)
+            }
             emitSessionsChangedLocked()
             return true
         }
@@ -247,8 +256,8 @@ public final class SessionManager: @unchecked Sendable {
     }
 
     /// Snapshot for coding-agent ownership matching (AgentMonitor,
-    /// docs/AGENT_MONITORING_DESIGN.md §4): the slave tty path and shell pid
-    /// of every live session. A hook-reported tty equal to `ttyPath`, or a
+    /// docs/AGENT_MONITORING_DESIGN.md §4): the pane's tty path and shell pid
+    /// inside the tmux server. A hook-reported tty equal to `ttyPath`, or a
     /// hook lineage containing `shellPid`, proves the agent runs inside that
     /// session.
     public struct AgentMatchTarget: Equatable, Sendable {
@@ -276,18 +285,31 @@ public final class SessionManager: @unchecked Sendable {
                 .map {
                     AgentMatchTarget(
                         sessionId: $0.id, sessionName: $0.title,
-                        ttyPath: $0.pty.ttyPath, shellPid: $0.pty.pid
+                        ttyPath: $0.paneTTY, shellPid: $0.panePID ?? 0
                     )
                 }
+        }
+    }
+
+    /// The local-terminal attach command for a live session (the "Open in
+    /// Terminal" affordance in the menu bar app); nil for unknown sessions.
+    public func tmuxAttachCommand(id: Int) -> String? {
+        queue.sync {
+            sessions[id] != nil ? options.tmux.attachCommand(id: id) : nil
         }
     }
 
     public func closeAll() {
         queue.sync {
             for session in sessions.values where session.alive {
+                options.tmux.killSession(id: session.id)
                 terminateAndReapLocked(session.pty)
             }
             sessions.removeAll()
+            // Only `pedals-*` sessions live on the private socket; dropping
+            // the server releases it and its panes without touching any
+            // user-owned tmux server.
+            options.tmux.killServer()
             emitSessionsChangedLocked()
         }
     }
@@ -332,16 +354,33 @@ public final class SessionManager: @unchecked Sendable {
         emitSessionsChangedLocked()
     }
 
-    // MARK: - Live cwd
+    // MARK: - Pane metadata (cwd, titles, agent-match identity)
 
-    private func pollLiveCwds() {
+    /// One `list-panes` round per sample interval refreshes everything the
+    /// daemon used to read from the shell process directly: live cwd, the
+    /// pane-command fallback title, and the pane tty/pid used for
+    /// coding-agent ownership matching.
+    private func pollPanes() {
+        guard sessions.values.contains(where: \.alive) else { return }
+        let panes = Dictionary(
+            options.tmux.listPanes().map { ($0.sessionID, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         var changed = false
         for session in sessions.values where session.alive {
-            guard let cwd = session.pty.currentWorkingDirectory(),
-                  cwd != session.cwd
-            else { continue }
-            session.cwd = cwd
-            changed = true
+            guard let pane = panes[session.id] else { continue }
+            session.paneTTY = pane.tty
+            session.panePID = pane.pid
+            if !pane.currentPath.isEmpty, pane.currentPath != session.cwd {
+                session.cwd = pane.currentPath
+                changed = true
+            }
+            if !session.titleFromOSC, !pane.currentCommand.isEmpty {
+                setTitleLocked(
+                    session: session,
+                    title: "\(pane.currentCommand) — \(Self.abbreviate(path: session.cwd))"
+                )
+            }
         }
         if changed { emitSessionsChangedLocked() }
     }
@@ -353,21 +392,6 @@ public final class SessionManager: @unchecked Sendable {
             guard let title = session.pendingOSCTitle else { continue }
             session.pendingOSCTitle = nil
             setTitleLocked(session: session, title: title)
-        }
-    }
-
-    private func pollFallbackTitles() {
-        for session in sessions.values where session.alive && !session.titleFromOSC {
-            // Title fallback: prefer a foreground process that isn't the shell
-            // (the command the user is running), else the shell itself.
-            let names = session.pty.foregroundProcessNames()
-            let shellName = (options.shell as NSString).lastPathComponent
-            guard let name = names.first(where: { $0 != shellName }) ?? names.first
-            else { continue }
-            setTitleLocked(
-                session: session,
-                title: "\(name) — \(Self.abbreviate(path: session.cwd))"
-            )
         }
     }
 

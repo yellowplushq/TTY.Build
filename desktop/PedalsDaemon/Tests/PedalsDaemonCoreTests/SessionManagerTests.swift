@@ -3,14 +3,30 @@ import XCTest
 
 @testable import PedalsDaemonCore
 
-/// Hermetic shell for tests: plain /bin/sh, no rc files, no login shell.
-private func testOptions() -> SessionManager.Options {
-    SessionManager.Options(shell: "/bin/sh", shellArguments: [], extraEnvironment: ["PS1": "$ "])
+/// Hermetic shell for tests: the fake tmux execs plain /bin/sh, no rc files,
+/// no login shell. Extra environment reaches the pane via `new-session -e`.
+private func testOptions(
+    fixture: FakeTmux.Fixture,
+    extraEnvironment: [String: String] = [:]
+) -> SessionManager.Options {
+    fixture.sessionOptions(
+        extraEnvironment: ["PS1": "$ "].merging(extraEnvironment) { _, new in new }
+    )
 }
 
 final class SessionManagerTests: XCTestCase {
+    private var fixture: FakeTmux.Fixture!
+
+    override func setUpWithError() throws {
+        fixture = try FakeTmux.makeFixture()
+    }
+
+    override func tearDownWithError() throws {
+        fixture.cleanUp()
+    }
+
     func testSpawnEchoAndReadOutput() throws {
-        let manager = SessionManager(options: testOptions())
+        let manager = SessionManager(options: testOptions(fixture: fixture))
         defer { manager.closeAll() }
 
         let collected = OutputCollector()
@@ -32,48 +48,27 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(sessions[0].rows, 24)
     }
 
-    func testPromptEndMarkerIsAlwaysEmpty() throws {
-        var options = testOptions()
-        options.extraEnvironment["PROMPT_EOL_MARK"] = "visible"
-        let manager = SessionManager(options: options)
+    func testCreateSpawnsTmuxNewSessionArgv() throws {
+        let manager = SessionManager(options: testOptions(fixture: fixture))
         defer { manager.closeAll() }
 
-        let collected = OutputCollector()
-        manager.onEvent = { event in
-            if case .output(_, let data, _) = event { collected.append(data) }
-        }
+        let id = try manager.create(cwd: "/tmp", cols: 80, rows: 24)
 
-        let id = try manager.create(cwd: nil, cols: 80, rows: 24)
-        manager.write(
-            id: id,
-            data: Data("printf 'prompt-eol-length=%s\\n' \"${#PROMPT_EOL_MARK}\"\n".utf8)
+        XCTAssertTrue(
+            fixture.waitForInvocation(
+                containing: "new-session -s pedals-\(id) -x 80 -y 24 -c /tmp"
+            ),
+            "spawn argv must be the tmux new-session form, got \(fixture.invocations())"
         )
-        try collected.wait(for: "prompt-eol-length=0", timeout: 10)
-    }
-
-    func testNoColorIsAlwaysRemoved() throws {
-        var options = testOptions()
-        options.extraEnvironment["NO_COLOR"] = "1"
-        let manager = SessionManager(options: options)
-        defer { manager.closeAll() }
-
-        let collected = OutputCollector()
-        manager.onEvent = { event in
-            if case .output(_, let data, _) = event { collected.append(data) }
-        }
-
-        let id = try manager.create(cwd: nil, cols: 80, rows: 24)
-        manager.write(
-            id: id,
-            data: Data("if [ \"${NO_COLOR+x}\" = x ]; then echo no-color-present; else echo no-color-absent; fi\n".utf8)
-        )
-        try collected.wait(for: "no-color-absent", timeout: 10)
+        let invocation = fixture.invocations().first { $0.contains("new-session") }
+        XCTAssertTrue(invocation?.contains("-e COLORTERM=truecolor") == true)
+        XCTAssertTrue(invocation?.contains("-e PROMPT_EOL_MARK=") == true)
     }
 
     func testSessionIdsStartAtConfiguredHighWaterMark() throws {
         // Session-channel keys are derived from (secret, sid); a restarted
         // daemon must never hand out an old sid (PROTOCOL.md §4.1).
-        var options = testOptions()
+        var options = testOptions(fixture: fixture)
         options.firstSessionId = 7
         let allocated = LockedBox<Int>()
         options.onIdAllocated = { allocated.value = $0 }
@@ -88,7 +83,7 @@ final class SessionManagerTests: XCTestCase {
     }
 
     func testDirectoryCapacityIsEnforcedBeforeAllocatingAnotherPTY() throws {
-        var options = testOptions()
+        var options = testOptions(fixture: fixture)
         options.maximumSessions = 1
         let manager = SessionManager(options: options)
         defer { manager.closeAll() }
@@ -100,8 +95,8 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(manager.list().count, 1)
     }
 
-    func testSessionIDCannotExceedRelayUInt32Space() {
-        var options = testOptions()
+    func testSessionIDCannotExceedRelayUInt32Space() throws {
+        var options = testOptions(fixture: fixture)
         options.firstSessionId = Int(UInt32.max) + 1
         let manager = SessionManager(options: options)
 
@@ -112,7 +107,7 @@ final class SessionManagerTests: XCTestCase {
     }
 
     func testReplaySnapshotContainsPastOutput() throws {
-        let manager = SessionManager(options: testOptions())
+        let manager = SessionManager(options: testOptions(fixture: fixture))
         defer { manager.closeAll() }
 
         let collected = OutputCollector()
@@ -133,11 +128,10 @@ final class SessionManagerTests: XCTestCase {
     }
 
     func testResizeEventPrecedesOutputFromForegroundJobSIGWINCH() throws {
-        let options = SessionManager.Options(
-            shell: "/bin/zsh",
-            shellArguments: ["-f"],
+        let options = testOptions(
+            fixture: fixture,
             extraEnvironment: [
-                "PS1": "$ ",
+                "FAKE_TMUX_SHELL": "/bin/zsh -f",
                 "PEDALS_TEST_READY": "ORDERED-READY",
             ]
         )
@@ -173,10 +167,9 @@ final class SessionManagerTests: XCTestCase {
     }
 
     func testSpawnedShellHasAControllingTerminal() throws {
-        let options = SessionManager.Options(
-            shell: "/bin/zsh",
-            shellArguments: ["-f"],
-            extraEnvironment: ["PS1": "$ "]
+        let options = testOptions(
+            fixture: fixture,
+            extraEnvironment: ["FAKE_TMUX_SHELL": "/bin/zsh -f"]
         )
         let manager = SessionManager(options: options)
         defer { manager.closeAll() }
@@ -199,11 +192,10 @@ final class SessionManagerTests: XCTestCase {
     }
 
     func testRepeatedResizeSignalsForegroundJobLaunchedByZsh() throws {
-        let options = SessionManager.Options(
-            shell: "/bin/zsh",
-            shellArguments: ["-f"],
+        let options = testOptions(
+            fixture: fixture,
             extraEnvironment: [
-                "PS1": "$ ",
+                "FAKE_TMUX_SHELL": "/bin/zsh -f",
                 "PEDALS_TEST_READY": "ZSH-CHILD-ARMED",
             ]
         )
@@ -233,30 +225,89 @@ final class SessionManagerTests: XCTestCase {
         }
     }
 
-    func testLiveCwdFollowsShellChdir() throws {
-        let manager = SessionManager(options: testOptions())
+    func testLiveCwdFollowsPaneCurrentPathPoll() throws {
+        var options = testOptions(fixture: fixture)
+        options.metadataSampleInterval = 0.1
+        let manager = SessionManager(options: options)
         defer { manager.closeAll() }
 
-        let collected = OutputCollector()
-        manager.onEvent = { event in
-            if case .output(_, let data, _) = event { collected.append(data) }
-        }
+        let id = try manager.create(cwd: "/tmp", cols: 80, rows: 24)
+        XCTAssertEqual(manager.list().first?.cwd, "/tmp")
 
-        let id = try manager.create(cwd: nil, cols: 80, rows: 24)
-        manager.write(id: id, data: Data("cd /private/var && printf 'moved-%s\\n' ok\n".utf8))
-        try collected.wait(for: "moved-ok", timeout: 10)
+        // The pane reports a new working directory on the next list-panes poll.
+        try fixture.setPaneMeta(
+            sessionName: "pedals-\(id)",
+            tty: "/dev/ttys041", pid: 4242,
+            path: "/private/var", command: "vim"
+        )
 
-        // The cwd poll runs every 2 s; give it two cycles.
-        let deadline = Date().addingTimeInterval(6)
+        let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
             if manager.list().first?.cwd == "/private/var" { return }
-            Thread.sleep(forTimeInterval: 0.2)
+            Thread.sleep(forTimeInterval: 0.05)
         }
         XCTFail("cwd never updated to /private/var, got \(manager.list().first?.cwd ?? "nil")")
     }
 
+    func testPaneCommandFallbackTitleFollowsPoll() throws {
+        var options = testOptions(fixture: fixture)
+        options.metadataSampleInterval = 0.1
+        let manager = SessionManager(options: options)
+        defer { manager.closeAll() }
+
+        let titled = expectation(description: "pane-command fallback title")
+        let title = LockedBox<String>()
+        manager.onEvent = { event in
+            if case .title(_, let value) = event, value == "vim — /private/var" {
+                title.value = value
+                titled.fulfill()
+            }
+        }
+
+        let id = try manager.create(cwd: "/tmp", cols: 80, rows: 24)
+        try fixture.setPaneMeta(
+            sessionName: "pedals-\(id)",
+            tty: "/dev/ttys041", pid: 4242,
+            path: "/private/var", command: "vim"
+        )
+        wait(for: [titled], timeout: 5)
+
+        XCTAssertEqual(title.value, "vim — /private/var")
+        XCTAssertEqual(manager.list().first?.title, "vim — /private/var")
+    }
+
+    func testOSCTitleWinsOverPaneCommandFallback() throws {
+        var options = testOptions(fixture: fixture)
+        options.metadataSampleInterval = 0.1
+        let manager = SessionManager(options: options)
+        defer { manager.closeAll() }
+
+        let titled = expectation(description: "OSC title event")
+        manager.onEvent = { event in
+            if case .title(_, let value) = event, value == "osc-wins" {
+                titled.fulfill()
+            }
+        }
+
+        let id = try manager.create(cwd: "/tmp", cols: 80, rows: 24)
+        manager.write(id: id, data: Data("printf '\\033]2;osc-wins\\007'\n".utf8))
+        wait(for: [titled], timeout: 10)
+
+        // Later polls keep reporting a pane command, but once an OSC title
+        // arrived it owns the session title.
+        try fixture.setPaneMeta(
+            sessionName: "pedals-\(id)",
+            tty: "/dev/ttys041", pid: 4242,
+            path: "/private/var", command: "vim"
+        )
+        let settled = expectation(description: "several poll cycles elapsed")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.6) { settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+        XCTAssertEqual(manager.list().first?.title, "osc-wins")
+    }
+
     func testExitReportsEventAndMarksDead() throws {
-        let manager = SessionManager(options: testOptions())
+        let manager = SessionManager(options: testOptions(fixture: fixture))
         defer { manager.closeAll() }
 
         let exited = expectation(description: "exit event")
@@ -279,17 +330,98 @@ final class SessionManagerTests: XCTestCase {
     }
 
     func testCloseKillsAndRemoves() throws {
-        let manager = SessionManager(options: testOptions())
+        let manager = SessionManager(options: testOptions(fixture: fixture))
         defer { manager.closeAll() }
 
         let id = try manager.create(cwd: nil, cols: 80, rows: 24)
         XCTAssertTrue(manager.close(id: id))
         XCTAssertFalse(manager.close(id: id), "double close reports failure")
         XCTAssertTrue(manager.list().isEmpty)
+        XCTAssertTrue(
+            fixture.waitForInvocation(containing: "kill-session -t pedals-\(id)"),
+            "close must kill the tmux session, got \(fixture.invocations())"
+        )
+    }
+
+    func testCloseAllKillsEverySessionAndTheServer() throws {
+        let manager = SessionManager(options: testOptions(fixture: fixture))
+
+        let first = try manager.create(cwd: nil, cols: 80, rows: 24)
+        let second = try manager.create(cwd: nil, cols: 80, rows: 24)
+        manager.closeAll()
+
+        XCTAssertTrue(manager.list().isEmpty)
+        XCTAssertTrue(
+            fixture.waitForInvocation(containing: "kill-session -t pedals-\(first)")
+        )
+        XCTAssertTrue(
+            fixture.waitForInvocation(containing: "kill-session -t pedals-\(second)")
+        )
+        XCTAssertTrue(
+            fixture.waitForInvocation(containing: "kill-server"),
+            "closeAll must kill the private tmux server, got \(fixture.invocations())"
+        )
+    }
+
+    func testTmuxAttachCommandTracksLiveSessions() throws {
+        let manager = SessionManager(options: testOptions(fixture: fixture))
+        defer { manager.closeAll() }
+
+        XCTAssertNil(manager.tmuxAttachCommand(id: 999))
+
+        let id = try manager.create(cwd: nil, cols: 80, rows: 24)
+        let command = try XCTUnwrap(manager.tmuxAttachCommand(id: id))
+        XCTAssertEqual(command, fixture.configuration.attachCommand(id: id))
+        XCTAssertTrue(command.contains("attach-session -t"))
+
+        XCTAssertTrue(manager.close(id: id))
+        XCTAssertNil(manager.tmuxAttachCommand(id: id))
+    }
+
+    func testAgentMatchTargetsHaveNoPaneIdentityBeforeFirstPoll() throws {
+        var options = testOptions(fixture: fixture)
+        // Effectively never polls during this test.
+        options.metadataSampleInterval = 3600
+        let manager = SessionManager(options: options)
+        defer { manager.closeAll() }
+
+        let id = try manager.create(cwd: nil, cols: 80, rows: 24)
+
+        let targets = manager.agentMatchTargets()
+        XCTAssertEqual(targets.count, 1)
+        XCTAssertEqual(targets[0].sessionId, id)
+        XCTAssertNil(targets[0].ttyPath)
+        XCTAssertEqual(targets[0].shellPid, 0)
+    }
+
+    func testAgentMatchTargetsUsePaneTTYAndPIDAfterPoll() throws {
+        var options = testOptions(fixture: fixture)
+        options.metadataSampleInterval = 0.1
+        let manager = SessionManager(options: options)
+        defer { manager.closeAll() }
+
+        let id = try manager.create(cwd: nil, cols: 80, rows: 24)
+        try fixture.setPaneMeta(
+            sessionName: "pedals-\(id)",
+            tty: "/dev/ttys077", pid: 424242,
+            path: "/tmp", command: "zsh"
+        )
+
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            let targets = manager.agentMatchTargets()
+            if targets.first?.ttyPath == "/dev/ttys077",
+               targets.first?.shellPid == 424242 {
+                XCTAssertEqual(targets.first?.sessionId, id)
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTFail("pane identity never arrived, got \(manager.agentMatchTargets())")
     }
 
     func testOSCTitleUpdatesSessionInfo() throws {
-        let manager = SessionManager(options: testOptions())
+        let manager = SessionManager(options: testOptions(fixture: fixture))
         defer { manager.closeAll() }
 
         let titled = expectation(description: "title event")
@@ -310,7 +442,7 @@ final class SessionManagerTests: XCTestCase {
     }
 
     func testOSCTitleSamplingCoalescesAnimationWithoutRebroadcastingSessions() throws {
-        var options = testOptions()
+        var options = testOptions(fixture: fixture)
         options.metadataSampleInterval = 0.25
         let manager = SessionManager(options: options)
         defer { manager.closeAll() }

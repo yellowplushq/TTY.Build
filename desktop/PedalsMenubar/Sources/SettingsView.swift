@@ -7,6 +7,7 @@ import SwiftUI
 /// grouped-form detail pages pulled to the edges).
 struct SettingsView: View {
     enum Page: CaseIterable, Hashable {
+        case general
         case permissions
         case agents
         case updates
@@ -14,6 +15,7 @@ struct SettingsView: View {
 
         var title: String {
             switch self {
+            case .general: "General"
             case .permissions: "Permissions"
             case .agents: "Coding Agents"
             case .updates: "Updates"
@@ -23,6 +25,7 @@ struct SettingsView: View {
 
         var symbolName: String {
             switch self {
+            case .general: "gear"
             case .permissions: "lock.shield"
             case .agents: "sparkles"
             case .updates: "arrow.down.circle"
@@ -34,7 +37,7 @@ struct SettingsView: View {
     @EnvironmentObject private var updaterModel: UpdaterModel
     @EnvironmentObject private var permissions: PermissionsModel
     @StateObject private var agentHooks = AgentHooksModel()
-    @State private var selection: Page = .permissions
+    @State private var selection: Page = .general
 
     var body: some View {
         NavigationSplitView(columnVisibility: .constant(.all)) {
@@ -50,6 +53,8 @@ struct SettingsView: View {
             .toolbar(removing: .sidebarToggle)
         } detail: {
             switch selection {
+            case .general:
+                GeneralPage()
             case .permissions:
                 PermissionsPage(permissions: permissions)
             case .agents:
@@ -77,9 +82,52 @@ struct SettingsView: View {
             case "updates": selection = .updates
             case "about": selection = .about
             case "permissions": selection = .permissions
+            case "general": selection = .general
             default: break
             }
         }
+    }
+
+    // MARK: - General
+
+    private struct GeneralPage: View {
+        private static let automatic = "auto"
+        @State private var selection: String =
+            UserDefaults.standard.string(forKey: AppModel.externalTerminalKey) ?? automatic
+        private let terminals = TerminalLauncher.installed()
+
+        var body: some View {
+            Form {
+                Section {
+                    Picker("External terminal", selection: $selection) {
+                        Text("Automatic").tag(Self.automatic)
+                        ForEach(terminals) { terminal in
+                            Text(terminal.name).tag(terminal.bundleID)
+                        }
+                    }
+                } footer: {
+                    Text(Self.explanation)
+                        .font(.caption)
+                        .foregroundStyle(PedalsTheme.secondaryContent)
+                }
+            }
+            .formStyle(.grouped)
+            .settingsPageInsets()
+            .navigationTitle("General")
+            .onChange(of: selection) { _, value in
+                if value == Self.automatic {
+                    UserDefaults.standard.removeObject(forKey: AppModel.externalTerminalKey)
+                } else {
+                    UserDefaults.standard.set(value, forKey: AppModel.externalTerminalKey)
+                }
+            }
+        }
+
+        private static let explanation = """
+            “Open in Terminal” attaches a session in this terminal. Automatic \
+            prefers a terminal that is currently running, then the one used \
+            most recently.
+            """
     }
 
     // MARK: - Permissions

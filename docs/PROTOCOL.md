@@ -660,7 +660,8 @@ agents' hook settings by `pedals hooks install` or the menu bar app):
 busy|notify|compact|stop|session-end","agentSessionId":"...","sessionName"?,
 "cwd"?,"prompt"?,"message"?,"action"?,"agentError"?,
 "lineage":[{"pid","name","tty"?}]}`. The daemon's AgentMonitor applies the
-state machine, matches `lineage`/`tty` against daemon-owned PTYs, and broadcasts
+state machine, matches `lineage`/`tty` against the panes of managed tmux
+sessions (pane tty and pane pid), and broadcasts
 the encrypted `agents` ctl snapshot. `noReply=true` makes reporter delivery
 strictly one-way: stdin and socket operations are bounded and the daemon does
 not write an acknowledgement after the reporter exits. For managed sessions, the daemon's live
@@ -678,8 +679,15 @@ revokes the current session when its pairing surface closes. `pair --reset`
 registers a new computer identity and rotates the host token and E2EE secret
 before requesting the code.
 
-The daemon launches interactive login shells in PTYs, keeps a 256 KiB raw
-replay buffer per session, parses OSC 0/2 titles locally, limits the directory
-to 255 sessions, and persists a session ID high-water mark so a terminal channel
-key is never reused. It reports offline before macOS sleep and `SIGINT`/`SIGTERM`,
-then publishes a complete snapshot after wake or reconnect.
+Every managed session is a tmux session named `pedals-<id>` on a private tmux
+server (bundled tmux binary, socket `~/.pedals/tmux.sock`, generated
+`-f ~/.pedals/tmux.conf` config); the daemon attaches one client PTY per
+session and never touches the system tmux server or sessions it did not
+create. Closing a session kills the tmux session; orderly shutdown kills all
+managed sessions and the private server. The daemon keeps a 256 KiB raw
+replay buffer per session, parses OSC 0/2 titles locally (tmux `set-titles`
+passes pane titles through), refreshes live cwd / fallback titles / pane
+identity from a 2 s `list-panes` poll, limits the directory to 255 sessions,
+and persists a session ID high-water mark so a terminal channel key is never
+reused. It reports offline before macOS sleep and `SIGINT`/`SIGTERM`, then
+publishes a complete snapshot after wake or reconnect.

@@ -34,6 +34,9 @@ public final class Daemon: @unchecked Sendable {
     public enum DaemonError: Error, CustomStringConvertible {
         case notRegistered
         case identityResetPending(HostIdentityResetState.Phase)
+        /// No bundled or PATH tmux: every managed TTY is a tmux session, so
+        /// the service cannot run without the binary.
+        case tmuxUnavailable
 
         public var description: String {
             switch self {
@@ -44,6 +47,8 @@ public final class Daemon: @unchecked Sendable {
                 """
             case .identityResetPending(let phase):
                 "identity reset is incomplete (\(phase.rawValue)); run `pedals pair --reset` to resume"
+            case .tmuxUnavailable:
+                "no tmux binary found — expected one inside the app bundle or on PATH"
             }
         }
     }
@@ -67,9 +72,11 @@ public final class Daemon: @unchecked Sendable {
     private var pairingTask: Task<Void, Never>?
 
     /// Loads (or registers) the v2 host identity and wires everything up.
+    /// With no explicit `sessionOptions`, the private tmux server is resolved
+    /// from the app bundle or PATH (`TmuxConfiguration.resolve(home:)`).
     public init(
         home: PedalsHome = PedalsHome(),
-        sessionOptions: SessionManager.Options = .init(),
+        sessionOptions explicitOptions: SessionManager.Options? = nil,
         serviceActions: ServiceActions = .live
     ) throws {
         self.home = home
@@ -94,7 +101,16 @@ public final class Daemon: @unchecked Sendable {
             throw DaemonError.notRegistered
         }
 
-        var sessionOptions = sessionOptions
+        var sessionOptions: SessionManager.Options
+        if let explicitOptions {
+            sessionOptions = explicitOptions
+        } else {
+            guard let tmux = try? TmuxConfiguration.resolve(home: home) else {
+                throw DaemonError.tmuxUnavailable
+            }
+            try tmux.writeConfigFile(home: home)
+            sessionOptions = SessionManager.Options(tmux: tmux)
+        }
         sessionOptions.firstSessionId = (home.loadSessionCounter() ?? 0) + 1
         sessionOptions.onIdAllocated = { [home] id in
             try home.save(sessionCounter: id)
@@ -184,6 +200,13 @@ public final class Daemon: @unchecked Sendable {
     @discardableResult
     public func closeSession(id: Int) -> Bool {
         sessions.close(id: id)
+    }
+
+    /// Shell command line that attaches a local terminal to the session's
+    /// tmux session (the menu bar's "Open in Terminal" button); nil when the
+    /// session is gone.
+    public func tmuxAttachCommand(sessionId id: Int) -> String? {
+        sessions.tmuxAttachCommand(id: id)
     }
 
     public func createPairingInvitation() throws -> PairingInvitation {

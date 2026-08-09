@@ -67,12 +67,29 @@ running app networking code.
 
 ## Desktop service
 
-`PedalsDaemonCore` owns the PTY processes, replay buffers, Unix control socket,
-and authenticated relay links. The menu bar app links this core directly and
-owns its lifecycle, so quitting Pedals also stops the service. It opens directly
-to pairing on an unpaired computer and never asks the user to configure or
-start a daemon. The optional headless `pedals` executable exposes `serve`, `ls`,
-`new`, `kill`, `pair`, and `status` through Swift Argument Parser for CLI use.
+`PedalsDaemonCore` owns the terminal sessions, replay buffers, Unix control
+socket, and authenticated relay links. Every managed session is a tmux
+session named `pedals-<id>` on a private tmux server: the app ships a pinned,
+statically linked tmux binary (built by `scripts/build-tmux.sh`, embedded
+next to the executable like `pedals-hook`), the server listens on
+`~/.pedals/tmux.sock` with a generated `-f ~/.pedals/tmux.conf` that keeps
+the user's own `~/.tmux.conf` out of managed sessions, and the daemon
+attaches one client PTY per session for the byte stream. The private server
+never mixes with a system tmux server, and the daemon never adopts sessions
+it did not create. Live cwd, fallback titles, and the pane tty/pid used for
+coding-agent matching come from a 2 s `list-panes` poll; OSC titles pass
+through tmux `set-titles`. Closing a session kills the tmux session; quitting
+Pedals kills all managed sessions and the private server. A per-session
+"Open in Terminal" button runs the bundled tmux `attach-session` in the
+user's terminal (Terminal.app, iTerm2, Ghostty, Alacritty, WezTerm, or kitty
+— auto-detected with running/recently-used ranking and a Settings override),
+so a local terminal shares the exact session the phone sees.
+
+The menu bar app links this core directly and owns its lifecycle, so quitting
+Pedals also stops the service. It opens directly to pairing on an unpaired
+computer and never asks the user to configure or start a daemon. The optional
+headless `pedals` executable exposes `serve`, `ls`, `new`, `kill`, `pair`,
+and `status` through Swift Argument Parser for CLI use.
 
 First launch registers a computer with the configured HTTPS service and stores
 `~/.pedals/identity.json` (mode 0600). Opening the app's pairing surface requests

@@ -73,6 +73,9 @@ jobs:
           fi
           echo "PEDALS_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
 
+      - name: Build pinned tmux
+        run: ./scripts/build-tmux.sh
+
       - name: Build universal app
         run: ./scripts/build-desktop-release.sh
 
@@ -98,6 +101,11 @@ jobs:
           # requires every Mach-O to carry Developer ID + secure timestamp.
           codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" \
             "$app/Contents/MacOS/pedals-hook"
+          # The pinned tmux build is copied in by the menubar build's
+          # post-build script with a development signature and needs the same
+          # Developer ID + secure timestamp treatment as pedals-hook.
+          codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" \
+            "$app/Contents/MacOS/tmux"
           codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
           signing_details="$(codesign -dv --verbose=4 "$app" 2>&1)"
@@ -110,6 +118,7 @@ jobs:
             "$sparkle_contents/Autoupdate" \
             "$sparkle_contents/Updater.app" \
             "$app/Contents/MacOS/pedals-hook" \
+            "$app/Contents/MacOS/tmux" \
             "$sparkle"; do
             component_details="$(codesign -dv --verbose=4 "$component" 2>&1)"
             grep -q 'TeamIdentifier=QDJ93ZUQ9B' <<< "$component_details"

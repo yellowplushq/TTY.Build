@@ -113,9 +113,11 @@ struct MenuView: View {
                     .padding(.vertical, 16)
             } else {
                 ForEach(model.sessions, id: \.id) { session in
-                    SessionRow(session: session) {
-                        model.closeSession(session.id)
-                    }
+                    SessionRow(
+                        session: session,
+                        onOpenInTerminal: { model.openInTerminal(session.id) },
+                        onClose: { model.closeSession(session.id) }
+                    )
                 }
             }
 
@@ -200,6 +202,7 @@ struct MenuView: View {
 
 private struct SessionRow: View {
     let session: SessionInfo
+    let onOpenInTerminal: () -> Void
     let onClose: () -> Void
     @State private var hovering = false
 
@@ -216,6 +219,17 @@ private struct SessionRow: View {
                     .lineLimit(1)
             }
             Spacer()
+            if session.alive {
+                Button {
+                    onOpenInTerminal()
+                } label: {
+                    Image(systemName: "appleterminal")
+                        .foregroundStyle(PedalsTheme.secondaryContent)
+                }
+                .buttonStyle(.borderless)
+                .opacity(hovering ? 1 : 0.35)
+                .help("Open in Terminal")
+            }
             Button {
                 onClose()
             } label: {

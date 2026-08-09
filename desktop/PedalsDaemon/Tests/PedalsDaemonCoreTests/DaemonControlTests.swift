@@ -11,6 +11,7 @@ final class DaemonControlTests: XCTestCase {
     private var home: PedalsHome!
     private var daemon: Daemon!
     private var factory: IdentityFactory!
+    private var tmux: FakeTmux.Fixture!
 
     override func setUpWithError() throws {
         // sockaddr_un.sun_path caps unix socket paths at 104 bytes, so the
@@ -22,9 +23,10 @@ final class DaemonControlTests: XCTestCase {
         home = PedalsHome(directory: directory)
         try home.save(config: .init(service: "https://127.0.0.1:1"))
         factory = IdentityFactory()
+        tmux = try FakeTmux.makeFixture()
         daemon = try Daemon(
             home: home,
-            sessionOptions: SessionManager.Options(shell: "/bin/sh", shellArguments: []),
+            sessionOptions: tmux.sessionOptions(),
             serviceActions: factory.actions
         )
         try daemon.start()
@@ -33,6 +35,7 @@ final class DaemonControlTests: XCTestCase {
     override func tearDownWithError() throws {
         daemon?.shutdown()
         if let home { try? FileManager.default.removeItem(at: home.directory) }
+        tmux?.cleanUp()
     }
 
     private func send(_ request: [String: Any]) throws -> [String: Any] {
@@ -78,8 +81,15 @@ final class DaemonControlTests: XCTestCase {
         snapshot = daemon.snapshot()
         XCTAssertEqual(snapshot.sessions.map(\.id), [id])
 
+        XCTAssertEqual(
+            daemon.tmuxAttachCommand(sessionId: id),
+            tmux.configuration.attachCommand(id: id)
+        )
+        XCTAssertNil(daemon.tmuxAttachCommand(sessionId: id + 100))
+
         XCTAssertTrue(daemon.closeSession(id: id))
         XCTAssertFalse(daemon.closeSession(id: id))
+        XCTAssertNil(daemon.tmuxAttachCommand(sessionId: id))
         XCTAssertTrue(daemon.snapshot().sessions.isEmpty)
 
         let invitation = try daemon.createPairingInvitation()
@@ -167,7 +177,7 @@ final class DaemonControlTests: XCTestCase {
         XCTAssertThrowsError(
             try Daemon(
                 home: home,
-                sessionOptions: SessionManager.Options(shell: "/bin/sh", shellArguments: []),
+                sessionOptions: tmux.sessionOptions(),
                 serviceActions: factory.actions
             )
         ) { error in

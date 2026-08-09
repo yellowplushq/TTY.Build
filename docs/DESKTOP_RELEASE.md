@@ -118,3 +118,21 @@ PEDALS_DESKTOP_BUILD_NUMBER=1 \
 
 Outputs are written below `.artifacts/desktop-release/` and must not be
 committed.
+
+## Embedded tmux
+
+The app embeds a pinned, self-contained tmux build at
+`Contents/MacOS/tmux`. `./scripts/build-tmux.sh` compiles tmux 3.5a with
+static-only ncurses 6.5 and libevent 2.1.12-stable (each tarball's SHA-256 is
+verified against a hash pinned in the script) for both `arm64` and `x86_64`,
+lipo's them into a universal binary at
+`desktop/PedalsMenubar/Resources/tmux`, and checks with `otool -L` that only
+macOS system libraries are linked dynamically. The script is idempotent and
+rebuilds only when `FORCE=1` is set.
+
+The release workflow runs the script before building the app, and the app's
+post-build script copies the binary into the bundle and signs it with the
+hardened runtime; the workflow re-signs it with the Developer ID identity
+before notarization. Local dev builds may skip the script: if
+`Resources/tmux` is missing the build only warns, and the app falls back to
+the tmux on `PATH` at runtime.

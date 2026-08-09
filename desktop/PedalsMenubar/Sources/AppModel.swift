@@ -312,6 +312,44 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Open in Terminal
+
+    /// UserDefaults override for the "Open in Terminal" target; absent means
+    /// automatic (running terminals first, then most recently used).
+    static let externalTerminalKey = "externalTerminalBundleID"
+
+    func openInTerminal(_ id: Int) {
+        guard let service else { return }
+        lastError = nil
+        Task {
+            let command = await Task.detached(priority: .userInitiated) {
+                service.tmuxAttachCommand(sessionId: id)
+            }.value
+            guard let command else {
+                lastError = "Session \(id) is no longer available"
+                return
+            }
+            let installed = TerminalLauncher.installed()
+            let chosen: TerminalLauncher.Terminal?
+            if let bundleID = UserDefaults.standard.string(forKey: Self.externalTerminalKey) {
+                chosen = installed.first { $0.bundleID == bundleID }
+            } else {
+                chosen = TerminalLauncher.ranked().first
+            }
+            guard let chosen else {
+                lastError = "No supported terminal is installed"
+                return
+            }
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try TerminalLauncher.open(command: command, terminal: chosen)
+                }.value
+            } catch {
+                lastError = String(describing: error)
+            }
+        }
+    }
+
     // MARK: Pairing
 
     func presentPairingCode() {

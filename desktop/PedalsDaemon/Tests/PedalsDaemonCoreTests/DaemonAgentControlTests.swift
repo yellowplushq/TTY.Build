@@ -12,6 +12,7 @@ import XCTest
 final class DaemonAgentControlTests: XCTestCase {
     private var home: PedalsHome!
     private var daemon: Daemon!
+    private var tmux: FakeTmux.Fixture!
 
     override func setUpWithError() throws {
         // sockaddr_un.sun_path caps unix socket paths at 104 bytes, so the
@@ -30,9 +31,10 @@ final class DaemonAgentControlTests: XCTestCase {
             ),
             hostToken: "host-token"
         ))
+        tmux = try FakeTmux.makeFixture()
         daemon = try Daemon(
             home: home,
-            sessionOptions: SessionManager.Options(shell: "/bin/sh", shellArguments: [])
+            sessionOptions: tmux.sessionOptions()
         )
         try daemon.start()
     }
@@ -40,6 +42,7 @@ final class DaemonAgentControlTests: XCTestCase {
     override func tearDownWithError() throws {
         daemon?.shutdown()
         if let home { try? FileManager.default.removeItem(at: home.directory) }
+        tmux?.cleanUp()
     }
 
     private func send(_ request: [String: Any]) throws -> [String: Any] {

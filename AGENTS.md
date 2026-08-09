@@ -81,8 +81,16 @@ Do not assume that enabling the `APP_GROUPS` capability proves assignment.
   service API types.
 - `desktop/PedalsDaemon/`: macOS daemon and `pedals` command-line client. The
   `pedals` CLI is for internal debugging only — never ship it in external
-  releases; the menu bar app is the only released desktop frontend.
-- `desktop/PedalsMenubar/`: macOS menu bar UI.
+  releases; the menu bar app is the only released desktop frontend. Every
+  managed TTY is a tmux session (`pedals-<id>`) on a private tmux server
+  (socket `~/.pedals/tmux.sock`, generated config `~/.pedals/tmux.conf`);
+  the daemon never touches the system tmux server and never adopts sessions
+  it did not create.
+- `desktop/PedalsMenubar/`: macOS menu bar UI. Embeds `pedals-hook` and the
+  pinned tmux binary (built by `scripts/build-tmux.sh` into the ignored
+  `desktop/PedalsMenubar/Resources/tmux`) into `Contents/MacOS/`; at runtime
+  the daemon prefers that bundled tmux and falls back to a PATH `tmux` only
+  in development.
 - `ios/`: iPhone app, iPhone widgets, Live Activity/Dynamic Island, Watch app,
   Watch widgets, shared status code, entitlements, and XcodeGen project source.
 - `scripts/e2e.sh`: isolated local Worker-to-daemon-to-iOS end-to-end test.
@@ -104,7 +112,7 @@ swift test
 ```
 
 The expected suites currently contain 25 Node tests, 57 Worker tests, 98
-PedalsKit tests, and 219 daemon tests. A changed count is not automatically a
+PedalsKit tests, and 251 daemon tests. A changed count is not automatically a
 failure, but every discovered test must pass.
 
 Check the deployed v2 contract separately; it creates temporary identities and
@@ -152,6 +160,13 @@ Run daemon tests and build the executable:
 swift test --package-path desktop/PedalsDaemon
 swift build --package-path desktop/PedalsDaemon
 ```
+
+Sessions are tmux-backed: the daemon resolves a bundled `tmux` next to the
+executable and falls back to a PATH `tmux` in development, so install tmux
+(e.g. `brew install tmux`) or run `./scripts/build-tmux.sh` before `serve`.
+Managed sessions live on the private socket only; inspect them with
+`tmux -S ~/.pedals/tmux.sock ls` (use an isolated `PEDALS_HOME` for tests,
+and point `-S` at that home's `tmux.sock`).
 
 Start the daemon against a local Worker:
 

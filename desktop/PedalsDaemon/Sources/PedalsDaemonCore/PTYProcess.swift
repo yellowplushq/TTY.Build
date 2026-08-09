@@ -2,10 +2,12 @@ import CPedalsPTY
 import Darwin
 import Foundation
 
-/// One shell process attached to a pseudo-terminal (PROTOCOL.md §6).
+/// One child process attached to a pseudo-terminal (PROTOCOL.md §6). In
+/// practice the child is always the tmux client owning a managed session
+/// (see `TmuxConfiguration`).
 ///
 /// The child is spawned with `forkpty`, which creates a new session and makes
-/// the slave device its controlling terminal before executing the shell.
+/// the slave device its controlling terminal before executing the program.
 /// Output and exit are delivered as callbacks on the queue passed to `init`.
 public final class PTYProcess: @unchecked Sendable {
     public enum PTYError: Error, CustomStringConvertible {
@@ -21,10 +23,6 @@ public final class PTYProcess: @unchecked Sendable {
     }
 
     public let pid: pid_t
-    /// Slave tty device path ("/dev/ttys003"). Identifies this PTY for
-    /// coding-agent ownership matching (AgentMonitor): a hook whose reported
-    /// tty equals `ttyPath` runs inside this session.
-    public let ttyPath: String?
     private let masterFD: Int32
     private let queue: DispatchQueue
     private let readSource: DispatchSourceRead
@@ -45,7 +43,7 @@ public final class PTYProcess: @unchecked Sendable {
     public var onExit: (@Sendable (Int32) -> Void)?
 
     public init(
-        shell: String,
+        executable: String,
         arguments: [String],
         cwd: String,
         cols: UInt16,
@@ -62,20 +60,17 @@ public final class PTYProcess: @unchecked Sendable {
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         if environment["LANG"]?.isEmpty != false { environment["LANG"] = "en_US.UTF-8" }
-        environment["SHELL"] = shell
+        // SHELL stays the user's login shell: the child is the tmux client,
+        // and the tmux server picks default-shell from this environment.
         for (key, value) in extraEnvironment { environment[key] = value }
         // Pedals terminals advertise full color support. Do not let the
         // desktop app's own launch environment disable color in child tools.
         // Removing the key matters: many CLIs treat even an empty NO_COLOR as
-        // an explicit request to suppress ANSI colors.
+        // an explicit request to suppress ANSI colors, and the tmux server
+        // inherits this environment into every pane it starts.
         environment.removeValue(forKey: "NO_COLOR")
-        // zsh otherwise paints a reverse-video `%` whenever the preceding
-        // output has no trailing newline. It is useful in a local terminal but
-        // becomes visual noise after remote replay and resize redraws. Pedals
-        // deliberately owns this value so callers cannot re-enable the mark.
-        environment["PROMPT_EOL_MARK"] = ""
 
-        var argv = ([shell] + arguments).map { strdup($0) } + [nil]
+        var argv = ([executable] + arguments).map { strdup($0) } + [nil]
         var envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer {
             argv.forEach { free($0) }
@@ -85,12 +80,12 @@ public final class PTYProcess: @unchecked Sendable {
         var childErrno: Int32 = 0
         let childPid = argv.withUnsafeMutableBufferPointer { argvBuffer in
             envp.withUnsafeMutableBufferPointer { envpBuffer in
-                shell.withCString { shellPointer in
+                executable.withCString { executablePointer in
                     cwd.withCString { cwdPointer in
                         pedals_forkpty_exec(
                             &master,
                             &size,
-                            shellPointer,
+                            executablePointer,
                             argvBuffer.baseAddress,
                             envpBuffer.baseAddress,
                             cwdPointer,
@@ -107,9 +102,6 @@ public final class PTYProcess: @unchecked Sendable {
 
         pid = childPid
         masterFD = master
-        // ptsname is safe here despite its static buffer: spawns are
-        // serialized on the SessionManager queue.
-        ttyPath = ptsname(master).map { String(cString: $0) }
 
         // The master stays O_NONBLOCK for its whole life: a blocking write
         // would stall the (shared) queue whenever the child stops reading
@@ -259,53 +251,6 @@ public final class PTYProcess: @unchecked Sendable {
             var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
             _ = ioctl(masterFD, TIOCSWINSZ, &size)
         }
-    }
-
-    /// Every process' `p_comm` in the shell's process group, for the title
-    /// fallback (PROTOCOL.md §6).
-    ///
-    /// The controlling terminal tracks the foreground job's process group, so
-    /// this follows commands launched by an interactive shell instead of
-    /// assuming they remain in the shell's own group. Must be called on the
-    /// queue passed to `init`.
-    public func foregroundProcessNames() -> [String] {
-        dispatchPrecondition(condition: .onQueue(queue))
-        guard !closed else { return [] }
-        let pgid = tcgetpgrp(masterFD)
-        guard pgid > 0 else { return [] }
-
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PGRP, pgid]
-        var size = 0
-        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else { return [] }
-        let count = size / MemoryLayout<kinfo_proc>.stride
-        var procs = [kinfo_proc](repeating: kinfo_proc(), count: count)
-        guard sysctl(&mib, 4, &procs, &size, nil, 0) == 0 else { return [] }
-
-        return procs.prefix(size / MemoryLayout<kinfo_proc>.stride).compactMap { proc in
-            var proc = proc
-            let name = withUnsafeBytes(of: &proc.kp_proc.p_comm) { raw in
-                String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
-            }
-            return name.isEmpty ? nil : name
-        }
-    }
-
-    /// The shell's live working directory via `proc_pidinfo` (PROTOCOL.md §4:
-    /// `cwd` in the sessions list is live). `cd` in the interactive shell moves
-    /// it; nil when the process is gone or the query fails. Must be called on
-    /// the queue passed to `init`.
-    public func currentWorkingDirectory() -> String? {
-        dispatchPrecondition(condition: .onQueue(queue))
-        guard !closed else { return nil }
-        var info = proc_vnodepathinfo()
-        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
-        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else {
-            return nil
-        }
-        let path = withUnsafeBytes(of: &info.pvi_cdir.vip_path) { raw in
-            String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
-        }
-        return path.isEmpty ? nil : path
     }
 
     public func terminate() {

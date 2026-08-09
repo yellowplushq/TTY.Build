@@ -6,6 +6,7 @@ import XCTest
 
 final class HostIdentityResetTests: XCTestCase {
     private var home: PedalsHome!
+    private var tmux: FakeTmux.Fixture!
     private let serviceURL = URL(string: "https://pedals.example")!
 
     override func setUpWithError() throws {
@@ -14,10 +15,12 @@ final class HostIdentityResetTests: XCTestCase {
                 .appendingPathComponent("pedals-reset-\(UUID().uuidString)", isDirectory: true)
         )
         try home.ensureDirectoryExists()
+        tmux = try FakeTmux.makeFixture()
     }
 
     override func tearDownWithError() throws {
         if let home { try? FileManager.default.removeItem(at: home.directory) }
+        tmux?.cleanUp()
     }
 
     func testOfflineDeleteFailureKeepsOldIdentityAndClearsJournal() throws {
@@ -259,7 +262,7 @@ final class HostIdentityResetTests: XCTestCase {
         let actions = inertActions(identity: identity)
         var daemon: Daemon? = try Daemon(
             home: home,
-            sessionOptions: SessionManager.Options(shell: "/bin/sh", shellArguments: []),
+            sessionOptions: tmux.sessionOptions(),
             serviceActions: actions
         )
         XCTAssertNotNil(daemon)
@@ -289,7 +292,7 @@ final class HostIdentityResetTests: XCTestCase {
         try longHome.save(identity: identity)
         let daemon = try Daemon(
             home: longHome,
-            sessionOptions: SessionManager.Options(shell: "/bin/sh", shellArguments: []),
+            sessionOptions: tmux.sessionOptions(),
             serviceActions: inertActions(identity: identity)
         )
 

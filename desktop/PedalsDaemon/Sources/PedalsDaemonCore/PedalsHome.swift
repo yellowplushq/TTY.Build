@@ -29,6 +29,13 @@ public struct PedalsHome: Sendable {
     /// so installed hooks survive daemon rebuilds and relocations.
     public var binDirectory: URL { directory.appendingPathComponent("bin", isDirectory: true) }
     public var hookReporterURL: URL { binDirectory.appendingPathComponent("pedals-hook") }
+    /// Private tmux server socket: every managed TTY is a tmux session on this
+    /// socket, kept isolated from any system tmux server (see
+    /// `TmuxConfiguration`).
+    public var tmuxSocketPath: String { directory.appendingPathComponent("tmux.sock").path }
+    /// tmux configuration generated for the private server. Passed via `-f`
+    /// so the user's own `~/.tmux.conf` never leaks into managed sessions.
+    public var tmuxConfigURL: URL { directory.appendingPathComponent("tmux.conf") }
 
     public func ensureDirectoryExists() throws {
         try FileManager.default.createDirectory(

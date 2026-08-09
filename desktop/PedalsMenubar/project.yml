@@ -17,6 +17,10 @@ targets:
       - Sources
       - path: Resources
         buildPhase: resources
+        # The pinned tmux build is copied into Contents/MacOS by the
+        # post-build script below, not into the bundle's Resources.
+        excludes:
+          - tmux
     dependencies:
       - package: PedalsDaemon
         product: PedalsDaemonCore
@@ -35,6 +39,20 @@ targets:
           codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" \
             --options runtime \
             "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/pedals-hook"
+      - name: Embed tmux
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          tmux_source="$SRCROOT/Resources/tmux"
+          tmux_target="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/tmux"
+          if [[ ! -f "$tmux_source" ]]; then
+            echo "warning: Resources/tmux is missing; run ./scripts/build-tmux.sh to embed the pinned tmux build. Dev builds fall back to the tmux on PATH at runtime."
+            exit 0
+          fi
+          cp "$tmux_source" "$tmux_target"
+          codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" \
+            --options runtime \
+            "$tmux_target"
     scheme:
       testTargets: []
     info:
