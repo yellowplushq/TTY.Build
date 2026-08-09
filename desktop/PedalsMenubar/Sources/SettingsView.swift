@@ -71,7 +71,6 @@ struct SettingsView: View {
         .toolbarBackground(.hidden, for: .windowToolbar)
         .frame(minWidth: 720, idealWidth: 760, minHeight: 480, idealHeight: 540)
         .onAppear {
-            NSApp.activate(ignoringOtherApps: true)
             // Dev affordance: land on a specific page for snapshots.
             switch ProcessInfo.processInfo.environment["PEDALS_SETTINGS_PAGE"] {
             case "agents": selection = .agents
