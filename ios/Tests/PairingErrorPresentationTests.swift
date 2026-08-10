@@ -52,7 +52,7 @@ final class PairingErrorPresentationTests: XCTestCase {
                 identifier: "ttybuild.pairing.website"
             ) as? UIButton
         )
-        XCTAssertEqual(link.title(for: .normal), "TTY.Build")
+        XCTAssertEqual(link.title(for: .normal), "tty.build")
         XCTAssertTrue(link.titleLabel?.adjustsFontSizeToFitWidth == true)
         XCTAssertLessThan(link.titleLabel?.minimumScaleFactor ?? 1, 1)
         XCTAssertEqual(link.titleLabel?.lineBreakMode, .byClipping)
