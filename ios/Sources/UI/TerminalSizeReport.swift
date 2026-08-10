@@ -6,7 +6,7 @@ import GhosttyTerminal
 /// Ghostty emits this report through the host input channel from the same
 /// termio critical section that applies a grid resize to terminal state, so a
 /// report is the authoritative signal that all subsequently parsed bytes meet
-/// a grid of at least this size. Pedals strips reports out of the input
+/// a grid of at least this size. TTYBuild strips reports out of the input
 /// stream (the remote pty must never receive them as keystrokes) and treats
 /// them as applied-resize events — the only safe trigger for `resize` frames.
 struct TerminalSizeReport: Equatable {

@@ -29,19 +29,19 @@ final class TerminalStatusOverlay: UIView {
         // The mask must freeze the terminal: swallow all touches while shown.
         isUserInteractionEnabled = true
 
-        dim.backgroundColor = PedalsTheme.uiCanvas.withAlphaComponent(0.45)
+        dim.backgroundColor = TTYBuildTheme.uiCanvas.withAlphaComponent(0.45)
         dim.translatesAutoresizingMaskIntoConstraints = false
         addSubview(dim)
 
-        card.backgroundColor = PedalsTheme.uiCanvas.withAlphaComponent(0.72)
+        card.backgroundColor = TTYBuildTheme.uiCanvas.withAlphaComponent(0.72)
         card.layer.cornerRadius = 12
         card.layer.cornerCurve = .continuous
         card.translatesAutoresizingMaskIntoConstraints = false
         addSubview(card)
 
-        spinner.color = PedalsTheme.uiContent
+        spinner.color = TTYBuildTheme.uiContent
         label.font = .preferredFont(forTextStyle: .footnote)
-        label.textColor = PedalsTheme.uiContent
+        label.textColor = TTYBuildTheme.uiContent
         label.textAlignment = .center
 
         let stack = UIStackView(arrangedSubviews: [spinner, label])

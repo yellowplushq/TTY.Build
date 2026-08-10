@@ -1,4 +1,4 @@
-@testable import Pedals
+@testable import TTYBuild
 import GhosttyTerminal
 import XCTest
 
@@ -71,7 +71,7 @@ final class TerminalLifecycleTests: XCTestCase {
 
     @MainActor
     func testSleepingTerminalCannotBecomeFirstResponder() {
-        let view = PedalsTerminalView(frame: .zero)
+        let view = TTYBuildTerminalView(frame: .zero)
 
         view.setTerminalInteractionEnabled(false)
         XCTAssertFalse(view.canBecomeFirstResponder)

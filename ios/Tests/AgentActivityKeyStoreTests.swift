@@ -1,8 +1,8 @@
 import CryptoKit
 import Foundation
-import PedalsKit
+import TTYBuildKit
 import XCTest
-@testable import Pedals
+@testable import TTYBuild
 
 final class AgentActivityKeyStoreTests: XCTestCase {
     func testFileStoreReplacesKeysAtomicallyAndRemovesStaleEntries() throws {
@@ -87,7 +87,7 @@ final class AgentActivityKeyStoreTests: XCTestCase {
     ) {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
-                "pedals-live-activity-keys-\(UUID().uuidString)",
+                "ttybuild-live-activity-keys-\(UUID().uuidString)",
                 isDirectory: true
             )
         try FileManager.default.createDirectory(

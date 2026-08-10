@@ -1,12 +1,12 @@
-# Pedals service protocol v2
+# tty.build service protocol v2
 
-This Worker is the only Pedals server. It combines an authenticated WebSocket
+This Worker is the only tty.build server. It combines an authenticated WebSocket
 relay, the device-to-computer binding registry, a Durable Object-owned terminal
 directory, and APNs delivery. Terminal frames remain end-to-end encrypted; D1
 never stores the pairing encryption secret, terminal bytes, titles, or working
 directories.
 
-The public origin is `https://pedals.air.build`. All API responses are JSON with
+The public origin is `https://tty.build`. All API responses are JSON with
 `Cache-Control: no-store`. JSON request bodies are limited to 16 KiB. Errors use:
 
 ```json
@@ -23,12 +23,12 @@ WebSocket routes continue to run through the Worker first; all other `GET` and
 `HEAD` requests fall through to the static asset binding.
 
 `GET /download/macos` redirects without caching to the fixed
-`Pedals-macOS.dmg` asset on the latest GitHub release. Configure the release
+`TTYBuild-macOS.dmg` asset on the latest GitHub release. Configure the release
 repository as a Wrangler variable before deployment:
 
 ```json
 "vars": {
-  "DESKTOP_RELEASE_REPOSITORY": "owner/pedals"
+  "DESKTOP_RELEASE_REPOSITORY": "owner/ttybuild"
 }
 ```
 
@@ -291,8 +291,8 @@ so `/state`, WidgetKit, Live Activities, and Watch all use exactly the same
 server-authoritative count. Unchanged heartbeats renew only DO storage and do
 not produce redundant APNs work.
 
-Binary terminal frames continue to use the Pedals v2 E2EE format and HKDF salt
-`pedals-v2`.
+Binary terminal frames continue to use the tty.build v2 E2EE format and HKDF salt
+`ttybuild-v2`.
 
 ## Push endpoints
 
@@ -395,7 +395,7 @@ then use the repository deployment script so a missing secret cannot leave the
 remote schema ahead of the deployed Worker:
 
 ```bash
-npx wrangler d1 create pedals --binding DB --update-config
+npx wrangler d1 create ttybuild --binding DB --update-config
 npx wrangler secret put APNS_PRIVATE_KEY_P8
 npx wrangler secret put APNS_KEY_ID
 npx wrangler secret put APNS_TEAM_ID
@@ -407,8 +407,8 @@ cd ..
 in D1, source control, a Wrangler `vars` entry, or logs. The deployment script
 runs the full relay tests, verifies all three secret names, applies pending D1
 migrations, and captures Wrangler's immutable `Current Version ID`. It waits
-until `https://pedals.air.build/healthz` reports that exact version on three
+until `https://tty.build/healthz` reports that exact version on three
 consecutive requests before executing the public contract, preventing an old
 edge deployment from satisfying the readiness check. The health response body
-remains `ok`; `X-Pedals-Worker-Version` identifies the serving version and all
+remains `ok`; `X-TTYBuild-Worker-Version` identifies the serving version and all
 health responses use `Cache-Control: no-store`.

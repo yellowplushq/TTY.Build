@@ -1,5 +1,5 @@
 import Combine
-import PedalsKit
+import TTYBuildKit
 import UIKit
 
 /// Process-local only: a fresh app launch creates a fresh hint opportunity,
@@ -119,7 +119,7 @@ final class MainViewController: UIViewController {
     /// the real unpaired state.
     private var hidesUnpairedStateForAgentFixture: Bool {
         #if DEBUG
-        ProcessInfo.processInfo.environment["PEDALS_HOME_AGENTS_FIXTURE"] == "1"
+        ProcessInfo.processInfo.environment["TTYBUILD_HOME_AGENTS_FIXTURE"] == "1"
         #else
         false
         #endif
@@ -167,7 +167,7 @@ final class MainViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = PedalsTheme.uiCanvas
+        view.backgroundColor = TTYBuildTheme.uiCanvas
         buildLayout()
         bind()
     }

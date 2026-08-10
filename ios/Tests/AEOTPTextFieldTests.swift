@@ -1,5 +1,5 @@
 import XCTest
-@testable import Pedals
+@testable import TTYBuild
 
 @MainActor
 final class AEOTPTextFieldTests: XCTestCase {

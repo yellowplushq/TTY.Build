@@ -78,7 +78,7 @@ async function bind(serviceURL, code, outputPath) {
   const key = Buffer.from(hkdfSync(
     "sha256",
     sharedSecret,
-    Buffer.from("Pedals pairing v3"),
+    Buffer.from("tty.build pairing v3"),
     Buffer.from(claimId),
     32,
   ));

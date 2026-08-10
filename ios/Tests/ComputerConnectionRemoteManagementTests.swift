@@ -1,6 +1,6 @@
 import Combine
-@testable import Pedals
-import PedalsKit
+@testable import TTYBuild
+import TTYBuildKit
 import XCTest
 
 /// Reply handling for the remote hook/update ctl messages on the iOS side

@@ -52,7 +52,7 @@ function runWrangler(args, input, redactionValue = "") {
     encoding: "utf8",
     env: {
       ...process.env,
-      WRANGLER_LOG_PATH: "/tmp/pedals-wrangler-apns.log",
+      WRANGLER_LOG_PATH: "/tmp/ttybuild-wrangler-apns.log",
     },
     input,
     stdio: ["pipe", "pipe", "pipe"],
@@ -110,7 +110,7 @@ const signingDirectory = join(
   homedir(),
   "Library",
   "Application Support",
-  "Pedals",
+  "TTYBuild",
   "Signing",
 );
 const securePath = join(signingDirectory, `AuthKey_${keyId}.p8`);

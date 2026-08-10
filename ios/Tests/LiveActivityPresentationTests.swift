@@ -1,7 +1,7 @@
 import ActivityKit
-import PedalsKit
+import TTYBuildKit
 import XCTest
-@testable import Pedals
+@testable import TTYBuild
 
 final class LiveActivityPresentationTests: XCTestCase {
     func testNoAgentsAlwaysUsesTerminalPresentation() {

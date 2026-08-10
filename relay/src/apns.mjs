@@ -1,7 +1,7 @@
 // APNs provider for the Cloudflare Workers runtime.
 //
 // This module intentionally exposes a very small, allow-listed surface. A
-// caller chooses a Pedals surface, not arbitrary APNs headers or payloads, so
+// caller chooses a TTYBuild surface, not arbitrary APNs headers or payloads, so
 // a compromised database row cannot turn the relay into a general push proxy.
 
 const TOKEN_MAX_AGE_SECONDS = 50 * 60;
@@ -322,7 +322,7 @@ function liveActivityPayload(surface, value, now) {
     if (activity.alert || surface === "liveactivity-start") {
       const body = AGENT_ACTIVITY_ALERTS[activity.state];
       if (!body) throw new TypeError("agent activity state cannot alert");
-      aps.alert = { title: "Pedals", body };
+      aps.alert = { title: "TTYBuild", body };
     }
   }
 
@@ -386,7 +386,7 @@ function liveActivityPayload(surface, value, now) {
   return { aps };
 }
 
-/** Build the only APNs payload accepted for a Pedals push surface. */
+/** Build the only APNs payload accepted for a TTYBuild push surface. */
 export function buildApnsPayload(surface, payload, now = Date.now()) {
   if (!Object.hasOwn(APNS_SURFACES, surface)) {
     throw new TypeError("endpoint.surface is not supported");
@@ -408,12 +408,12 @@ export function buildApnsPayload(surface, payload, now = Date.now()) {
     return {
       aps: {
         alert: {
-          title: "Pedals",
+          title: "TTYBuild",
           body: `“${computerName}” wants to connect to this iPhone`,
         },
         sound: "default",
       },
-      pedals: { kind: "reverse-pairing-claim" },
+      ttybuild: { kind: "reverse-pairing-claim" },
     };
   }
   return liveActivityPayload(surface, payload, now);

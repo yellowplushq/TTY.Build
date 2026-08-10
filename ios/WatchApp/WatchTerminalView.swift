@@ -1,4 +1,4 @@
-import PedalsKit
+import TTYBuildKit
 import SwiftUI
 
 struct WatchTerminalView: View {
@@ -222,10 +222,10 @@ private struct TerminalGridLineView: View {
             if run.style.inverted {
                 swap(&foreground, &background)
                 if foreground == nil { foreground = .black }
-                if background == nil { background = PedalsTheme.content }
+                if background == nil { background = TTYBuildTheme.content }
             }
 
-            value.foregroundColor = (foreground ?? PedalsTheme.content)
+            value.foregroundColor = (foreground ?? TTYBuildTheme.content)
                 .opacity(run.style.faint ? 0.55 : 1)
             if let background { value.backgroundColor = background }
             var font = Font.system(
@@ -290,8 +290,8 @@ struct WatchTerminalFixtureView: View {
     private static let snapshot: TerminalTextProjection.Snapshot = {
         var projection = TerminalTextProjection(cols: 80, rows: 24)
         let output = ([
-            "$ pedals status --verbose --include-all-computers --format human-readable",
-            "Connected to Studio Mac through the encrypted Pedals relay.",
+            "$ ttybuild status --verbose --include-all-computers --format human-readable",
+            "Connected to Studio Mac through the encrypted tty.build relay.",
             "This eighty-column terminal row keeps every cell and scales to the watch width.",
             "中文、emoji 🖥️ and wide glyphs remain aligned while ANSI styling is removed.",
         ] + (1 ... 18).map { "log \($0): terminal grid rows remain vertically scrollable" })
@@ -313,7 +313,7 @@ struct WatchTerminalFixtureView: View {
 
 #Preview("Terminal") {
     var projection = TerminalTextProjection(cols: 80, rows: 24)
-    projection.feed(Data("$ pedals status\n3 TTYs running\n\u{1B}[32mconnected\u{1B}[0m\n".utf8))
+    projection.feed(Data("$ ttybuild status\n3 TTYs running\n\u{1B}[32mconnected\u{1B}[0m\n".utf8))
     return NavigationStack {
         WatchTerminalContent(
             snapshot: projection.snapshot,

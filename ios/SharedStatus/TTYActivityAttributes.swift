@@ -1,7 +1,7 @@
 import ActivityKit
 import CryptoKit
 import Foundation
-import PedalsKit
+import TTYBuildKit
 
 public struct TTYActivityAttributes: ActivityAttributes, Codable, Hashable, Sendable {
     public struct ContentState: Codable, Hashable, Sendable {

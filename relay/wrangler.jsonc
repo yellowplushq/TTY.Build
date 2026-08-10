@@ -1,10 +1,10 @@
 {
 	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "pedals-relay",
+	"name": "tty-build-relay",
 	"account_id": "8bfe8b1e792b46613348bd7de669da65",
 	"main": "src/worker.mjs",
 	"vars": {
-		"DESKTOP_RELEASE_REPOSITORY": "yellowplushq/pedals"
+		"DESKTOP_RELEASE_REPOSITORY": "yellowplushq/tty.build"
 	},
 	"assets": {
 		"directory": "./public",
@@ -25,7 +25,7 @@
 	},
 	"routes": [
 		{
-			"pattern": "pedals.air.build",
+			"pattern": "tty.build",
 			"custom_domain": true
 		}
 	],
@@ -44,9 +44,9 @@
 	"d1_databases": [
 		{
 			"binding": "DB",
-			"database_name": "pedals",
+			"database_name": "tty-build",
 			"migrations_dir": "migrations",
-			"database_id": "e3476f0a-22c8-4675-a041-09479795f63b"
+			"database_id": "834fb091-d5c8-44d2-abe1-97dbaa9acb3a"
 		}
 	],
 	"ratelimits": [

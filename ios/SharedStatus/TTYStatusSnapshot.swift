@@ -161,7 +161,7 @@ public struct TTYStatusSnapshot: Codable, Hashable, Sendable {
 
 }
 
-public struct PedalsStatusCredential: Codable, Hashable, Sendable {
+public struct TTYBuildStatusCredential: Codable, Hashable, Sendable {
     public let serviceURL: URL
     public let clientID: String
     public let statusToken: String
@@ -173,7 +173,7 @@ public struct PedalsStatusCredential: Codable, Hashable, Sendable {
     }
 }
 
-public enum PedalsStatusConstants {
+public enum TTYBuildStatusConstants {
     public static let appGroup = "group.air.build.pedals"
     public static let phoneWidgetKind = "air.build.pedals.tty-count"
     public static let watchWidgetKind = "air.build.pedals.watch.tty-count"

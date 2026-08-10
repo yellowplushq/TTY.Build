@@ -10,7 +10,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        if ProcessInfo.processInfo.environment["PEDALS_GHOSTTY_DEBUG"] != nil {
+        if ProcessInfo.processInfo.environment["TTYBUILD_GHOSTTY_DEBUG"] != nil {
             TerminalDebugLog.isEnabled = true
             TerminalDebugLog.categories = .all
         }

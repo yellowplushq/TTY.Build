@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pedals v2 end-to-end test.
+# TTYBuild v2 end-to-end test.
 #
 # Local Worker + D1 -> desktop pairing code -> durable client binding ->
 # server-authoritative TTY aggregation -> iOS code entry -> encrypted
@@ -19,10 +19,10 @@ BUNDLE_ID="air.build.pedals"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 
 mkdir -p "$ARTIFACTS"
-PEDALS_E2E_HOME="$(mktemp -d /tmp/pedals-e2e.XXXXXX)"
-PEDALS_E2E_D1="$(mktemp -d /tmp/pedals-e2e-d1.XXXXXX)"
-STATUS_CREDENTIAL="$PEDALS_E2E_HOME/status-client.json"
-export PEDALS_HOME="$PEDALS_E2E_HOME"
+TTYBUILD_E2E_HOME="$(mktemp -d /tmp/ttybuild-e2e.XXXXXX)"
+TTYBUILD_E2E_D1="$(mktemp -d /tmp/ttybuild-e2e-d1.XXXXXX)"
+STATUS_CREDENTIAL="$TTYBUILD_E2E_HOME/status-client.json"
+export TTYBUILD_HOME="$TTYBUILD_E2E_HOME"
 
 log() { printf '\033[1;36m[e2e]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[e2e] FAIL:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -45,7 +45,7 @@ cleanup() {
   if [[ -n "$RELAY_PID" ]]; then
     wait "$RELAY_PID" 2>/dev/null || true
   fi
-  rm -rf "$PEDALS_E2E_HOME" "$PEDALS_E2E_D1"
+  rm -rf "$TTYBUILD_E2E_HOME" "$TTYBUILD_E2E_D1"
 }
 trap cleanup EXIT
 
@@ -58,7 +58,7 @@ log "applying the v2 schema to an isolated local D1"
 (
   cd "$ROOT/relay"
   WRANGLER_LOG_PATH="$ARTIFACTS/wrangler-e2e.log" \
-    CI=1 npx wrangler d1 migrations apply pedals --local --persist-to "$PEDALS_E2E_D1"
+    CI=1 npx wrangler d1 migrations apply tty-build --local --persist-to "$TTYBUILD_E2E_D1"
 )
 
 log "starting the Cloudflare Worker on :$RELAY_PORT"
@@ -66,7 +66,7 @@ log "starting the Cloudflare Worker on :$RELAY_PORT"
   cd "$ROOT/relay"
   WRANGLER_LOG_PATH="$ARTIFACTS/wrangler-e2e.log" \
     npx wrangler dev --local --ip 127.0.0.1 --port "$RELAY_PORT" \
-      --persist-to "$PEDALS_E2E_D1"
+      --persist-to "$TTYBUILD_E2E_D1"
 ) >"$ARTIFACTS/relay-e2e.log" 2>&1 &
 RELAY_PID=$!
 for _ in $(seq 1 80); do
@@ -79,31 +79,31 @@ curl -fsS "$SERVICE_URL/healthz" >/dev/null || fail "Worker /healthz not respond
 # ---- 2. desktop registration and binding graph -------------------------
 
 log "building and starting the desktop daemon"
-swift build --package-path "$ROOT/desktop/PedalsDaemon" >/dev/null
-PEDALS_BIN="$(swift build --package-path "$ROOT/desktop/PedalsDaemon" --show-bin-path)/pedals"
-[[ -x "$PEDALS_BIN" ]] || fail "daemon binary not found at $PEDALS_BIN"
+swift build --package-path "$ROOT/desktop/TTYBuildDaemon" >/dev/null
+TTYBUILD_BIN="$(swift build --package-path "$ROOT/desktop/TTYBuildDaemon" --show-bin-path)/ttybuild"
+[[ -x "$TTYBUILD_BIN" ]] || fail "daemon binary not found at $TTYBUILD_BIN"
 
-"$PEDALS_BIN" serve --service "$SERVICE_URL" \
+"$TTYBUILD_BIN" serve --service "$SERVICE_URL" \
   >"$ARTIFACTS/daemon-e2e.log" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 80); do
-  [[ -S "$PEDALS_E2E_HOME/pedals.sock" && -f "$PEDALS_E2E_HOME/identity.json" ]] && break
+  [[ -S "$TTYBUILD_E2E_HOME/ttybuild.sock" && -f "$TTYBUILD_E2E_HOME/identity.json" ]] && break
   kill -0 "$DAEMON_PID" 2>/dev/null || fail "daemon exited during startup"
   sleep 0.25
 done
-[[ -S "$PEDALS_E2E_HOME/pedals.sock" ]] || fail "daemon control socket never appeared"
+[[ -S "$TTYBUILD_E2E_HOME/ttybuild.sock" ]] || fail "daemon control socket never appeared"
 
-PAIR_CODE="$("$PEDALS_BIN" pair | sed -n 's/^Pairing code: //p' | tr -d ' ')"
+PAIR_CODE="$("$TTYBUILD_BIN" pair | sed -n 's/^Pairing code: //p' | tr -d ' ')"
 [[ "$PAIR_CODE" =~ ^[0-9]{8}$ ]] || fail "daemon did not emit an 8-digit pairing code"
 node "$ROOT/scripts/e2e-status-client.mjs" bind \
   "$SERVICE_URL" "$PAIR_CODE" "$STATUS_CREDENTIAL"
 
 log "checking server-authoritative TTY aggregation"
 node "$ROOT/scripts/e2e-status-client.mjs" wait "$STATUS_CREDENTIAL" 0
-SESSION_ID="$("$PEDALS_BIN" new | sed -n 's/^created session //p')"
+SESSION_ID="$("$TTYBUILD_BIN" new | sed -n 's/^created session //p')"
 [[ "$SESSION_ID" =~ ^[0-9]+$ ]] || fail "could not parse created session id"
 node "$ROOT/scripts/e2e-status-client.mjs" wait "$STATUS_CREDENTIAL" 1
-"$PEDALS_BIN" kill "$SESSION_ID" >/dev/null
+"$TTYBUILD_BIN" kill "$SESSION_ID" >/dev/null
 node "$ROOT/scripts/e2e-status-client.mjs" wait "$STATUS_CREDENTIAL" 0
 
 # ---- 3. iOS pairing and encrypted relay handshake ----------------------
@@ -129,29 +129,29 @@ fi
 xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null
 
 xcodebuild \
-  -project "$ROOT/ios/Pedals.xcodeproj" \
-  -scheme Pedals \
+  -project "$ROOT/ios/TTYBuild.xcodeproj" \
+  -scheme TTYBuild \
   -destination "platform=iOS Simulator,id=$SIM_UDID" \
   -derivedDataPath "$ARTIFACTS/dd-ios" \
   -quiet build || fail "iOS build failed"
 
-APP_PATH="$ARTIFACTS/dd-ios/Build/Products/Debug-iphonesimulator/Pedals.app"
+APP_PATH="$ARTIFACTS/dd-ios/Build/Products/Debug-iphonesimulator/TTYBuild.app"
 [[ -d "$APP_PATH" ]] || fail "built app not found at $APP_PATH"
 xcrun simctl terminate "$SIM_UDID" "$BUNDLE_ID" 2>/dev/null || true
 xcrun simctl uninstall "$SIM_UDID" "$BUNDLE_ID" 2>/dev/null || true
 xcrun simctl install "$SIM_UDID" "$APP_PATH"
 
-IOS_PAIR_CODE="$("$PEDALS_BIN" pair | sed -n 's/^Pairing code: //p' | tr -d ' ')"
+IOS_PAIR_CODE="$("$TTYBUILD_BIN" pair | sed -n 's/^Pairing code: //p' | tr -d ' ')"
 [[ "$IOS_PAIR_CODE" =~ ^[0-9]{8}$ ]] || fail "no fresh iOS pairing code"
-SIMCTL_CHILD_PEDALS_SERVICE_URL="$SERVICE_URL" \
-SIMCTL_CHILD_PEDALS_RESET_PAIRING=1 \
+SIMCTL_CHILD_TTYBUILD_SERVICE_URL="$SERVICE_URL" \
+SIMCTL_CHILD_TTYBUILD_RESET_PAIRING=1 \
   xcrun simctl launch "$SIM_UDID" "$BUNDLE_ID" >/dev/null
 
 # Drive the same visible controls a user sees. Baguette uses accessibility
 # labels to locate each control, so this stays independent of device size.
 tap_accessibility_label() {
   local label="$1"
-  local ui_json="$PEDALS_E2E_HOME/ui.json"
+  local ui_json="$TTYBUILD_E2E_HOME/ui.json"
   local point=""
   for _ in $(seq 1 40); do
     baguette describe-ui --udid "$SIM_UDID" --output "$ui_json" >/dev/null 2>&1
@@ -210,7 +210,7 @@ sleep 3
 # iOS 26 simulators surface the notification permission prompt at first
 # launch (Live Activity push-to-start token observation). Clear it before
 # driving the app's own controls; absent prompt is not a failure.
-ALERT_UI_JSON="$PEDALS_E2E_HOME/alert-ui.json"
+ALERT_UI_JSON="$TTYBUILD_E2E_HOME/alert-ui.json"
 for _ in $(seq 1 3); do
   baguette describe-ui --udid "$SIM_UDID" --output "$ALERT_UI_JSON" >/dev/null 2>&1
   grep -q '"label":"Allow"' "$ALERT_UI_JSON" || break
@@ -218,31 +218,31 @@ for _ in $(seq 1 3); do
   sleep 1
 done
 
-tap_accessibility_label "pedals.onboarding.pair"
+tap_accessibility_label "ttybuild.onboarding.pair"
 
 # Simulator HID delivery can occasionally acknowledge a tap without UIKit
 # receiving it. Prove that navigation completed and retry the source control
 # instead of treating one dropped synthetic tap as an application failure.
-PAIRING_UI_JSON="$PEDALS_E2E_HOME/pairing-ui.json"
+PAIRING_UI_JSON="$TTYBUILD_E2E_HOME/pairing-ui.json"
 for _ in $(seq 1 3); do
   sleep 1
   baguette describe-ui --udid "$SIM_UDID" --output "$PAIRING_UI_JSON" >/dev/null 2>&1
-  if grep -q '"identifier":"pedals.pairing.code"' "$PAIRING_UI_JSON"; then
+  if grep -q '"identifier":"ttybuild.pairing.code"' "$PAIRING_UI_JSON"; then
     break
   fi
-  tap_accessibility_label "pedals.onboarding.pair"
+  tap_accessibility_label "ttybuild.onboarding.pair"
 done
-grep -q '"identifier":"pedals.pairing.code"' "$PAIRING_UI_JSON" \
+grep -q '"identifier":"ttybuild.pairing.code"' "$PAIRING_UI_JSON" \
   || fail "pairing screen did not appear after tapping Connect"
-tap_accessibility_label "pedals.pairing.code"
+tap_accessibility_label "ttybuild.pairing.code"
 baguette type --udid "$SIM_UDID" --text "$IOS_PAIR_CODE" >/dev/null
-tap_accessibility_label "pedals.pairing.submit"
+tap_accessibility_label "ttybuild.pairing.submit"
 
 log "waiting for the iOS client to prove the E2EE relay handshake"
 CLIENT_STATE="none"
 for attempt in $(seq 1 3); do
   for _ in $(seq 1 8); do
-    CLIENT_STATE="$("$PEDALS_BIN" status | sed -n 's/^client: //p')"
+    CLIENT_STATE="$("$TTYBUILD_BIN" status | sed -n 's/^client: //p')"
     [[ "$CLIENT_STATE" == "connected" ]] && break 2
     sleep 0.5
   done
@@ -251,23 +251,23 @@ for attempt in $(seq 1 3); do
   # it. Retry only while the pairing button is still on screen; after a real
   # submit it is disabled and repeated taps are harmless, and after success it
   # disappears entirely.
-  SUBMIT_UI_JSON="$PEDALS_E2E_HOME/submit-ui.json"
+  SUBMIT_UI_JSON="$TTYBUILD_E2E_HOME/submit-ui.json"
   baguette describe-ui --udid "$SIM_UDID" --output "$SUBMIT_UI_JSON" >/dev/null 2>&1
-  if grep -q '"identifier":"pedals.pairing.submit"' "$SUBMIT_UI_JSON"; then
-    tap_accessibility_label "pedals.pairing.submit"
+  if grep -q '"identifier":"ttybuild.pairing.submit"' "$SUBMIT_UI_JSON"; then
+    tap_accessibility_label "ttybuild.pairing.submit"
   else
     break
   fi
 done
 for _ in $(seq 1 56); do
   [[ "$CLIENT_STATE" == "connected" ]] && break
-  CLIENT_STATE="$("$PEDALS_BIN" status | sed -n 's/^client: //p')"
+  CLIENT_STATE="$("$TTYBUILD_BIN" status | sed -n 's/^client: //p')"
   [[ "$CLIENT_STATE" == "connected" ]] && break
   sleep 0.5
 done
 [[ "$CLIENT_STATE" == "connected" ]] || fail "iOS client never completed the relay handshake"
 
-"$PEDALS_BIN" new >/dev/null
+"$TTYBUILD_BIN" new >/dev/null
 sleep 3
 SCREENSHOT="$ARTIFACTS/ios-terminal.png"
 xcrun simctl io "$SIM_UDID" screenshot "$SCREENSHOT" >/dev/null

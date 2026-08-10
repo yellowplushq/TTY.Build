@@ -1,12 +1,12 @@
-# Pedals visual style
+# tty.build visual style
 
-Pedals uses a deliberately monochrome visual system. The application shell,
+tty.build uses a deliberately monochrome visual system. The application shell,
 brand mark, controls, widgets, Live Activity, Dynamic Island, Watch app, and
 menu-bar app use only black, white, and neutral opacity levels by default.
 
 ## Semantic palette
 
-Apple-platform surfaces must use `PedalsTheme` rather than raw decorative
+Apple-platform surfaces must use `TTYBuildTheme` rather than raw decorative
 colors:
 
 - `canvas`: black backgrounds.
@@ -28,7 +28,7 @@ the remote program or the user; they are not application chrome and may use
 color. Theme/background swatches may preview those choices. Monochrome
 pairing-code panels retain maximum contrast for readability.
 
-When adding a surface, prefer semantic roles from `PedalsTheme`. A new hue needs
+When adding a surface, prefer semantic roles from `TTYBuildTheme`. A new hue needs
 an information-bearing purpose and must not duplicate meaning already conveyed
 by text or shape.
 

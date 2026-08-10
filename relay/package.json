@@ -1,8 +1,8 @@
 {
-  "name": "pedals-relay",
+  "name": "tty-build-relay",
   "version": "1.0.0",
   "private": true,
-  "description": "Pedals authenticated relay, binding state, and APNs provider",
+  "description": "TTYBuild authenticated relay, binding state, and APNs provider",
   "type": "module",
   "main": "src/worker.mjs",
   "engines": {
@@ -13,8 +13,8 @@
     "dev": "wrangler dev --local",
     "deploy": "wrangler deploy",
     "deploy:dry-run": "wrangler deploy --dry-run",
-    "db:migrate:local": "wrangler d1 migrations apply pedals --local",
-    "db:migrate:remote": "wrangler d1 migrations apply pedals --remote",
+    "db:migrate:local": "wrangler d1 migrations apply tty-build --local",
+    "db:migrate:remote": "wrangler d1 migrations apply tty-build --remote",
     "test": "npm run test:node && npm run test:worker",
     "test:node": "node --test test/vectors.test.mjs test/apns.unit.test.mjs test/deploy-output.unit.test.mjs test/site.unit.test.mjs test/paired-zip.unit.test.mjs",
     "test:worker": "vitest run --max-workers=1 --no-isolate",

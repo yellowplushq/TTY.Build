@@ -57,14 +57,14 @@ function parseRelayChannel(url, extraKeys = []) {
 
 function trustedRelayRequest(request, identity, computerId, channel) {
   const headers = new Headers(request.headers);
-  headers.set("x-pedals-role", identity.role);
-  headers.set("x-pedals-principal-id", identity.principalId);
-  headers.set("x-pedals-computer-id", computerId);
-  headers.set("x-pedals-channel", channel);
+  headers.set("x-ttybuild-role", identity.role);
+  headers.set("x-ttybuild-principal-id", identity.principalId);
+  headers.set("x-ttybuild-computer-id", computerId);
+  headers.set("x-ttybuild-channel", channel);
   // Upgrades must never smuggle HTTP-transport routing into the actor.
-  headers.delete("x-pedals-http-op");
-  headers.delete("x-pedals-poll-session");
-  headers.delete("x-pedals-poll-after");
+  headers.delete("x-ttybuild-http-op");
+  headers.delete("x-ttybuild-poll-session");
+  headers.delete("x-ttybuild-poll-after");
   return new Request(request, { headers });
 }
 
@@ -136,14 +136,14 @@ async function handleRelayHttp(request, env, url) {
   }
 
   const headers = new Headers(request.headers);
-  headers.set("x-pedals-role", identity.role);
-  headers.set("x-pedals-principal-id", identity.principalId);
-  headers.set("x-pedals-computer-id", computerId);
-  headers.set("x-pedals-channel", channel);
-  headers.set("x-pedals-http-op", isPoll ? "poll" : "send");
+  headers.set("x-ttybuild-role", identity.role);
+  headers.set("x-ttybuild-principal-id", identity.principalId);
+  headers.set("x-ttybuild-computer-id", computerId);
+  headers.set("x-ttybuild-channel", channel);
+  headers.set("x-ttybuild-http-op", isPoll ? "poll" : "send");
   if (isPoll) {
-    headers.set("x-pedals-poll-session", token);
-    if (after !== null) headers.set("x-pedals-poll-after", after);
+    headers.set("x-ttybuild-poll-session", token);
+    if (after !== null) headers.set("x-ttybuild-poll-after", after);
   }
   return env.RELAY_CHANNELS.getByName(computerId).fetch(
     new Request(request, { headers }),
@@ -353,7 +353,7 @@ const worker = {
           headers: {
             "cache-control": "no-store",
             "content-type": "text/plain; charset=utf-8",
-            "x-pedals-worker-version": workerVersionId(env),
+            "x-ttybuild-worker-version": workerVersionId(env),
           },
         });
       }

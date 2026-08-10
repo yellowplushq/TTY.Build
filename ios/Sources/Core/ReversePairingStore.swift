@@ -1,5 +1,5 @@
 import Foundation
-import PedalsKit
+import TTYBuildKit
 import Security
 
 @MainActor
@@ -19,7 +19,7 @@ protocol ReversePairingServiceClient: AnyObject {
     ) throws -> ComputerBinding
 }
 
-extension PedalsServiceAPI: ReversePairingServiceClient {}
+extension TTYBuildServiceAPI: ReversePairingServiceClient {}
 
 /// Owns the phone's long-lived enrollment token: the 8-digit code embedded in
 /// the desktop install command plus the durable Curve25519 private key that
@@ -59,7 +59,7 @@ final class ReversePairingStore {
 
     init(
         pairingStore: PairingStore,
-        apiFactory: @escaping APIFactory = { PedalsServiceAPI(serviceURL: $0) },
+        apiFactory: @escaping APIFactory = { TTYBuildServiceAPI(serviceURL: $0) },
         stateReader: @escaping StateReader = { try ReversePairingStore.readKeychainState() },
         stateWriter: @escaping StateWriter = { try ReversePairingStore.writeKeychainState($0) }
     ) {
@@ -119,7 +119,7 @@ final class ReversePairingStore {
                 token = try await api.registerReversePairingToken(
                     as: identity, reusingPrivateKey: reusedKey
                 )
-            } catch PedalsServiceAPI.APIError.rejected(let status, _) where status == 401 {
+            } catch TTYBuildServiceAPI.APIError.rejected(let status, _) where status == 401 {
                 // The stored identity was swept while unpaired; mint a fresh
                 // one and retry once.
                 let identity = try await identityRecreator(serviceURL)

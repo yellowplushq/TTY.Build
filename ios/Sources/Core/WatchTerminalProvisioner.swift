@@ -1,5 +1,5 @@
 import Foundation
-import PedalsKit
+import TTYBuildKit
 import Security
 
 @MainActor
@@ -11,7 +11,7 @@ protocol WatchTerminalServiceClient: AnyObject {
     ) async throws -> Int
 }
 
-extension PedalsServiceAPI: WatchTerminalServiceClient {}
+extension TTYBuildServiceAPI: WatchTerminalServiceClient {}
 
 /// Owns the Watch's independent relay principal. The iPhone authorizes the
 /// service to copy only its current binding edges to this principal, then sends
@@ -31,7 +31,7 @@ final class WatchTerminalProvisioner {
 
     convenience init() {
         self.init(
-            apiFactory: { PedalsServiceAPI(serviceURL: $0) },
+            apiFactory: { TTYBuildServiceAPI(serviceURL: $0) },
             stateReader: { try Self.readKeychainState() },
             stateWriter: { try Self.writeKeychainState($0) }
         )
@@ -67,7 +67,7 @@ final class WatchTerminalProvisioner {
             delegate = try await createAndPersistIdentity(using: api)
         }
         guard var resolvedDelegate = delegate else {
-            throw PedalsServiceAPI.APIError.invalidResponse
+            throw TTYBuildServiceAPI.APIError.invalidResponse
         }
 
         do {
@@ -105,7 +105,7 @@ final class WatchTerminalProvisioner {
     }
 
     private static func isInvalidDelegate(_ error: Error) -> Bool {
-        guard case PedalsServiceAPI.APIError.rejected(let status, _) = error else {
+        guard case TTYBuildServiceAPI.APIError.rejected(let status, _) = error else {
             return false
         }
         return status == 403

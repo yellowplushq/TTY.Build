@@ -208,10 +208,10 @@ function parseTrustedUpgrade(request) {
   ) {
     return null;
   }
-  const computerId = request.headers.get("x-pedals-computer-id");
-  const channel = request.headers.get("x-pedals-channel");
-  const role = request.headers.get("x-pedals-role");
-  const principalId = request.headers.get("x-pedals-principal-id");
+  const computerId = request.headers.get("x-ttybuild-computer-id");
+  const channel = request.headers.get("x-ttybuild-channel");
+  const role = request.headers.get("x-ttybuild-role");
+  const principalId = request.headers.get("x-ttybuild-principal-id");
   if (
     !isId(computerId) ||
     !channel ||
@@ -224,14 +224,14 @@ function parseTrustedUpgrade(request) {
 }
 
 function parseTrustedHttpOp(request) {
-  const op = request.headers.get("x-pedals-http-op");
+  const op = request.headers.get("x-ttybuild-http-op");
   if (op !== "poll" && op !== "send") return null;
   if (op === "poll" && request.method !== "GET") return null;
   if (op === "send" && request.method !== "POST") return null;
-  const computerId = request.headers.get("x-pedals-computer-id");
-  const channel = request.headers.get("x-pedals-channel");
-  const role = request.headers.get("x-pedals-role");
-  const principalId = request.headers.get("x-pedals-principal-id");
+  const computerId = request.headers.get("x-ttybuild-computer-id");
+  const channel = request.headers.get("x-ttybuild-channel");
+  const role = request.headers.get("x-ttybuild-role");
+  const principalId = request.headers.get("x-ttybuild-principal-id");
   // The HTTP transport exists for clients that cannot hold a WebSocket; hosts
   // always use sockets, so a host bearer on this surface is a protocol error.
   if (!isId(computerId) || !channel || role !== "client" || !isId(principalId)) {
@@ -240,9 +240,9 @@ function parseTrustedHttpOp(request) {
   if (op === "send") {
     return { op, computerId, channel, role, principalId };
   }
-  const token = request.headers.get("x-pedals-poll-session");
+  const token = request.headers.get("x-ttybuild-poll-session");
   if (typeof token !== "string" || !HTTP_SESSION_TOKEN.test(token)) return null;
-  const afterHeader = request.headers.get("x-pedals-poll-after");
+  const afterHeader = request.headers.get("x-ttybuild-poll-after");
   let after = null;
   if (afterHeader !== null && afterHeader !== "") {
     if (!HTTP_POLL_AFTER.test(afterHeader)) return null;
@@ -263,12 +263,12 @@ function base64FromBytes(bytes) {
 function parseInternalAction(request) {
   if (request.method !== "POST") return null;
   const path = new URL(request.url).pathname;
-  const computerId = request.headers.get("x-pedals-computer-id");
+  const computerId = request.headers.get("x-ttybuild-computer-id");
   if (!isId(computerId)) return null;
   if (path === "/internal/revoke-computer") {
     return { type: "computer", computerId };
   }
-  const principalId = request.headers.get("x-pedals-principal-id");
+  const principalId = request.headers.get("x-ttybuild-principal-id");
   if (path === "/internal/revoke-client" && isId(principalId)) {
     return { type: "client", computerId, principalId };
   }
@@ -781,7 +781,7 @@ export class RelayChannel extends DurableObject {
     }
     return new Response(null, {
       status: 204,
-      headers: { "x-pedals-closed-sockets": String(closed) },
+      headers: { "x-ttybuild-closed-sockets": String(closed) },
     });
   }
 

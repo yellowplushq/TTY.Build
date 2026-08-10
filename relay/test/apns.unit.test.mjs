@@ -255,7 +255,7 @@ test("embeds opaque agent content and alerts attention updates plus starts", () 
   };
   const alerting = buildApnsPayload("liveactivity-update", base);
   assert.deepEqual(alerting.aps.alert, {
-    title: "Pedals", body: "An agent needs your input",
+    title: "TTYBuild", body: "An agent needs your input",
   });
   assert.equal(alerting.aps.sound, undefined);
   assert.equal(alerting.aps["content-state"].recentAgentSealed, sealed);
@@ -288,7 +288,7 @@ test("embeds opaque agent content and alerts attention updates plus starts", () 
     activity: { ...base.activity, state: "running", alert: false },
   });
   assert.deepEqual(workingStart.aps.alert, {
-    title: "Pedals", body: "An agent started working",
+    title: "TTYBuild", body: "An agent started working",
   });
   assert.equal(workingStart.aps.sound, undefined);
 });

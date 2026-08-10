@@ -32,7 +32,7 @@ private struct WatchTTYProvider: TimelineProvider {
         Task {
             let snapshot: TTYStatusSnapshot
             do {
-                snapshot = try await PedalsStatusRuntime.refreshState()
+                snapshot = try await TTYBuildStatusRuntime.refreshState()
             } catch {
                 var cached = StatusSharedStore.snapshot()
                 cached.stale = true
@@ -51,14 +51,14 @@ private struct WatchTTYProvider: TimelineProvider {
 struct WatchTTYCountWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(
-            kind: PedalsStatusConstants.watchWidgetKind,
+            kind: TTYBuildStatusConstants.watchWidgetKind,
             provider: WatchTTYProvider()
         ) { entry in
             WatchTTYCountView(entry: entry)
-                .foregroundStyle(PedalsTheme.content)
-                .tint(PedalsTheme.content)
+                .foregroundStyle(TTYBuildTheme.content)
+                .tint(TTYBuildTheme.content)
                 .widgetAccentable(false)
-                .containerBackground(PedalsTheme.canvas, for: .widget)
+                .containerBackground(TTYBuildTheme.canvas, for: .widget)
         }
         .configurationDisplayName("Running TTYs")
         .description("Your running terminal count.")
@@ -104,14 +104,14 @@ private struct WatchTTYCountView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("TTY")
                         .font(.caption2)
-                        .foregroundStyle(PedalsTheme.secondaryContent)
+                        .foregroundStyle(TTYBuildTheme.secondaryContent)
                     if entry.snapshot.agentsWaiting > 0 {
                         Label(
                             "\(entry.snapshot.agentsWaiting) waiting",
                             systemImage: "sparkles"
                         )
                         .font(.caption2)
-                        .foregroundStyle(PedalsTheme.warning)
+                        .foregroundStyle(TTYBuildTheme.warning)
                         .lineLimit(1)
                     } else if entry.snapshot.agentsRunning > 0 {
                         Label(
@@ -119,7 +119,7 @@ private struct WatchTTYCountView: View {
                             systemImage: "sparkles"
                         )
                         .font(.caption2)
-                        .foregroundStyle(PedalsTheme.secondaryContent)
+                        .foregroundStyle(TTYBuildTheme.secondaryContent)
                         .lineLimit(1)
                     }
                 }

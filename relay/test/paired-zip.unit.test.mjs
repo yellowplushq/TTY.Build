@@ -88,9 +88,9 @@ function readEOCD(bytes) {
 }
 
 const RELEASE_LIKE = [
-  ["Pedals.app/", ""],
-  ["Pedals.app/Contents/", ""],
-  ["Pedals.app/Contents/Info.plist", "signed-bytes-do-not-touch"],
+  ["TTYBuild.app/", ""],
+  ["TTYBuild.app/Contents/", ""],
+  ["TTYBuild.app/Contents/Info.plist", "signed-bytes-do-not-touch"],
 ];
 
 test("injection appends the AppleDouble entry without moving original bytes", () => {
@@ -106,8 +106,8 @@ test("injection appends the AppleDouble entry without moving original bytes", ()
     original.subarray(0, before.centralOffset),
   );
   const text = new TextDecoder("latin1").decode(injected);
-  assert.match(text, /__MACOSX\/\._Pedals\.app/);
-  assert.match(text, /build\.air\.pedals\.pairing-code/);
+  assert.match(text, /__MACOSX\/\._TTYBuild\.app/);
+  assert.match(text, /build\.tty\.pairing-code/);
   assert.match(text, /90285513/);
 });
 
@@ -118,7 +118,7 @@ test("the AppleDouble payload carries exactly the pairing attribute", () => {
   assert.equal(view.getUint32(4), 0x00020000);
   const text = new TextDecoder("latin1").decode(payload);
   assert.match(text, /ATTR/);
-  assert.match(text, /build\.air\.pedals\.pairing-code/);
+  assert.match(text, /build\.tty\.pairing-code/);
   assert.match(text, /01234567$/);
   assert.throws(() => appleDoubleWithPairingCode("nope"));
 });
@@ -132,14 +132,14 @@ test("macOS ditto restores the stamped xattr from an injected zip", (t) => {
     t.skip("requires macOS ditto/xattr");
     return;
   }
-  const workdir = mkdtempSync(join(tmpdir(), "pedals-paired-zip-"));
+  const workdir = mkdtempSync(join(tmpdir(), "ttybuild-paired-zip-"));
   try {
     const zipPath = join(workdir, "paired.zip");
     writeFileSync(zipPath, injectPairingCode(buildZip(RELEASE_LIKE), "90285513"));
     execFileSync("ditto", ["-x", "-k", zipPath, join(workdir, "out")]);
     const value = execFileSync(
       "xattr",
-      ["-p", "build.air.pedals.pairing-code", join(workdir, "out", "Pedals.app")],
+      ["-p", "build.tty.pairing-code", join(workdir, "out", "TTYBuild.app")],
       { encoding: "utf8" },
     ).trim();
     assert.equal(value, "90285513");
@@ -147,7 +147,7 @@ test("macOS ditto restores the stamped xattr from an injected zip", (t) => {
     assert.equal(
       execFileSync(
         "cat",
-        [join(workdir, "out", "Pedals.app", "Contents", "Info.plist")],
+        [join(workdir, "out", "TTYBuild.app", "Contents", "Info.plist")],
         { encoding: "utf8" },
       ),
       "signed-bytes-do-not-touch",
@@ -161,8 +161,8 @@ test("the paired download endpoint stamps the upstream release zip", async () =>
   const original = buildZip(RELEASE_LIKE);
   const fetched = [];
   const response = await handlePairedDownload(
-    new Request("https://pedals.air.build/download/90285513/macos.zip"),
-    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/pedals", TEST_BYPASS_RATE_LIMITS: "true" },
+    new Request("https://tty.build/download/90285513/macos.zip"),
+    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/tty.build", TEST_BYPASS_RATE_LIMITS: "true" },
     "90285513",
     async (url) => {
       fetched.push(String(url));
@@ -174,22 +174,22 @@ test("the paired download endpoint stamps the upstream release zip", async () =>
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.match(
     response.headers.get("content-disposition"),
-    /attachment; filename="Pedals-macOS\.zip"/,
+    /attachment; filename="TTYBuild-macOS\.zip"/,
   );
   assert.deepEqual(fetched, [
-    "https://github.com/yellowplushq/pedals/releases/latest/download/Pedals-macOS.zip",
+    "https://github.com/yellowplushq/tty.build/releases/latest/download/TTYBuild-macOS.zip",
   ]);
   const body = new Uint8Array(await response.arrayBuffer());
   assert.equal(readEOCD(body).entries, RELEASE_LIKE.length + 1);
-  assert.match(new TextDecoder("latin1").decode(body), /__MACOSX\/\._Pedals\.app/);
+  assert.match(new TextDecoder("latin1").decode(body), /__MACOSX\/\._TTYBuild\.app/);
 });
 
 test("the paired download endpoint answers HEAD and unconfigured repos safely", async () => {
   const head = await handlePairedDownload(
-    new Request("https://pedals.air.build/download/90285513/macos.zip", {
+    new Request("https://tty.build/download/90285513/macos.zip", {
       method: "HEAD",
     }),
-    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/pedals", TEST_BYPASS_RATE_LIMITS: "true" },
+    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/tty.build", TEST_BYPASS_RATE_LIMITS: "true" },
     "90285513",
     async () => {
       throw new Error("HEAD must not fetch upstream");
@@ -199,7 +199,7 @@ test("the paired download endpoint answers HEAD and unconfigured repos safely", 
   assert.equal(head.body, null);
 
   const unconfigured = await handlePairedDownload(
-    new Request("https://pedals.air.build/download/90285513/macos.zip"),
+    new Request("https://tty.build/download/90285513/macos.zip"),
     {},
     "90285513",
     async () => {

@@ -1,8 +1,8 @@
 // Injects an enrollment code into the release zip as an AppleDouble entry.
 //
-// The zip's Pedals.app is signed and notarized and must stay byte-identical;
+// The zip's TTYBuild.app is signed and notarized and must stay byte-identical;
 // extended attributes live outside the code-signature seal, so the code
-// travels as `__MACOSX/._Pedals.app` — the sequestered-xattr sidecar that
+// travels as `__MACOSX/._TTYBuild.app` — the sequestered-xattr sidecar that
 // Archive Utility and `ditto -x -k` restore onto the extracted bundle. The
 // app consumes the attribute on launch and pairs.
 //
@@ -10,8 +10,8 @@
 // directory, which is then re-emitted with a patched EOCD. Every original
 // byte, including the signed app, passes through untouched.
 
-const ATTRIBUTE_NAME = "build.air.pedals.pairing-code";
-const ENTRY_NAME = "__MACOSX/._Pedals.app";
+const ATTRIBUTE_NAME = "build.tty.pairing-code";
+const ENTRY_NAME = "__MACOSX/._TTYBuild.app";
 
 const encoder = new TextEncoder();
 

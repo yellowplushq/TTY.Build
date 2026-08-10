@@ -1,5 +1,5 @@
 import Combine
-import PedalsKit
+import TTYBuildKit
 import SwiftUI
 
 struct WatchStatusView: View {
@@ -14,7 +14,7 @@ struct WatchStatusView: View {
             LazyVStack(spacing: 8) {
                 Image(systemName: "terminal.fill")
                     .font(.title2)
-                    .foregroundStyle(PedalsTheme.content)
+                    .foregroundStyle(TTYBuildTheme.content)
 
                 Text(snapshot.totalRunning, format: .number)
                     .font(.system(size: 44, weight: .bold, design: .rounded))
@@ -27,20 +27,20 @@ struct WatchStatusView: View {
                     Label("\(snapshot.onlineComputerCount)", systemImage: "desktopcomputer")
                     if snapshot.offlineComputerCount > 0 {
                         Label("\(snapshot.offlineComputerCount)", systemImage: "wifi.slash")
-                            .foregroundStyle(PedalsTheme.warning)
+                            .foregroundStyle(TTYBuildTheme.warning)
                     }
                 }
                 .font(.caption)
-                .foregroundStyle(PedalsTheme.secondaryContent)
+                .foregroundStyle(TTYBuildTheme.secondaryContent)
 
                 if snapshot.stale {
                     Text("Waiting for an update")
                         .font(.caption2)
-                        .foregroundStyle(PedalsTheme.warning)
+                        .foregroundStyle(TTYBuildTheme.warning)
                 } else {
                     Text(snapshot.updatedAt, style: .relative)
                         .font(.caption2)
-                        .foregroundStyle(PedalsTheme.secondaryContent)
+                        .foregroundStyle(TTYBuildTheme.secondaryContent)
                 }
 
                 terminalLinks
@@ -48,9 +48,9 @@ struct WatchStatusView: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .foregroundStyle(PedalsTheme.content)
-        .tint(PedalsTheme.content)
-        .navigationTitle("Pedals")
+        .foregroundStyle(TTYBuildTheme.content)
+        .tint(TTYBuildTheme.content)
+        .navigationTitle("tty.build")
         .task {
             terminalStore.retryConnections()
             WatchStatusBridge.shared.requestCurrentContext()
@@ -67,9 +67,9 @@ struct WatchStatusView: View {
             .padding(.vertical, 4)
 
         if !terminalStore.hasCredentials {
-            Label("Open Pedals on iPhone", systemImage: "iphone.and.arrow.forward")
+            Label("Open tty.build on iPhone", systemImage: "iphone.and.arrow.forward")
                 .font(.caption)
-                .foregroundStyle(PedalsTheme.secondaryContent)
+                .foregroundStyle(TTYBuildTheme.secondaryContent)
                 .multilineTextAlignment(.center)
         } else if terminalStore.computers.allSatisfy({ $0.terminals.isEmpty }) {
             if terminalStore.computers.contains(where: { !$0.ready }) {
@@ -78,18 +78,18 @@ struct WatchStatusView: View {
                     Text("Connecting…")
                 }
                 .font(.caption)
-                .foregroundStyle(PedalsTheme.secondaryContent)
+                .foregroundStyle(TTYBuildTheme.secondaryContent)
             } else {
                 Text("No terminals available")
                     .font(.caption)
-                    .foregroundStyle(PedalsTheme.secondaryContent)
+                    .foregroundStyle(TTYBuildTheme.secondaryContent)
             }
         } else {
             ForEach(terminalStore.computers) { computer in
                 if !computer.terminals.isEmpty {
                     Text(computer.name)
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(PedalsTheme.secondaryContent)
+                        .foregroundStyle(TTYBuildTheme.secondaryContent)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     ForEach(computer.terminals) { terminal in
@@ -142,7 +142,7 @@ struct WatchStatusView: View {
             HStack {
                 Text("Agents")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(PedalsTheme.secondaryContent)
+                    .foregroundStyle(TTYBuildTheme.secondaryContent)
                 Spacer()
                 if rows.contains(where: { $0.info.state != .running }) {
                     Button {
@@ -154,7 +154,7 @@ struct WatchStatusView: View {
                     } label: {
                         Text("Clear")
                             .font(.caption2)
-                            .foregroundStyle(PedalsTheme.tertiaryContent)
+                            .foregroundStyle(TTYBuildTheme.tertiaryContent)
                     }
                     .buttonStyle(.plain)
                 }
@@ -193,10 +193,10 @@ struct WatchStatusView: View {
 
     private func agentDetailTint(_ state: AgentState) -> Color {
         switch state {
-        case .waiting: PedalsTheme.warning
-        case .error: PedalsTheme.critical
-        case .running: PedalsTheme.content
-        case .done: PedalsTheme.success
+        case .waiting: TTYBuildTheme.warning
+        case .error: TTYBuildTheme.critical
+        case .running: TTYBuildTheme.content
+        case .done: TTYBuildTheme.success
         }
     }
 
@@ -204,7 +204,7 @@ struct WatchStatusView: View {
         guard !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
-        if let fresh = try? await PedalsStatusRuntime.refreshState() {
+        if let fresh = try? await TTYBuildStatusRuntime.refreshState() {
             snapshot = fresh
         } else {
             snapshot = StatusSharedStore.snapshot()
@@ -229,12 +229,12 @@ struct AgentMarkBadgeView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: size, height: size)
-                    .foregroundStyle(PedalsTheme.content)
+                    .foregroundStyle(TTYBuildTheme.content)
             } else {
                 Image(systemName: "sparkles")
                     .font(.system(size: size - 4))
                     .frame(width: size, height: size)
-                    .foregroundStyle(PedalsTheme.content)
+                    .foregroundStyle(TTYBuildTheme.content)
             }
             // Finished shows no badge — a settled agent needs no marker.
             if state != .done {
@@ -252,10 +252,10 @@ struct AgentMarkBadgeView: View {
 
     private var badgeColor: Color {
         switch state {
-        case .waiting: PedalsTheme.warning
-        case .error: PedalsTheme.critical
-        case .running: PedalsTheme.content
-        case .done: PedalsTheme.success
+        case .waiting: TTYBuildTheme.warning
+        case .error: TTYBuildTheme.critical
+        case .running: TTYBuildTheme.content
+        case .done: TTYBuildTheme.success
         }
     }
 

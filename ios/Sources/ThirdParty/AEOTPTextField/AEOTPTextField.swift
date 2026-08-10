@@ -4,7 +4,7 @@
 //
 //  Created by Abdelrhman Eliwa on 10/12/20.
 //  Copyright © 2020 Abdelrhman Eliwa. All rights reserved.
-//  Adapted for Swift 6 by Pedals.
+//  Adapted for Swift 6 by TTYBuild.
 //
 
 import UIKit

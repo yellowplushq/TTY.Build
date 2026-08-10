@@ -37,7 +37,7 @@ struct StatusSnapshotFileStore: Sendable {
                 }
             }
 
-            let data = try JSONEncoder.pedals.encode(candidate)
+            let data = try JSONEncoder.ttybuild.encode(candidate)
             try data.write(
                 to: snapshotURL,
                 options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
@@ -56,7 +56,7 @@ struct StatusSnapshotFileStore: Sendable {
     private func loadLocked() throws -> TTYStatusSnapshot? {
         guard FileManager.default.fileExists(atPath: snapshotURL.path) else { return nil }
         let data = try Data(contentsOf: snapshotURL)
-        return try JSONDecoder.pedals.decode(TTYStatusSnapshot.self, from: data)
+        return try JSONDecoder.ttybuild.decode(TTYStatusSnapshot.self, from: data)
     }
 
     private func withLock<Result>(_ operation: () throws -> Result) throws -> Result {

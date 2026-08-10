@@ -11,7 +11,7 @@ const current = "dcb121aa-73f3-4235-928f-396714094e48";
 
 test("extracts the complete current Worker version from Wrangler output", () => {
   const output = [
-    "Uploaded pedals-relay",
+    "Uploaded tty-build-relay",
     `Current Version ID: ${current}`,
   ].join("\n");
   assert.equal(extractCurrentVersionId(output), current);

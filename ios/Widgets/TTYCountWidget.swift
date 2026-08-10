@@ -1,5 +1,5 @@
 import ActivityKit
-import PedalsKit
+import TTYBuildKit
 import SwiftUI
 @preconcurrency import WidgetKit
 
@@ -111,7 +111,7 @@ struct TTYStatusProvider: TimelineProvider {
 
     private func loadSnapshot() async -> TTYStatusSnapshot {
         do {
-            return try await PedalsStatusRuntime.refreshState()
+            return try await TTYBuildStatusRuntime.refreshState()
         } catch {
             var cached = StatusSharedStore.snapshot()
             cached.stale = true
@@ -132,8 +132,8 @@ struct TTYStatusProvider: TimelineProvider {
                 agent: "codex",
                 state: .running,
                 sessionName: "Polish the Widget experience",
-                project: "pedals",
-                action: "Building PedalsWidgets",
+                project: "ttybuild",
+                action: "Building TTYBuildWidgets",
                 updatedAt: Date.now.timeIntervalSince1970,
                 second: .init(
                     id: "preview-2",
@@ -155,16 +155,16 @@ struct TTYStatusProvider: TimelineProvider {
 struct TTYCountWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(
-            kind: PedalsStatusConstants.phoneWidgetKind,
+            kind: TTYBuildStatusConstants.phoneWidgetKind,
             provider: TTYStatusProvider()
         ) { entry in
             TTYCountWidgetView(entry: entry)
-                .foregroundStyle(PedalsTheme.content)
-                .tint(PedalsTheme.content)
+                .foregroundStyle(TTYBuildTheme.content)
+                .tint(TTYBuildTheme.content)
                 .widgetAccentable(false)
-                .containerBackground(PedalsTheme.canvas, for: .widget)
+                .containerBackground(TTYBuildTheme.canvas, for: .widget)
         }
-        .configurationDisplayName("Pedals Activity")
+        .configurationDisplayName("tty.build Activity")
         .description("Terminal and coding-agent activity across your paired computers.")
         .supportedFamilies([
             .systemSmall,
@@ -270,7 +270,7 @@ private struct TTYCountWidgetView: View {
                         .lineLimit(1)
                     Text("Remote sessions are ready.")
                         .font(.caption2)
-                        .foregroundStyle(PedalsTheme.secondaryContent)
+                        .foregroundStyle(TTYBuildTheme.secondaryContent)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -284,7 +284,7 @@ private struct TTYCountWidgetView: View {
             let status = ActivityStyle.compactLabel(for: presentation)
             return "\(title) · \(status)"
         }
-        return "Pedals · \(terminalCountText)"
+        return "tty.build · \(terminalCountText)"
     }
 
     private var terminalCountText: String {

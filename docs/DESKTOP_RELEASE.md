@@ -1,7 +1,7 @@
 # Desktop release
 
-Pedals desktop releases are universal, notarized macOS disk images. The menu
-bar app links `PedalsDaemonCore` directly and is itself the long-running PTY and
+tty.build desktop releases are universal, notarized macOS disk images. The menu
+bar app links `TTYBuildDaemonCore` directly and is itself the long-running PTY and
 relay service process; it does not launch or embed a second daemon executable.
 
 ## GitHub configuration
@@ -36,10 +36,10 @@ The workflow tests the shared desktop service core, builds the app for both
 to Apple's notary service, staples the ticket, and publishes these GitHub
 release assets:
 
-- `Pedals-macOS.dmg`
-- `Pedals-macOS.dmg.sha256`
-- `Pedals-macOS.zip`
-- `Pedals-macOS.zip.sha256`
+- `TTYBuild-macOS.dmg`
+- `TTYBuild-macOS.dmg.sha256`
+- `TTYBuild-macOS.zip`
+- `TTYBuild-macOS.zip.sha256`
 - `appcast.xml`
 
 The zip is packaged after the signed update feed is generated so Sparkle only
@@ -50,8 +50,8 @@ The website's `/download/macos` route redirects to the DMG on the latest
 GitHub release, while `/download/macos.zip` and `/download/macos.zip.sha256`
 redirect to the zip archive and its checksum. Set the Worker's
 `DESKTOP_RELEASE_REPOSITORY` variable to the repository slug, for example
-`owner/pedals`, before deploying the website. The stable `/appcast.xml` route
-redirects to the signed feed from the same release. Pedals checks it on launch
+`owner/ttybuild`, before deploying the website. The stable `/appcast.xml` route
+redirects to the signed feed from the same release. tty.build checks it on launch
 and every 24 hours, and users can also run `Check for Updates…` from the menu
 or Settings. Both the feed and the update archive are verified with the app's
 pinned Ed25519 public key before an update is installed.
@@ -65,7 +65,7 @@ new location, and removes the original — resolving App Translocation to find
 the real source, and skipping when another instance already runs from the
 destination. Extended attributes survive the move, so a pairing-stamped
 download still pairs after relocating. Debug builds and
-`PEDALS_NO_RELOCATE=1` skip the behavior.
+`TTYBUILD_NO_RELOCATE=1` skip the behavior.
 
 ## Curl installation
 
@@ -74,27 +74,27 @@ short alias `/i`, so users can install or reinstall the desktop app with one
 command:
 
 ```bash
-curl -fsSL https://pedals.air.build/i | bash
+curl -fsSL https://tty.build/i | bash
 ```
 
 The iPhone app's pairing screen embeds its enrollment code into the URL of
-the copied command (`curl -fsSL https://pedals.air.build/12345678 | bash`) —
-the service serves `install.sh` with that code baked in as the `PEDALS_PAIR`
-default; `--pair 12345678` and the `PEDALS_PAIR` environment variable are
+the copied command (`curl -fsSL https://tty.build/12345678 | bash`) —
+the service serves `install.sh` with that code baked in as the `TTYBUILD_PAIR`
+default; `--pair 12345678` and the `TTYBUILD_PAIR` environment variable are
 the manual equivalents. After extracting, the script stamps the code as an
 extended attribute on the installed bundle; the app consumes the stamp on
 launch, claims the code, and the computer then appears on the iPhone for a
 one-tap confirmation (PROTOCOL.md §2, "Reverse pairing").
 
 `GET /download/<code>/macos.zip` serves the release archive with the same
-stamp already injected as a sequestered-xattr (`__MACOSX/._Pedals.app`)
+stamp already injected as a sequestered-xattr (`__MACOSX/._TTYBuild.app`)
 entry — the signed app bytes pass through untouched, so Gatekeeper
 verification is unaffected. An archive downloaded that way (or AirDropped
 onward) pairs on first launch with zero typing.
 
-The script downloads `Pedals-macOS.zip` through the stable redirect, verifies
+The script downloads `TTYBuild-macOS.zip` through the stable redirect, verifies
 it against the release's SHA-256 checksum before installing anything, copies
-`Pedals.app` into `/Applications` (falling back to `~/Applications` without
+`TTYBuild.app` into `/Applications` (falling back to `~/Applications` without
 ever using sudo), and launches it. Interactive terminals get a brief
 Matrix-style intro (skipped when output is not a TTY, `TERM=dumb`, or
 `NO_COLOR` is set), and when an existing install is detected the script shows
@@ -108,8 +108,8 @@ of the trust boundary of the release.
 Local builds are unsigned. Xcode 26, Swift 6, and XcodeGen are required:
 
 ```bash
-PEDALS_DESKTOP_VERSION=1.0.0 \
-PEDALS_DESKTOP_BUILD_NUMBER=1 \
+TTYBUILD_DESKTOP_VERSION=1.0.0 \
+TTYBUILD_DESKTOP_BUILD_NUMBER=1 \
 ./scripts/build-desktop-release.sh
 
 ./scripts/package-desktop-dmg.sh

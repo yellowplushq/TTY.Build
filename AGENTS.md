@@ -1,4 +1,4 @@
-# Pedals development and release guide
+# tty.build development and release guide
 
 This is the repository-level operating guide for agents and maintainers. Run
 commands from the repository root unless a section explicitly changes
@@ -9,18 +9,18 @@ scripts include the production safety checks that this project relies on.
 
 | Item | Canonical value |
 |---|---|
-| Product and on-device name | `Pedals` |
-| App Store Connect name | `Pedals - Remote Terminal` |
+| Product and on-device name | `tty.build` |
+| App Store Connect name | `tty.build - Agents & Terminal` |
 | App Store Connect app ID | `6792312114` |
 | Apple team ID | `QDJ93ZUQ9B` |
 | iOS app | `air.build.pedals` |
 | iOS widget and Live Activity | `air.build.pedals.widgets` |
 | watchOS app | `air.build.pedals.watchapp` |
 | watchOS widgets | `air.build.pedals.watchapp.widgets` |
-| macOS menu bar app | `air.build.pedals.menubar` |
+| macOS menu bar app | `build.tty.menubar` |
 | App Group | `group.air.build.pedals` |
-| Production service | `https://pedals.air.build` |
-| Cloudflare D1 database | `pedals` |
+| Production service | `https://tty.build` |
+| Cloudflare D1 database | `tty-build` |
 | Internal TestFlight group | `a3f73f1d-e7a5-47d8-9b57-8ada4baad549` |
 | External TestFlight group | Create after the first valid build |
 
@@ -28,7 +28,7 @@ scripts include the production safety checks that this project relies on.
   retired identifier namespace. There is one server implementation:
   `relay/src/worker.mjs` on Cloudflare Workers.
 - The generated `.xcodeproj` files are ignored. Edit `ios/project.yml` or
-  `desktop/PedalsMenubar/project.yml`, then regenerate with XcodeGen.
+  `desktop/TTYBuildMenubar/project.yml`, then regenerate with XcodeGen.
 - The server-authoritative value is the number of alive TTYs across computers
   bound to a client. Do not infer this total independently in widgets.
 - Terminal bytes, terminal titles, working directories, and the pairing E2EE
@@ -46,7 +46,7 @@ rg -n -uu --hidden \
   --glob '!.git/**' \
   --glob '!node_modules/**' \
   --glob '!AGENTS.md' \
-  'in\.eyhn\.pedals|group\.in\.eyhn\.pedals|app\.yellowplus\.pedals|group\.app\.yellowplus\.pedals|pedals\.(eyhn\.in|yellowplus\.app)|5RWWZ7DDG9|6792224057|Pedals TTY|PEDALS-20260718' .
+  'in\.eyhn\.pedals|group\.in\.eyhn\.pedals|app\.yellowplus\.pedals|group\.app\.yellowplus\.pedals|pedals\.(eyhn\.in|yellowplus\.app)|5RWWZ7DDG9|6792224057|Pedals TTY|PEDALS-20260718|pedals\.air\.build|pedals-relay' .
 ```
 
 ## Toolchain
@@ -57,7 +57,7 @@ The supported development host is macOS with:
 - Swift 6
 - XcodeGen
 - Node.js 22 or newer and npm
-- Wrangler 4.x, authenticated to the YellowPlus Cloudflare account for `air.build`
+- Wrangler 4.x, authenticated to the YellowPlus Cloudflare account for `tty.build` (the `air.build` zone hosts only the legacy redirect)
 - `asc` 3.x, authenticated to the `YellowPlus, Inc.` App Store Connect account
 - Baguette for headless simulator inspection and screenshots
 
@@ -77,12 +77,12 @@ Do not assume that enabling the `APP_GROUPS` capability proves assignment.
 
 - `relay/`: Cloudflare Worker, Durable Objects, D1 migrations, APNs provider,
   and service tests.
-- `shared/PedalsKit/`: v2 frame codec, pairing invitation, E2EE, and shared
+- `shared/TTYBuildKit/`: v2 frame codec, pairing invitation, E2EE, and shared
   service API types.
-- `desktop/PedalsDaemon/`: macOS daemon and `pedals` command-line client. The
-  `pedals` CLI is for internal debugging only — never ship it in external
+- `desktop/TTYBuildDaemon/`: macOS daemon and `ttybuild` command-line client. The
+  `ttybuild` CLI is for internal debugging only — never ship it in external
   releases; the menu bar app is the only released desktop frontend.
-- `desktop/PedalsMenubar/`: macOS menu bar UI.
+- `desktop/TTYBuildMenubar/`: macOS menu bar UI.
 - `ios/`: iPhone app, iPhone widgets, Live Activity/Dynamic Island, Watch app,
   Watch widgets, shared status code, entitlements, and XcodeGen project source.
 - `scripts/e2e.sh`: isolated local Worker-to-daemon-to-iOS end-to-end test.
@@ -97,14 +97,14 @@ Run these before changing release state:
 cd relay
 npm ci
 npm test
-cd ../shared/PedalsKit
+cd ../shared/TTYBuildKit
 swift test
-cd ../../desktop/PedalsDaemon
+cd ../../desktop/TTYBuildDaemon
 swift test
 ```
 
 The expected suites currently contain 25 Node tests, 57 Worker tests, 98
-PedalsKit tests, and 219 daemon tests. A changed count is not automatically a
+TTYBuildKit tests, and 219 daemon tests. A changed count is not automatically a
 failure, but every discovered test must pass.
 
 Check the deployed v2 contract separately; it creates temporary identities and
@@ -149,38 +149,38 @@ required host permissions.
 Run daemon tests and build the executable:
 
 ```bash
-swift test --package-path desktop/PedalsDaemon
-swift build --package-path desktop/PedalsDaemon
+swift test --package-path desktop/TTYBuildDaemon
+swift build --package-path desktop/TTYBuildDaemon
 ```
 
 Start the daemon against a local Worker:
 
 ```bash
-swift run --package-path desktop/PedalsDaemon pedals serve \
+swift run --package-path desktop/TTYBuildDaemon ttybuild serve \
   --service http://127.0.0.1:8787
 ```
 
 In another shell, use the same built package to inspect the control path:
 
 ```bash
-swift run --package-path desktop/PedalsDaemon pedals status
-swift run --package-path desktop/PedalsDaemon pedals pair
-swift run --package-path desktop/PedalsDaemon pedals new
-swift run --package-path desktop/PedalsDaemon pedals ls
-swift run --package-path desktop/PedalsDaemon pedals kill SESSION_ID
+swift run --package-path desktop/TTYBuildDaemon ttybuild status
+swift run --package-path desktop/TTYBuildDaemon ttybuild pair
+swift run --package-path desktop/TTYBuildDaemon ttybuild new
+swift run --package-path desktop/TTYBuildDaemon ttybuild ls
+swift run --package-path desktop/TTYBuildDaemon ttybuild kill SESSION_ID
 ```
 
-Use an isolated `PEDALS_HOME` below `/tmp` when testing identity reset or
+Use an isolated `TTYBUILD_HOME` below `/tmp` when testing identity reset or
 pairing. Never point destructive reset tests at a user's normal daemon state.
 
 Generate and build the menu bar app:
 
 ```bash
-cd desktop/PedalsMenubar
+cd desktop/TTYBuildMenubar
 xcodegen generate
 xcodebuild \
-  -project PedalsMenubar.xcodeproj \
-  -scheme PedalsMenubar \
+  -project TTYBuildMenubar.xcodeproj \
+  -scheme TTYBuildMenubar \
   -configuration Debug \
   build
 ```
@@ -199,7 +199,7 @@ cd ..
 List schemes and available simulators:
 
 ```bash
-xcodebuild -project ios/Pedals.xcodeproj -list
+xcodebuild -project ios/TTYBuild.xcodeproj -list
 baguette list --json
 xcrun simctl list pairs
 ```
@@ -207,12 +207,12 @@ xcrun simctl list pairs
 Choose an available iPhone simulator UDID and run the unit tests:
 
 ```bash
-PEDALS_IOS_UDID=REPLACE_WITH_UDID
-baguette boot --udid "$PEDALS_IOS_UDID"
+TTYBUILD_IOS_UDID=REPLACE_WITH_UDID
+baguette boot --udid "$TTYBUILD_IOS_UDID"
 xcodebuild \
-  -project ios/Pedals.xcodeproj \
-  -scheme Pedals \
-  -destination "platform=iOS Simulator,id=$PEDALS_IOS_UDID" \
+  -project ios/TTYBuild.xcodeproj \
+  -scheme TTYBuild \
+  -destination "platform=iOS Simulator,id=$TTYBUILD_IOS_UDID" \
   -derivedDataPath .artifacts/dd-ios-tests \
   test
 ```
@@ -221,46 +221,46 @@ Build, install, and launch the iPhone app:
 
 ```bash
 xcodebuild \
-  -project ios/Pedals.xcodeproj \
-  -scheme Pedals \
-  -destination "platform=iOS Simulator,id=$PEDALS_IOS_UDID" \
+  -project ios/TTYBuild.xcodeproj \
+  -scheme TTYBuild \
+  -destination "platform=iOS Simulator,id=$TTYBUILD_IOS_UDID" \
   -derivedDataPath .artifacts/dd-ios \
   build
 baguette install \
-  --udid "$PEDALS_IOS_UDID" \
-  .artifacts/dd-ios/Build/Products/Debug-iphonesimulator/Pedals.app
-xcrun simctl launch "$PEDALS_IOS_UDID" air.build.pedals
+  --udid "$TTYBUILD_IOS_UDID" \
+  .artifacts/dd-ios/Build/Products/Debug-iphonesimulator/TTYBuild.app
+xcrun simctl launch "$TTYBUILD_IOS_UDID" air.build.pedals
 ```
 
 For Watch testing, use a Watch simulator already paired to the selected iPhone,
-boot both devices, and build the `PedalsWatch` scheme for the Watch UDID:
+boot both devices, and build the `TTYBuildWatch` scheme for the Watch UDID:
 
 ```bash
-PEDALS_WATCH_UDID=REPLACE_WITH_PAIRED_WATCH_UDID
-baguette boot --udid "$PEDALS_WATCH_UDID"
+TTYBUILD_WATCH_UDID=REPLACE_WITH_PAIRED_WATCH_UDID
+baguette boot --udid "$TTYBUILD_WATCH_UDID"
 xcodebuild \
-  -project ios/Pedals.xcodeproj \
-  -scheme PedalsWatch \
-  -destination "platform=watchOS Simulator,id=$PEDALS_WATCH_UDID" \
+  -project ios/TTYBuild.xcodeproj \
+  -scheme TTYBuildWatch \
+  -destination "platform=watchOS Simulator,id=$TTYBUILD_WATCH_UDID" \
   -derivedDataPath .artifacts/dd-watch \
   build
 baguette install \
-  --udid "$PEDALS_WATCH_UDID" \
-  .artifacts/dd-watch/Build/Products/Debug-watchsimulator/PedalsWatch.app
-xcrun simctl launch "$PEDALS_WATCH_UDID" air.build.pedals.watchapp
+  --udid "$TTYBUILD_WATCH_UDID" \
+  .artifacts/dd-watch/Build/Products/Debug-watchsimulator/TTYBuildWatch.app
+xcrun simctl launch "$TTYBUILD_WATCH_UDID" air.build.pedals.watchapp
 ```
 
 Use Baguette for repeatable visual evidence and accessibility inspection:
 
 ```bash
 baguette screenshot \
-  --udid "$PEDALS_IOS_UDID" \
+  --udid "$TTYBUILD_IOS_UDID" \
   --output .artifacts/ios-smoke.jpg
 baguette describe-ui \
-  --udid "$PEDALS_IOS_UDID" \
+  --udid "$TTYBUILD_IOS_UDID" \
   --output .artifacts/ios-smoke-ui.json
 baguette logs \
-  --udid "$PEDALS_IOS_UDID" \
+  --udid "$TTYBUILD_IOS_UDID" \
   --bundle-id air.build.pedals \
   --level debug
 ```
@@ -364,9 +364,9 @@ Post-deploy checks:
 ```bash
 cd relay
 npx wrangler deployments list --config wrangler.jsonc
-npx wrangler d1 migrations list pedals --remote --config wrangler.jsonc
+npx wrangler d1 migrations list tty-build --remote --config wrangler.jsonc
 npm run test:contract
-curl -i https://pedals.air.build/healthz
+curl -i https://tty.build/healthz
 ```
 
 If the production contract fails after a deploy, inspect the immutable version
@@ -378,7 +378,7 @@ cd relay
 npx wrangler deployments list --config wrangler.jsonc
 npx wrangler rollback VERSION_ID \
   --config wrangler.jsonc \
-  --message 'Rollback failed Pedals deployment'
+  --message 'Rollback failed tty.build deployment'
 ```
 
 ## Apple signing configuration
@@ -487,17 +487,17 @@ SHA-1 from `security find-identity`; never guess.
 
 ```bash
 xcodebuild \
-  -project ios/Pedals.xcodeproj \
-  -scheme Pedals \
+  -project ios/TTYBuild.xcodeproj \
+  -scheme TTYBuild \
   -configuration Release \
   -destination 'generic/platform=iOS' \
-  -archivePath .artifacts/testflight-release/Pedals.xcarchive \
+  -archivePath .artifacts/testflight-release/TTYBuild.xcarchive \
   archive
 
 asc xcode export \
-  --archive-path .artifacts/testflight-release/Pedals.xcarchive \
+  --archive-path .artifacts/testflight-release/TTYBuild.xcarchive \
   --export-options .artifacts/testflight-release/ExportOptions.plist \
-  --ipa-path .artifacts/testflight-release/Pedals.ipa \
+  --ipa-path .artifacts/testflight-release/TTYBuild.ipa \
   --timeout 20m \
   --output json \
   --pretty
@@ -513,13 +513,13 @@ Verify all four bundles, not just the containing app:
 
 ```bash
 codesign --verify --strict --verbose=4 \
-  .artifacts/testflight-release/Pedals.xcarchive/Products/Applications/Pedals.app
+  .artifacts/testflight-release/TTYBuild.xcarchive/Products/Applications/TTYBuild.app
 codesign --verify --strict --verbose=4 \
-  .artifacts/testflight-release/Pedals.xcarchive/Products/Applications/Pedals.app/PlugIns/PedalsWidgets.appex
+  .artifacts/testflight-release/TTYBuild.xcarchive/Products/Applications/TTYBuild.app/PlugIns/TTYBuildWidgets.appex
 codesign --verify --strict --verbose=4 \
-  .artifacts/testflight-release/Pedals.xcarchive/Products/Applications/Pedals.app/Watch/PedalsWatch.app
+  .artifacts/testflight-release/TTYBuild.xcarchive/Products/Applications/TTYBuild.app/Watch/TTYBuildWatch.app
 codesign --verify --strict --verbose=4 \
-  .artifacts/testflight-release/Pedals.xcarchive/Products/Applications/Pedals.app/Watch/PedalsWatch.app/PlugIns/PedalsWatchWidgets.appex
+  .artifacts/testflight-release/TTYBuild.xcarchive/Products/Applications/TTYBuild.app/Watch/TTYBuildWatch.app/PlugIns/TTYBuildWatchWidgets.appex
 ```
 
 Use `codesign -d --entitlements - BUNDLE_PATH` and
@@ -533,8 +533,8 @@ Set task-specific release values from `ios/project.yml` and the unused build
 number selected in step 1:
 
 ```bash
-PEDALS_RELEASE_VERSION=REPLACE_WITH_VERSION
-PEDALS_RELEASE_BUILD=REPLACE_WITH_BUILD_NUMBER
+TTYBUILD_RELEASE_VERSION=REPLACE_WITH_VERSION
+TTYBUILD_RELEASE_BUILD=REPLACE_WITH_BUILD_NUMBER
 ```
 
 Then upload, wait for processing, write What to Test, distribute internally,
@@ -543,11 +543,11 @@ and enable tester notification:
 ```bash
 asc publish testflight \
   --app 6792312114 \
-  --ipa .artifacts/testflight-release/Pedals.ipa \
-  --version "$PEDALS_RELEASE_VERSION" \
-  --build-number "$PEDALS_RELEASE_BUILD" \
+  --ipa .artifacts/testflight-release/TTYBuild.ipa \
+  --version "$TTYBUILD_RELEASE_VERSION" \
+  --build-number "$TTYBUILD_RELEASE_BUILD" \
   --group a3f73f1d-e7a5-47d8-9b57-8ada4baad549 \
-  --test-notes 'Connect a computer and verify TTY count synchronization across Pedals, iPhone widgets, Live Activity and Dynamic Island, and Apple Watch widgets, including background APNs updates.' \
+  --test-notes 'Connect a computer and verify TTY count synchronization across tty.build, iPhone widgets, Live Activity and Dynamic Island, and Apple Watch widgets, including background APNs updates.' \
   --locale en-US \
   --wait \
   --timeout 45m \
@@ -571,11 +571,11 @@ After the build is `VALID`, create an external group if one does not exist, set
 its identifier, and distribute the existing build ID:
 
 ```bash
-PEDALS_EXTERNAL_GROUP_ID=REPLACE_WITH_EXTERNAL_GROUP_ID
+TTYBUILD_EXTERNAL_GROUP_ID=REPLACE_WITH_EXTERNAL_GROUP_ID
 asc publish testflight \
   --app 6792312114 \
   --build BUILD_ID \
-  --group "$PEDALS_EXTERNAL_GROUP_ID" \
+  --group "$TTYBUILD_EXTERNAL_GROUP_ID" \
   --wait \
   --notify \
   --submit \
@@ -593,8 +593,8 @@ records are not created.
 ```bash
 asc builds info \
   --app 6792312114 \
-  --build-number "$PEDALS_RELEASE_BUILD" \
-  --version "$PEDALS_RELEASE_VERSION" \
+  --build-number "$TTYBUILD_RELEASE_BUILD" \
+  --version "$TTYBUILD_RELEASE_VERSION" \
   --platform IOS \
   --output json \
   --pretty
@@ -610,7 +610,7 @@ internal group. External availability remains pending while Apple reports
 
 A release handoff should state:
 
-- the deployed Worker version ID and `https://pedals.air.build` contract result;
+- the deployed Worker version ID and `https://tty.build` contract result;
 - whether remote D1 has pending migrations;
 - that all three APNs secret names exist, without revealing values;
 - marketing version, build number, TestFlight build ID, and processing state;

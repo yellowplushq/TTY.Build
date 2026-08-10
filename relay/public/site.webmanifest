@@ -1,6 +1,6 @@
 {
-  "name": "Pedals",
-  "short_name": "Pedals",
+  "name": "tty.build",
+  "short_name": "tty.build",
   "description": "Your terminal, wherever you are.",
   "start_url": "/",
   "display": "standalone",

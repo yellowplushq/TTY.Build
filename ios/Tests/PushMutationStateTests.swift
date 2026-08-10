@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import Pedals
+@testable import TTYBuild
 
 final class PushMutationStateTests: XCTestCase {
     func testCredentialRotationRequeuesDesiredPutsAndDropsOldDeletes() {
@@ -81,9 +81,9 @@ final class PushMutationStateTests: XCTestCase {
             claimID: "abandoned"
         ).delivery?.claim)
         // Simulate process death: only the JSON transaction survives.
-        state = try JSONDecoder.pedals.decode(
+        state = try JSONDecoder.ttybuild.decode(
             PushMutationState.self,
-            from: JSONEncoder.pedals.encode(state)
+            from: JSONEncoder.ttybuild.encode(state)
         )
         let waiting = state.claimNext(
             now: date(29),
@@ -175,9 +175,9 @@ final class PushMutationStateTests: XCTestCase {
 
         // The token cache survives the same Codable round trip used by the
         // shared App Group transaction file.
-        state = try JSONDecoder.pedals.decode(
+        state = try JSONDecoder.ttybuild.decode(
             PushMutationState.self,
-            from: JSONEncoder.pedals.encode(state)
+            from: JSONEncoder.ttybuild.encode(state)
         )
         XCTAssertTrue(state.activateObservedWidgetRegistration(.watchWidget))
         XCTAssertEqual(state.pending[put.identity], put)
@@ -219,9 +219,9 @@ final class PushMutationStateTests: XCTestCase {
         XCTAssertEqual(decoded.snapshot, snapshot)
     }
 
-    private func credential(client: String) -> PedalsStatusCredential {
+    private func credential(client: String) -> TTYBuildStatusCredential {
         .init(
-            serviceURL: URL(string: "https://pedals.example")!,
+            serviceURL: URL(string: "https://ttybuild.example")!,
             clientID: client,
             statusToken: "status-\(client)"
         )

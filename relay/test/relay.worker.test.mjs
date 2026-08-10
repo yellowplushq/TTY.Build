@@ -280,13 +280,13 @@ afterEach(async () => {
   await abortAllDurableObjects();
 });
 
-describe("Pedals v2 Worker API", () => {
+describe("TTYBuild v2 Worker API", () => {
   test("health works and protocol v1 is absent", async () => {
     const get = await exports.default.fetch("https://relay.test/healthz");
     expect(get.status).toBe(200);
     expect(await get.text()).toBe("ok");
     expect(get.headers.get("cache-control")).toBe("no-store");
-    const versionId = get.headers.get("x-pedals-worker-version");
+    const versionId = get.headers.get("x-ttybuild-worker-version");
     expect(versionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
@@ -297,7 +297,7 @@ describe("Pedals v2 Worker API", () => {
     expect(head.status).toBe(200);
     expect(await head.text()).toBe("");
     expect(head.headers.get("cache-control")).toBe("no-store");
-    expect(head.headers.get("x-pedals-worker-version")).toBe(versionId);
+    expect(head.headers.get("x-ttybuild-worker-version")).toBe(versionId);
 
     const old = await exports.default.fetch("https://relay.test/v1/room/deadbeef");
     expect(old.status).toBe(404);
@@ -1903,7 +1903,7 @@ describe("Pedals v2 Worker API", () => {
   });
 });
 
-describe("Pedals authenticated v2 relay", () => {
+describe("TTYBuild authenticated v2 relay", () => {
   test("rejects missing credentials, unrelated clients, and legacy role query", async () => {
     const computer = await createComputer();
     const client = await createClient();

@@ -1,6 +1,6 @@
-# Pedals Protocol Specification v2
+# tty.build Protocol Specification v2
 
-Pedals exposes encrypted remote terminals while keeping a privacy-safe terminal
+tty.build exposes encrypted remote terminals while keeping a privacy-safe terminal
 directory in each computer's Durable Object for clients, widgets, and Live
 Activities.
 
@@ -20,7 +20,7 @@ or replay buffers.
 `POST /v2/computers` creates a computer identity and returns a 32-hex
 `computerId` plus an opaque `hostToken`. The daemon generates its independent
 32-byte E2EE secret locally and stores all three values in
-`~/.pedals/identity.json` with mode 0600. D1 stores only a SHA-256 hash of the
+`~/.tty.build/identity.json` with mode 0600. D1 stores only a SHA-256 hash of the
 host token.
 
 `POST /v2/clients` creates one installation identity and returns `clientId`,
@@ -102,7 +102,7 @@ POST /v2/computers/:computerId/pairing-claims/:claimId/complete
 ```
 
 The construction is ephemeral-or-durable Curve25519 agreement, HKDF-SHA256
-with salt `Pedals pairing v3` and the claim ID as info, and ChaChaPoly with
+with salt `tty.build pairing v3` and the claim ID as info, and ChaChaPoly with
 the claim ID as AEAD associated data. The Worker never sees the plaintext
 secret. When the claim was host-initiated, completion raises a visible APNs
 alert on the client's `ios-app` push endpoints; client-initiated claims are
@@ -127,10 +127,10 @@ can never remove a fresh edge. Rejection and expiry are silent — a
 fire-and-forget claimer (the install flow) simply never gains access.
 
 The phone-issued code travels to the desktop as an extended attribute
-(`build.air.pedals.pairing-code`) stamped on the app bundle — written by
+(`build.tty.pairing-code`) stamped on the app bundle — written by
 the install script after extraction, or already present in an archive
 served by `GET /download/<code>/macos.zip`, which injects an AppleDouble
-(`__MACOSX/._Pedals.app`) entry into the release zip so Archive Utility and
+(`__MACOSX/._TTYBuild.app`) entry into the release zip so Archive Utility and
 `ditto` restore the attribute on extraction. Extended attributes live
 outside the code-signature seal, so the signed app stays byte-identical.
 The app consumes the stamp on launch (and a slow periodic check), claims
@@ -373,9 +373,9 @@ long-term secret directly with the channel-specific v2 derivation:
 
 ```text
 bootstrapTag = 0x00000000000000000000000000000000
-key_h2c_bootstrap = HKDF-SHA256(secret, salt="pedals-v2",
+key_h2c_bootstrap = HKDF-SHA256(secret, salt="ttybuild-v2",
                                info="host->client" + channelSuffix, 32)
-key_c2h_bootstrap = HKDF-SHA256(secret, salt="pedals-v2",
+key_c2h_bootstrap = HKDF-SHA256(secret, salt="ttybuild-v2",
                                info="client->host" + channelSuffix, 32)
 ```
 
@@ -404,8 +404,8 @@ After receiving a valid peer hello, both sides order the two fresh nonces as
 host then client and derive:
 
 ```text
-connectionSalt = SHA256("pedals-v2-connection" || hostNonce || clientNonce)
-routingTag = first16(SHA256("pedals-v2-tag" || hostNonce || clientNonce))
+connectionSalt = SHA256("ttybuild-v2-connection" || hostNonce || clientNonce)
+routingTag = first16(SHA256("ttybuild-v2-tag" || hostNonce || clientNonce))
 
 key_h2c = HKDF-SHA256(secret, salt=connectionSalt,
                       info="host->client" + channelSuffix, 32)
@@ -636,7 +636,7 @@ replacing it with aggregate fallback content. `sealed` is
 over the compact agent/project/prompt/action/message snapshot, where
 
 ```
-key_activity = HKDF-SHA256(ikm=secret, salt="pedals-v2", info="live-activity", 32)
+key_activity = HKDF-SHA256(ikm=secret, salt="ttybuild-v2", info="live-activity", 32)
 ```
 
 is deliberately distinct from both traffic keys. The phone mirrors only this
@@ -650,12 +650,12 @@ remain the durable fallback if a transient rich update is lost.
 
 ## 7. Desktop local control
 
-`~/.pedals/pedals.sock` carries newline-delimited JSON requests for `ls`, `new`,
+`~/.tty.build/ttybuild.sock` carries newline-delimited JSON requests for `ls`, `new`,
 `kill`, `pair`, `cancelPair`, `status`, `agent-event`, and `agents`. Responses
 use `{"ok":true,...}` or `{"ok":false,"err":"..."}`.
 
-`agent-event` is sent by the `pedals-hook` reporter (installed into coding
-agents' hook settings by `pedals hooks install` or the menu bar app):
+`agent-event` is sent by the `ttybuild-hook` reporter (installed into coding
+agents' hook settings by `ttybuild hooks install` or the menu bar app):
 `{"cmd":"agent-event","noReply":true,"agent":"claude","event":"session-start|prompt|ask|tool|
 busy|notify|compact|stop|session-end","agentSessionId":"...","sessionName"?,
 "cwd"?,"prompt"?,"message"?,"action"?,"agentError"?,
@@ -666,9 +666,9 @@ strictly one-way: stdin and socket operations are bounded and the daemon does
 not write an acknowledgement after the reporter exits. For managed sessions, the daemon's live
 terminal title is authoritative for `sessionName`; otherwise an agent adapter
 may report an explicit session-name field.
-`pedals hooks install|uninstall|status <agent>` manages ten agents — claude,
+`ttybuild hooks install|uninstall|status <agent>` manages ten agents — claude,
 codex, copilot, grok, kimi, kiro, opencode, omp, pi, hermes — writing
-sentinel-marked entries (`# pedals-managed-hook`) into each agent's own hook
+sentinel-marked entries (`# ttybuild-managed-hook`) into each agent's own hook
 settings, or a marker-owned generated plugin file for the plugin-based agents;
 user content is never overwritten.
 `agents` returns the current registry as `{"ok":true,"agents":[...]}` in the

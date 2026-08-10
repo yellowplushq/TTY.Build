@@ -4,9 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 ARTIFACT_ROOT="$REPOSITORY_ROOT/.artifacts"
-OUTPUT_DIR="${PEDALS_DESKTOP_OUTPUT_DIR:-$ARTIFACT_ROOT/desktop-release}"
-VERSION="${PEDALS_DESKTOP_VERSION:-1.0.0}"
-BUILD_NUMBER="${PEDALS_DESKTOP_BUILD_NUMBER:-1}"
+OUTPUT_DIR="${TTYBUILD_DESKTOP_OUTPUT_DIR:-$ARTIFACT_ROOT/desktop-release}"
+VERSION="${TTYBUILD_DESKTOP_VERSION:-1.0.0}"
+BUILD_NUMBER="${TTYBUILD_DESKTOP_BUILD_NUMBER:-1}"
 ARCHITECTURES=(arm64 x86_64)
 
 for command in xcodebuild xcodegen lipo ditto; do
@@ -17,11 +17,11 @@ for command in xcodebuild xcodegen lipo ditto; do
 done
 
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "PEDALS_DESKTOP_VERSION must be a three-part numeric version." >&2
+  echo "TTYBUILD_DESKTOP_VERSION must be a three-part numeric version." >&2
   exit 1
 fi
 if [[ ! "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-  echo "PEDALS_DESKTOP_BUILD_NUMBER must be a positive integer." >&2
+  echo "TTYBUILD_DESKTOP_BUILD_NUMBER must be a positive integer." >&2
   exit 1
 fi
 
@@ -37,16 +37,16 @@ case "$OUTPUT_DIR/" in
 esac
 
 BUILD_DIR="$OUTPUT_DIR/build"
-APP_PATH="$OUTPUT_DIR/Pedals.app"
+APP_PATH="$OUTPUT_DIR/TTYBuild.app"
 
 rm -rf "$BUILD_DIR" "$APP_PATH"
 mkdir -p "$BUILD_DIR"
 
-pushd "$REPOSITORY_ROOT/desktop/PedalsMenubar" >/dev/null
+pushd "$REPOSITORY_ROOT/desktop/TTYBuildMenubar" >/dev/null
 xcodegen generate
 xcodebuild \
-  -project PedalsMenubar.xcodeproj \
-  -scheme PedalsMenubar \
+  -project TTYBuildMenubar.xcodeproj \
+  -scheme TTYBuildMenubar \
   -configuration Release \
   -destination "generic/platform=macOS" \
   -derivedDataPath "$BUILD_DIR/derived-data" \
@@ -58,7 +58,7 @@ xcodebuild \
   build
 popd >/dev/null
 
-BUILT_APP="$BUILD_DIR/derived-data/Build/Products/Release/Pedals.app"
+BUILT_APP="$BUILD_DIR/derived-data/Build/Products/Release/TTYBuild.app"
 if [[ ! -d "$BUILT_APP" ]]; then
   echo "Xcode did not produce $BUILT_APP" >&2
   exit 1
@@ -66,7 +66,7 @@ fi
 
 ditto "$BUILT_APP" "$APP_PATH"
 
-lipo "$APP_PATH/Contents/MacOS/Pedals" -verify_arch "${ARCHITECTURES[@]}"
+lipo "$APP_PATH/Contents/MacOS/TTYBuild" -verify_arch "${ARCHITECTURES[@]}"
 
 actual_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
 actual_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
@@ -75,7 +75,7 @@ if [[ "$actual_version" != "$VERSION" || "$actual_build" != "$BUILD_NUMBER" ]]; 
   echo "Built version $actual_version ($actual_build) does not match $VERSION ($BUILD_NUMBER)." >&2
   exit 1
 fi
-if [[ "$actual_identifier" != "air.build.pedals.menubar" ]]; then
+if [[ "$actual_identifier" != "build.tty.menubar" ]]; then
   echo "Unexpected desktop bundle identifier: $actual_identifier" >&2
   exit 1
 fi

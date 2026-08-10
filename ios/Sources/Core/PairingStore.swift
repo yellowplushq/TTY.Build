@@ -1,5 +1,5 @@
 import Foundation
-import PedalsKit
+import TTYBuildKit
 import Security
 
 @MainActor
@@ -13,7 +13,7 @@ protocol PairingServiceClient: AnyObject {
     ) async throws -> [String]
 }
 
-extension PedalsServiceAPI: PairingServiceClient {}
+extension TTYBuildServiceAPI: PairingServiceClient {}
 
 /// Persists the v2 client identity and every E2EE computer binding as one
 /// Keychain value. A single value is important here: replacing a stale client
@@ -33,9 +33,9 @@ final class PairingStore {
         var errorDescription: String? {
             switch self {
             case .serviceMismatch:
-                "This Pedals installation is already registered with another service."
+                "This tty.build installation is already registered with another service."
             case .missingClientIdentity:
-                "The Pedals client identity is missing. Pair this device again."
+                "The tty.build client identity is missing. Pair this device again."
             }
         }
     }
@@ -60,7 +60,7 @@ final class PairingStore {
 
     convenience init() {
         self.init(
-            apiFactory: { PedalsServiceAPI(serviceURL: $0) },
+            apiFactory: { TTYBuildServiceAPI(serviceURL: $0) },
             stateReader: { try Self.readKeychainState() },
             stateWriter: { try Self.writeKeychainState($0) }
         )
@@ -92,7 +92,7 @@ final class PairingStore {
 
     func bind(
         code: PairingCode,
-        serviceURL: URL = PedalsServiceAPI.productionServiceURL
+        serviceURL: URL = TTYBuildServiceAPI.productionServiceURL
     ) async throws -> (ComputerBinding, ClientIdentity) {
         await acquireMutation()
         do {
@@ -179,7 +179,7 @@ final class PairingStore {
     /// an identity before the first computer ever binds, so the enrollment
     /// token can be registered from the onboarding screen.
     func ensureClientIdentity(
-        serviceURL: URL = PedalsServiceAPI.productionServiceURL
+        serviceURL: URL = TTYBuildServiceAPI.productionServiceURL
     ) async throws -> ClientIdentity {
         await acquireMutation()
         defer { releaseMutation() }
@@ -327,7 +327,7 @@ final class PairingStore {
     }
 
     private static func isUnauthorized(_ error: Error) -> Bool {
-        guard case PedalsServiceAPI.APIError.rejected(let status, _) = error else {
+        guard case TTYBuildServiceAPI.APIError.rejected(let status, _) = error else {
             return false
         }
         return status == 401

@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import PedalsKit
+import TTYBuildKit
 
 @MainActor
 @Observable

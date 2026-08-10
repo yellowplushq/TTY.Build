@@ -1,6 +1,6 @@
 import ActivityKit
 import Foundation
-import PedalsKit
+import TTYBuildKit
 
 @MainActor
 public final class TTYLiveActivityController {
@@ -25,7 +25,7 @@ public final class TTYLiveActivityController {
                 await PushEndpointRegistrar.registerOrQueue(
                     .init(
                         surface: .iOSLiveActivityStart,
-                        token: token.pedalsHexString
+                        token: token.ttybuildHexString
                     )
                 )
                 guard self != nil else { return }
@@ -64,7 +64,7 @@ public final class TTYLiveActivityController {
     /// Dev-only visual fixture: the production activity is APNs
     /// push-to-start only, which a simulator cannot receive, so this renders
     /// the identical UI from a locally requested activity.
-    /// `PEDALS_LA_FIXTURE="ttys:running:waiting:done:state"`.
+    /// `TTYBUILD_LA_FIXTURE="ttys:running:waiting:done:state"`.
     public func startFixtureActivity(spec: String) {
         let parts = spec.split(separator: ":", omittingEmptySubsequences: false)
         guard parts.count == 5,
@@ -255,7 +255,7 @@ public final class TTYLiveActivityController {
                 await PushEndpointRegistrar.registerOrQueue(
                     .init(
                         surface: .iOSLiveActivityUpdate,
-                        token: token.pedalsHexString,
+                        token: token.ttybuildHexString,
                         activityId: activity.id
                     )
                 )
@@ -327,9 +327,9 @@ public final class TTYLiveActivityController {
             agent: "codex",
             state: state,
             sessionName: "Polish agent monitoring",
-            project: "pedals",
+            project: "ttybuild",
             prompt: "Review the Live Activity experience",
-            action: "Build: PedalsWidgets",
+            action: "Build: TTYBuildWidgets",
             message: state == .done
                 ? "Live Activity is ready" : "Choose how to continue",
             sessionId: 1,
@@ -340,7 +340,7 @@ public final class TTYLiveActivityController {
                     agent: "claude",
                     state: .running,
                     sessionName: "Refactor the relay tests",
-                    project: "pedals",
+                    project: "ttybuild",
                     message: "Running the worker test suite",
                     updatedAt: Date.now.timeIntervalSince1970 - 90
                 )

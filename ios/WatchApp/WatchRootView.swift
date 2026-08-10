@@ -7,7 +7,7 @@ struct WatchRootView: View {
     @ViewBuilder
     var body: some View {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["PEDALS_WATCH_TERMINAL_FIXTURE"] == "1" {
+        if ProcessInfo.processInfo.environment["TTYBUILD_WATCH_TERMINAL_FIXTURE"] == "1" {
             WatchTerminalFixtureView()
         } else {
             terminalNavigation

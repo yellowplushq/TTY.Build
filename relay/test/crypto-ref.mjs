@@ -1,11 +1,11 @@
-// Node reference implementation of the Pedals E2EE protocol v2.
+// Node reference implementation of the TTYBuild E2EE protocol v2.
 //
 // Wire message = seq (u64 LE) || nonce(12) || ciphertext || tag(16)
 // where nonce||ciphertext||tag is the CryptoKit ChaChaPoly "combined"
 // representation and the 8 seq bytes are the AAD.
 //
 // Pure node:crypto — used by relay tests and the headless e2e client, and as
-// the cross-check target for PedalsKit's Swift implementation.
+// the cross-check target for TTYBuildKit's Swift implementation.
 
 import {
   hkdfSync,
@@ -14,7 +14,7 @@ import {
   randomBytes,
 } from "node:crypto";
 
-const HKDF_SALT = Buffer.from("pedals-v2", "utf8");
+const HKDF_SALT = Buffer.from("ttybuild-v2", "utf8");
 const INFO_H2C = Buffer.from("host->client", "utf8");
 const INFO_C2H = Buffer.from("client->host", "utf8");
 const KEY_LEN = 32;

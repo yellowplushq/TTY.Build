@@ -1,6 +1,6 @@
 import Combine
 import Foundation
-import PedalsKit
+import TTYBuildKit
 
 /// One observed coding-agent session, tagged with the computer it runs on
 /// (docs/AGENT_MONITORING_DESIGN.md §4).
@@ -129,7 +129,7 @@ final class TerminalManager {
 
     func addComputer(
         code: PairingCode,
-        serviceURL: URL = PedalsServiceAPI.productionServiceURL
+        serviceURL: URL = TTYBuildServiceAPI.productionServiceURL
     ) async throws {
         let previousClientID = try pairingStore.loadClientIdentity()?.clientID
         let (binding, identity) = try await pairingStore.bind(

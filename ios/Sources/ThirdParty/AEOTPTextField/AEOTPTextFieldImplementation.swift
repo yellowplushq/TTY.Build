@@ -3,7 +3,7 @@
 //  ViberTemplate
 //
 //  Created by Abdelrhman Eliwa on 09/05/2021.
-//  Adapted for Swift 6 and strict numeric input by Pedals.
+//  Adapted for Swift 6 and strict numeric input by TTYBuild.
 //
 
 import UIKit

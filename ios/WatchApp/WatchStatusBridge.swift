@@ -113,7 +113,7 @@ final class WatchStatusBridge: NSObject, WCSessionDelegate, @unchecked Sendable 
         // installation and endpoint delivery use short durable transactions
         // off MainActor and must never stall the Watch UI on network I/O.
         StatusSharedStore.saveSnapshot(context.snapshot)
-        WidgetCenter.shared.reloadTimelines(ofKind: PedalsStatusConstants.watchWidgetKind)
+        WidgetCenter.shared.reloadTimelines(ofKind: TTYBuildStatusConstants.watchWidgetKind)
         Task { [context] in
             let changed = await StatusSharedStore.saveCredential(context.credential)
             if changed {
@@ -122,11 +122,11 @@ final class WatchStatusBridge: NSObject, WCSessionDelegate, @unchecked Sendable 
                 // any network work so the Watch never waits on APNs setup.
                 StatusSharedStore.saveSnapshot(context.snapshot)
                 WidgetCenter.shared.reloadTimelines(
-                    ofKind: PedalsStatusConstants.watchWidgetKind
+                    ofKind: TTYBuildStatusConstants.watchWidgetKind
                 )
             }
             await PushEndpointRegistrar.flushPending()
-            _ = try? await PedalsStatusRuntime.refreshState()
+            _ = try? await TTYBuildStatusRuntime.refreshState()
         }
     }
 }

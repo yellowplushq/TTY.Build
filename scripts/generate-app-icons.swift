@@ -25,7 +25,7 @@ private let repositoryRoot = URL(
 )
 private let masterURL = CommandLine.arguments.dropFirst().first.map {
     URL(fileURLWithPath: $0)
-} ?? repositoryRoot.appendingPathComponent("brand/PedalsIconMaster.png")
+} ?? repositoryRoot.appendingPathComponent("brand/TTYBuildIconMaster.png")
 
 guard let master = NSImage(contentsOf: masterURL), master.isValid else {
     FileHandle.standardError.write(Data("\(IconError.invalidMaster(masterURL.path))\n".utf8))
@@ -220,7 +220,7 @@ do {
     for (size, scale) in [(32, "1x"), (64, "2x")] {
         try writePNG(
             squareIcon(size: size),
-            to: "desktop/PedalsMenubar/Resources/Assets.xcassets/AppMark.imageset/AppMark-\(scale).png"
+            to: "desktop/TTYBuildMenubar/Resources/Assets.xcassets/AppMark.imageset/AppMark-\(scale).png"
         )
     }
 
@@ -240,14 +240,14 @@ do {
     for (size, filename) in macOutputs {
         try writePNG(
             macIcon(size: size),
-            to: "desktop/PedalsMenubar/Resources/Assets.xcassets/AppIcon.appiconset/\(filename)"
+            to: "desktop/TTYBuildMenubar/Resources/Assets.xcassets/AppIcon.appiconset/\(filename)"
         )
     }
 
     for (size, scale) in [(18, "1x"), (36, "2x")] {
         try writePNG(
             menuBarTemplate(size: size),
-            to: "desktop/PedalsMenubar/Resources/Assets.xcassets/StatusBarIcon.imageset/StatusBarIcon-\(scale).png"
+            to: "desktop/TTYBuildMenubar/Resources/Assets.xcassets/StatusBarIcon.imageset/StatusBarIcon-\(scale).png"
         )
     }
 
@@ -261,7 +261,7 @@ do {
     try writePNG(socialCard(), to: "relay/public/og.png")
     try generateICO()
 
-    print("Generated Pedals icons from \(masterURL.path)")
+    print("Generated TTYBuild icons from \(masterURL.path)")
 } catch {
     FileHandle.standardError.write(Data("app icon generation failed: \(error)\n".utf8))
     exit(1)

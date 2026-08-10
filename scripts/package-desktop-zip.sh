@@ -4,9 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 ARTIFACT_ROOT="$REPOSITORY_ROOT/.artifacts"
-OUTPUT_DIR="${PEDALS_DESKTOP_OUTPUT_DIR:-$ARTIFACT_ROOT/desktop-release}"
-APP_PATH="$OUTPUT_DIR/Pedals.app"
-ZIP_PATH="$OUTPUT_DIR/Pedals-macOS.zip"
+OUTPUT_DIR="${TTYBUILD_DESKTOP_OUTPUT_DIR:-$ARTIFACT_ROOT/desktop-release}"
+APP_PATH="$OUTPUT_DIR/TTYBuild.app"
+ZIP_PATH="$OUTPUT_DIR/TTYBuild-macOS.zip"
 
 for command in ditto; do
   if ! command -v "$command" >/dev/null 2>&1; then

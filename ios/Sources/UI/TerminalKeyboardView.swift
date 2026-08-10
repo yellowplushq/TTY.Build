@@ -48,7 +48,7 @@ final class TerminalKeyboardView: UIInputView, UIInputViewAudioFeedback,
 
         allowsSelfSizing = true
         autoresizingMask = [.flexibleWidth]
-        backgroundColor = PedalsTheme.uiCanvas
+        backgroundColor = TTYBuildTheme.uiCanvas
         accessibilityIdentifier = "terminal-expanded-keyboard"
 
         glass.translatesAutoresizingMaskIntoConstraints = false
@@ -138,8 +138,8 @@ final class TerminalKeyboardView: UIInputView, UIInputViewAudioFeedback,
         pageControl.translatesAutoresizingMaskIntoConstraints = false
         pageControl.numberOfPages = 2
         pageControl.currentPage = Page.terminal.rawValue
-        pageControl.currentPageIndicatorTintColor = PedalsTheme.uiContent.withAlphaComponent(0.9)
-        pageControl.pageIndicatorTintColor = PedalsTheme.uiContent.withAlphaComponent(0.24)
+        pageControl.currentPageIndicatorTintColor = TTYBuildTheme.uiContent.withAlphaComponent(0.9)
+        pageControl.pageIndicatorTintColor = TTYBuildTheme.uiContent.withAlphaComponent(0.24)
         pageControl.backgroundStyle = .minimal
         pageControl.allowsContinuousInteraction = false
         pageControl.accessibilityLabel = "Keyboard page"
@@ -658,8 +658,8 @@ private final class TerminalKeyboardButton: UIButton {
 
     init() {
         super.init(frame: .zero)
-        tintColor = PedalsTheme.uiContent
-        setTitleColor(PedalsTheme.uiContent, for: .normal)
+        tintColor = TTYBuildTheme.uiContent
+        setTitleColor(TTYBuildTheme.uiContent, for: .normal)
         layer.cornerRadius = 9
         layer.cornerCurve = .continuous
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -671,13 +671,13 @@ private final class TerminalKeyboardButton: UIButton {
 
     private func updateAppearance() {
         backgroundColor = if isSelected {
-            PedalsTheme.uiSelection
+            TTYBuildTheme.uiSelection
         } else if isHighlighted {
-            PedalsTheme.uiSelection.withAlphaComponent(0.7)
+            TTYBuildTheme.uiSelection.withAlphaComponent(0.7)
         } else {
-            PedalsTheme.uiSurface
+            TTYBuildTheme.uiSurface
         }
         layer.borderWidth = isSelected ? 1 : 0
-        layer.borderColor = PedalsTheme.uiContent.withAlphaComponent(0.92).cgColor
+        layer.borderColor = TTYBuildTheme.uiContent.withAlphaComponent(0.92).cgColor
     }
 }

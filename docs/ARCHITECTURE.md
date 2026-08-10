@@ -1,14 +1,14 @@
-# Pedals Architecture
+# tty.build Architecture
 
-Pedals v2 combines a zero-knowledge terminal relay with a deliberately small
+tty.build v2 combines a zero-knowledge terminal relay with a deliberately small
 status service for widgets, Dynamic Island, and Apple Watch.
 
 ```text
-pedals/
+ttybuild/
 ├── relay/                    Cloudflare Worker, Durable Objects, D1, APNs
-├── shared/PedalsKit/         Swift E2EE, v2 pairing, relay and REST clients
-├── desktop/PedalsDaemon/     Shared PTY/relay service core + headless CLI
-├── desktop/PedalsMenubar/    macOS service process and menu bar UI
+├── shared/TTYBuildKit/         Swift E2EE, v2 pairing, relay and REST clients
+├── desktop/TTYBuildDaemon/     Shared PTY/relay service core + headless CLI
+├── desktop/TTYBuildMenubar/    macOS service process and menu bar UI
 ├── ios/
 │   ├── Sources/              UIKit terminal app and binding lifecycle
 │   ├── SharedStatus/         app-group state, status API, ActivityKit bridge
@@ -20,7 +20,7 @@ pedals/
 
 ## Cloudflare service
 
-The Worker at `https://pedals.air.build` owns four distinct responsibilities:
+The Worker at `https://tty.build` owns four distinct responsibilities:
 
 1. REST enrollment and explicit client-computer bindings in D1.
 2. Authenticated, hibernatable E2EE WebSocket routing through `RelayChannel`
@@ -67,15 +67,15 @@ running app networking code.
 
 ## Desktop service
 
-`PedalsDaemonCore` owns the PTY processes, replay buffers, Unix control socket,
+`TTYBuildDaemonCore` owns the PTY processes, replay buffers, Unix control socket,
 and authenticated relay links. The menu bar app links this core directly and
-owns its lifecycle, so quitting Pedals also stops the service. It opens directly
+owns its lifecycle, so quitting tty.build also stops the service. It opens directly
 to pairing on an unpaired computer and never asks the user to configure or
-start a daemon. The optional headless `pedals` executable exposes `serve`, `ls`,
+start a daemon. The optional headless `ttybuild` executable exposes `serve`, `ls`,
 `new`, `kill`, `pair`, and `status` through Swift Argument Parser for CLI use.
 
 First launch registers a computer with the configured HTTPS service and stores
-`~/.pedals/identity.json` (mode 0600). Opening the app's pairing surface requests
+`~/.tty.build/identity.json` (mode 0600). Opening the app's pairing surface requests
 a fresh 15-minute, eight-digit pairing code; closing it revokes the current
 code. The headless CLI provides the same pairing behavior, and `--reset` rotates
 the server identity, host bearer, and E2EE secret.
@@ -90,8 +90,8 @@ remain encrypted peer frames.
 
 ## iPhone app
 
-The iOS 26 UIKit target `Pedals` uses GhosttyKit for terminal rendering and
-PedalsKit for transport and E2EE.
+The iOS 26 UIKit target `TTYBuild` uses GhosttyKit for terminal rendering and
+TTYBuildKit for transport and E2EE.
 
 - `PairingStore` stores the v2 installation identity and durable
   `ComputerBinding` values in the Keychain. It persists an E2EE secret only
@@ -112,7 +112,7 @@ leave the encrypted terminal path; titles, cwd, dimensions, and bytes do not.
 
 ## Widget and Live Activity
 
-`PedalsWidgets` contains both the Home/Lock Screen Widget and
+`TTYBuildWidgets` contains both the Home/Lock Screen Widget and
 `ActivityConfiguration<TTYActivityAttributes>`.
 
 - The Widget supports small, medium, circular, rectangular, and inline
@@ -134,7 +134,7 @@ main app; terminal mutations remain inside the authenticated terminal UI.
 
 ## Apple Watch
 
-`PedalsWatch` is a companion watchOS 26 SwiftUI app. The phone transfers the
+`TTYBuildWatch` is a companion watchOS 26 SwiftUI app. The phone transfers the
 read-only status credential and last snapshot using `WCSession` application
 context. For terminal viewing it also transfers the Watch's independent
 delegate relay identity plus E2EE `ComputerBinding` secrets as a versioned
@@ -161,7 +161,7 @@ The v2 envelope is designed so a bad credential can never wedge the Watch:
   phone for a fresh context (throttled), and the phone re-runs delegate
   provisioning whenever the Watch asks.
 
-`PedalsWatchWidgets` implements circular, corner, rectangular, and inline
+`TTYBuildWatchWidgets` implements circular, corner, rectangular, and inline
 complications/Smart Stack families. Its own iOS 26 `WidgetPushHandler` registers
 the watch WidgetKit token through the same timeline-backed recovery path, so
 APNs refresh does not depend on waking the iPhone.
@@ -181,9 +181,9 @@ sandbox APNs; Release builds use production APNs.
 
 ## Build and verification
 
-- `swift test` in `shared/PedalsKit` checks v2 pairing, frame codec, channel
+- `swift test` in `shared/TTYBuildKit` checks v2 pairing, frame codec, channel
   isolation, replay rejection, and cross-language crypto vectors.
-- `swift test` in `desktop/PedalsDaemon` checks PTY lifecycle and local control.
+- `swift test` in `desktop/TTYBuildDaemon` checks PTY lifecycle and local control.
 - `npm test` in `relay` checks D1 enrollment/bindings, authenticated relay,
   terminal-directory leases, APNs JWT/payload/error handling, and push delivery.
 - Generate Apple projects with `xcodegen` from `ios/project.yml`; do not edit the

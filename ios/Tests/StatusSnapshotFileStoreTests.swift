@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import Pedals
+@testable import TTYBuild
 
 final class StatusSnapshotFileStoreTests: XCTestCase {
     private final class FailureBox: @unchecked Sendable {
@@ -76,7 +76,7 @@ final class StatusSnapshotFileStoreTests: XCTestCase {
         let url = StatusAPIClient.pushEndpointURL(
             .iOSLiveActivityUpdate,
             activityId: first.activityId,
-            baseURL: URL(string: "https://pedals.example/base/")!
+            baseURL: URL(string: "https://ttybuild.example/base/")!
         )
         let components = try XCTUnwrap(
             URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -120,7 +120,7 @@ final class StatusSnapshotFileStoreTests: XCTestCase {
         }
         """
 
-        let snapshot = try JSONDecoder.pedals.decode(
+        let snapshot = try JSONDecoder.ttybuild.decode(
             TTYStatusSnapshot.self,
             from: Data(json.utf8)
         )
@@ -146,7 +146,7 @@ final class StatusSnapshotFileStoreTests: XCTestCase {
         }
         """
 
-        let snapshot = try JSONDecoder.pedals.decode(
+        let snapshot = try JSONDecoder.ttybuild.decode(
             TTYStatusSnapshot.self,
             from: Data(json.utf8)
         )
@@ -181,7 +181,7 @@ final class StatusSnapshotFileStoreTests: XCTestCase {
 
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("pedals-status-tests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("ttybuild-status-tests-\(UUID().uuidString)", isDirectory: true)
     }
 
     private func snapshot(sequence: UInt64) -> TTYStatusSnapshot {

@@ -10,21 +10,21 @@ import {
 } from "../src/site.mjs";
 
 function request(path, options = {}) {
-  return new Request(`https://pedals.air.build${path}`, options);
+  return new Request(`https://tty.build${path}`, options);
 }
 
 test("the stable download path redirects to the latest desktop release", async () => {
   const req = request("/download/macos");
   const response = handleDesktopDownload(
     req,
-    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/pedals" },
+    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/tty.build" },
     new URL(req.url),
   );
 
   assert.equal(response.status, 302);
   assert.equal(
     response.headers.get("location"),
-    `https://github.com/yellowplushq/pedals/releases/latest/download/${MACOS_ASSET}`,
+    `https://github.com/yellowplushq/tty.build/releases/latest/download/${MACOS_ASSET}`,
   );
   assert.equal(response.headers.get("cache-control"), "no-store");
 });
@@ -33,14 +33,14 @@ test("the stable appcast path redirects to the latest signed update feed", () =>
   const req = request("/appcast.xml", { method: "HEAD" });
   const response = handleDesktopDownload(
     req,
-    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/pedals" },
+    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/tty.build" },
     new URL(req.url),
   );
 
   assert.equal(response.status, 302);
   assert.equal(
     response.headers.get("location"),
-    `https://github.com/yellowplushq/pedals/releases/latest/download/${APPCAST_ASSET}`,
+    `https://github.com/yellowplushq/tty.build/releases/latest/download/${APPCAST_ASSET}`,
   );
   assert.equal(response.headers.get("content-length"), "0");
 });
@@ -53,14 +53,14 @@ test("the zip download paths redirect to the latest release archive and checksum
     const req = request(path);
     const response = handleDesktopDownload(
       req,
-      { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/pedals" },
+      { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/tty.build" },
       new URL(req.url),
     );
 
     assert.equal(response.status, 302);
     assert.equal(
       response.headers.get("location"),
-      `https://github.com/yellowplushq/pedals/releases/latest/download/${asset}`,
+      `https://github.com/yellowplushq/tty.build/releases/latest/download/${asset}`,
     );
   }
 });
@@ -96,7 +96,7 @@ test("website assets receive defense-in-depth response headers", async () => {
   const response = await handleWebsiteAsset(req, {
     ASSETS: {
       fetch: async () =>
-        new Response("<!doctype html><title>Pedals</title>", {
+        new Response("<!doctype html><title>TTYBuild</title>", {
           headers: { "content-type": "text/html; charset=utf-8" },
         }),
     },
@@ -109,7 +109,7 @@ test("website assets receive defense-in-depth response headers", async () => {
     response.headers.get("strict-transport-security"),
     "max-age=31536000; includeSubDomains",
   );
-  assert.match(await response.text(), /Pedals/);
+  assert.match(await response.text(), /TTYBuild/);
 });
 
 test("the short /i alias serves the install script without a redirect", async () => {
@@ -153,7 +153,7 @@ test("an 8-digit path serves the installer with that enrollment code baked in", 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("content-length"), null);
   const rendered = await response.text();
-  assert.match(rendered, /pair_code="\$\{PEDALS_PAIR:-90285513\}"/);
+  assert.match(rendered, /pair_code="\$\{TTYBUILD_PAIR:-90285513\}"/);
   // The template substitutes exactly one site; the rest of the script is
   // byte-identical.
   assert.equal(rendered.replace("90285513", ""), script);
@@ -173,7 +173,7 @@ test("the one-screen homepage exposes the product promise and download CTA", asy
 
 test("the homepage offers the curl installer with a self-hosted copy button", async () => {
   const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
-  assert.match(html, /curl -fsSL https:\/\/pedals\.air\.build\/i \| bash/);
+  assert.match(html, /curl -fsSL https:\/\/tty\.build\/i \| bash/);
   assert.match(html, /data-copy="install-command-text"/);
   assert.match(html, /<script src="\/site\.js" defer><\/script>/);
 
@@ -200,7 +200,7 @@ test("the curl installer downloads the zip release and verifies its checksum", a
 
 test("the curl installer distinguishes the desktop app from iOS Simulator", async () => {
   const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
-  assert.match(script, /APP_BUNDLE_ID="air\.build\.pedals\.menubar"/);
+  assert.match(script, /APP_BUNDLE_ID="build\.tty\.menubar"/);
   assert.match(
     script,
     /application id \\"\$APP_BUNDLE_ID\\" is running/,
@@ -215,7 +215,7 @@ test("the curl installer distinguishes the desktop app from iOS Simulator", asyn
 
 test("the curl installer relaunches after a graceful quit timeout", async () => {
   const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
-  assert.match(script, /Pedals did not quit normally; stopping it before relaunch/);
+  assert.match(script, /tty\.build did not quit normally; stopping it before relaunch/);
   assert.match(script, /terminate_desktop_app/);
   assert.match(script, /close it and rerun the installer/);
 });
@@ -225,19 +225,19 @@ test("the curl installer does not infer launch success from process state", asyn
   const launchApp = script.match(/launch_app\(\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
   assert.match(launchApp, /open "\$install_dir\/\$APP_NAME"/);
   assert.doesNotMatch(launchApp, /app_is_running/);
-  assert.doesNotMatch(launchApp, /Launched Pedals/);
+  assert.doesNotMatch(launchApp, /Launched TTYBuild/);
 });
 
 test("the curl installer stamps the enrollment code onto the app bundle", async () => {
   const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
   assert.match(script, /--pair\)/);
-  assert.match(script, /PEDALS_PAIR/);
+  assert.match(script, /TTYBUILD_PAIR/);
   assert.match(script, /\[0-9\]\{8\}/);
   assert.match(
     script,
-    /xattr -w build\.air\.pedals\.pairing-code "\$pair_code" "\$staging"/,
+    /xattr -w build\.tty\.pairing-code "\$pair_code" "\$staging"/,
   );
-  assert.doesNotMatch(script, /pedals:\/\//);
+  assert.doesNotMatch(script, /ttybuild:\/\//);
 });
 
 test("support and privacy pages expose release-ready public information", async () => {

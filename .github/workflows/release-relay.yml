@@ -28,7 +28,7 @@ jobs:
           if [[ -z "$CLOUDFLARE_API_TOKEN" ]]; then
             echo "Missing CLOUDFLARE_API_TOKEN repository secret." >&2
             echo "Create a Cloudflare API token with Workers Scripts:Edit," >&2
-            echo "D1:Edit, and Workers Routes:Edit on the pedals-relay account," >&2
+            echo "D1:Edit, and Workers Routes:Edit on the ttybuild-relay account," >&2
             echo "then: gh secret set CLOUDFLARE_API_TOKEN" >&2
             exit 1
           fi

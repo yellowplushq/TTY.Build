@@ -463,7 +463,7 @@ private final class TerminalSelectionHandleView: UIView {
         // handle expands mostly left, while the end handle expands right.
         let x: CGFloat = endpoint == .start ? bounds.width - 8 : 8
 
-        PedalsTheme.uiContent.setFill()
+        TTYBuildTheme.uiContent.setFill()
         UIBezierPath(
             roundedRect: CGRect(
                 x: x - stemWidth / 2,
@@ -652,7 +652,7 @@ final class TerminalSelectionOverlay: UIView, UIGestureRecognizerDelegate {
         backgroundColor = .clear
         clipsToBounds = true
 
-        selectionLayer.fillColor = PedalsTheme.uiContent.withAlphaComponent(0.28).cgColor
+        selectionLayer.fillColor = TTYBuildTheme.uiContent.withAlphaComponent(0.28).cgColor
         selectionLayer.contentsScale = displayScale
         layer.addSublayer(selectionLayer)
 

@@ -6,7 +6,7 @@ struct WatchWidgetPushHandler: WidgetPushHandler {
 
     func pushTokenDidChange(_ pushInfo: WidgetPushInfo, widgets: [WidgetInfo]) {
         StatusSharedStore.saveWidgetPushObservation(
-            .init(surface: .watchWidget, token: pushInfo.token.pedalsHexString),
+            .init(surface: .watchWidget, token: pushInfo.token.ttybuildHexString),
             hasConfiguredWidgets: !widgets.isEmpty
         )
         PushEndpointRegistrar.requestFlush()

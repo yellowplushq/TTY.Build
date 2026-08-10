@@ -1,8 +1,8 @@
-import PedalsKit
+import TTYBuildKit
 import UIKit
 import XCTest
 
-@testable import Pedals
+@testable import TTYBuild
 
 @MainActor
 final class TabStripViewTests: XCTestCase {
@@ -27,7 +27,7 @@ final class TabStripViewTests: XCTestCase {
         XCTAssertEqual(pills.count, 2)
         for pill in pills {
             let icon = try XCTUnwrap(
-                descendant(in: pill, accessibilityIdentifier: "pedals.tab.icon") as? UIImageView
+                descendant(in: pill, accessibilityIdentifier: "ttybuild.tab.icon") as? UIImageView
             )
             XCTAssertNotNil(icon.image)
         }
@@ -35,7 +35,7 @@ final class TabStripViewTests: XCTestCase {
         let waitingBadge = try XCTUnwrap(
             descendant(
                 in: pills[1],
-                accessibilityIdentifier: "pedals.tab.agent-state-badge"
+                accessibilityIdentifier: "ttybuild.tab.agent-state-badge"
             )
         )
         XCTAssertFalse(waitingBadge.isHidden)

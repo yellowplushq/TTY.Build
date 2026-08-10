@@ -96,19 +96,19 @@ public enum StatusAPIError: Error, LocalizedError, Sendable {
 public struct StatusAPIClient: Sendable {
     public init() {}
 
-    public func fetchState(credential: PedalsStatusCredential) async throws -> TTYStatusSnapshot {
+    public func fetchState(credential: TTYBuildStatusCredential) async throws -> TTYStatusSnapshot {
         var request = URLRequest(
             url: Self.endpoint("v2/clients/me/state", baseURL: credential.serviceURL)
         )
         request.httpMethod = "GET"
         authorize(&request, credential: credential)
         let data = try await perform(request)
-        return try JSONDecoder.pedals.decode(TTYStatusSnapshot.self, from: data)
+        return try JSONDecoder.ttybuild.decode(TTYStatusSnapshot.self, from: data)
     }
 
     public func putPushEndpoint(
         _ registration: PushEndpointRegistration,
-        credential: PedalsStatusCredential
+        credential: TTYBuildStatusCredential
     ) async throws {
         var request = URLRequest(
             url: Self.pushEndpointURL(
@@ -132,7 +132,7 @@ public struct StatusAPIClient: Sendable {
     public func deletePushEndpoint(
         _ surface: PushSurface,
         activityId: String? = nil,
-        credential: PedalsStatusCredential
+        credential: TTYBuildStatusCredential
     ) async throws {
         var request = URLRequest(
             url: Self.pushEndpointURL(
@@ -167,9 +167,9 @@ public struct StatusAPIClient: Sendable {
         }
     }
 
-    private func authorize(_ request: inout URLRequest, credential: PedalsStatusCredential) {
+    private func authorize(_ request: inout URLRequest, credential: TTYBuildStatusCredential) {
         request.setValue("Bearer \(credential.statusToken)", forHTTPHeaderField: "Authorization")
-        request.setValue(credential.clientID, forHTTPHeaderField: "X-Pedals-Client-ID")
+        request.setValue(credential.clientID, forHTTPHeaderField: "X-TTYBuild-Client-ID")
     }
 
     private func perform(_ request: URLRequest) async throws -> Data {
@@ -189,8 +189,8 @@ public struct StatusAPIClient: Sendable {
     }
 }
 
-public enum PedalsStatusRuntime {
-    public static func installCredential(_ credential: PedalsStatusCredential) async {
+public enum TTYBuildStatusRuntime {
+    public static func installCredential(_ credential: TTYBuildStatusCredential) async {
         await StatusSharedStore.saveCredential(credential)
         await PushEndpointRegistrar.flushPending()
     }

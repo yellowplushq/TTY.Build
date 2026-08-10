@@ -42,14 +42,14 @@ jobs:
       ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
       ASC_PRIVATE_KEY_B64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
-      PEDALS_TEAM_ID: QDJ93ZUQ9B
-      PEDALS_INTERNAL_GROUP_ID: a3f73f1d-e7a5-47d8-9b57-8ada4baad549
-      PEDALS_EXTERNAL_GROUP_ID: 2ad1c56f-4ac7-4e9c-b54f-29aa102f5114
-      PEDALS_REQUESTED_VERSION: ${{ inputs.marketing_version }}
-      PEDALS_REQUESTED_BUILD: ${{ inputs.build_number }}
-      PEDALS_TEST_NOTES: ${{ inputs.test_notes }}
-      PEDALS_DISTRIBUTE_EXTERNAL: ${{ inputs.distribute_external }}
-      PEDALS_RELEASE_DIR: ${{ github.workspace }}/.artifacts/testflight-release
+      TTYBUILD_TEAM_ID: QDJ93ZUQ9B
+      TTYBUILD_INTERNAL_GROUP_ID: a3f73f1d-e7a5-47d8-9b57-8ada4baad549
+      TTYBUILD_EXTERNAL_GROUP_ID: 2ad1c56f-4ac7-4e9c-b54f-29aa102f5114
+      TTYBUILD_REQUESTED_VERSION: ${{ inputs.marketing_version }}
+      TTYBUILD_REQUESTED_BUILD: ${{ inputs.build_number }}
+      TTYBUILD_TEST_NOTES: ${{ inputs.test_notes }}
+      TTYBUILD_DISTRIBUTE_EXTERNAL: ${{ inputs.distribute_external }}
+      TTYBUILD_RELEASE_DIR: ${{ github.workspace }}/.artifacts/testflight-release
 
     steps:
       - name: Check out source
@@ -82,8 +82,8 @@ jobs:
           asc testflight groups list --app "$ASC_APP_ID" --output json \
             > "$RUNNER_TEMP/groups.json"
           jq -e \
-            --arg internal "$PEDALS_INTERNAL_GROUP_ID" \
-            --arg external "$PEDALS_EXTERNAL_GROUP_ID" \
+            --arg internal "$TTYBUILD_INTERNAL_GROUP_ID" \
+            --arg external "$TTYBUILD_EXTERNAL_GROUP_ID" \
             'any(.data[]; .id == $internal and .attributes.isInternalGroup == true)
              and any(.data[]; .id == $external)' \
             "$RUNNER_TEMP/groups.json" >/dev/null
@@ -93,7 +93,7 @@ jobs:
         run: |
           set -euo pipefail
           source_version="$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' ios/project.yml)"
-          release_version="${PEDALS_REQUESTED_VERSION:-$source_version}"
+          release_version="${TTYBUILD_REQUESTED_VERSION:-$source_version}"
           if [[ ! "$release_version" =~ ^[0-9]+([.][0-9]+){0,2}$ ]]; then
             echo "Invalid marketing version: $release_version" >&2
             exit 1
@@ -101,7 +101,7 @@ jobs:
 
           asc builds list --app "$ASC_APP_ID" --platform IOS --paginate --output json \
             > "$RUNNER_TEMP/builds.json"
-          release_build="$PEDALS_REQUESTED_BUILD"
+          release_build="$TTYBUILD_REQUESTED_BUILD"
           if [[ -z "$release_build" ]]; then
             highest="$(jq \
               '[.data[].attributes.version | select(test("^[0-9]+$")) | tonumber]
@@ -120,8 +120,8 @@ jobs:
             exit 1
           fi
 
-          PEDALS_RELEASE_VERSION="$release_version" \
-          PEDALS_RELEASE_BUILD="$release_build" \
+          TTYBUILD_RELEASE_VERSION="$release_version" \
+          TTYBUILD_RELEASE_BUILD="$release_build" \
           ruby <<'RUBY'
           path = "ios/project.yml"
           text = File.read(path)
@@ -129,20 +129,20 @@ jobs:
           version_pattern = /MARKETING_VERSION: "[^"]+"/
           abort "expected four embedded build versions" unless text.scan(build_pattern).length == 4
           abort "expected four embedded marketing versions" unless text.scan(version_pattern).length == 4
-          text.gsub!(build_pattern, "CURRENT_PROJECT_VERSION: \"#{ENV.fetch("PEDALS_RELEASE_BUILD")}\"")
-          text.gsub!(version_pattern, "MARKETING_VERSION: \"#{ENV.fetch("PEDALS_RELEASE_VERSION")}\"")
+          text.gsub!(build_pattern, "CURRENT_PROJECT_VERSION: \"#{ENV.fetch("TTYBUILD_RELEASE_BUILD")}\"")
+          text.gsub!(version_pattern, "MARKETING_VERSION: \"#{ENV.fetch("TTYBUILD_RELEASE_VERSION")}\"")
           File.write(path, text)
           RUBY
 
-          echo "PEDALS_RELEASE_VERSION=$release_version" >> "$GITHUB_ENV"
-          echo "PEDALS_RELEASE_BUILD=$release_build" >> "$GITHUB_ENV"
+          echo "TTYBUILD_RELEASE_VERSION=$release_version" >> "$GITHUB_ENV"
+          echo "TTYBUILD_RELEASE_BUILD=$release_build" >> "$GITHUB_ENV"
           cd ios
           xcodegen generate
           cd ..
           build_count="$(rg -c "CURRENT_PROJECT_VERSION = $release_build;" \
-            ios/Pedals.xcodeproj/project.pbxproj)"
+            ios/TTYBuild.xcodeproj/project.pbxproj)"
           version_count="$(rg -c "MARKETING_VERSION = $release_version;" \
-            ios/Pedals.xcodeproj/project.pbxproj)"
+            ios/TTYBuild.xcodeproj/project.pbxproj)"
           source_build_count="$(rg -c 'CURRENT_PROJECT_VERSION:' ios/project.yml)"
           source_version_count="$(rg -c 'MARKETING_VERSION:' ios/project.yml)"
           [[ "$build_count" == "$((source_build_count * 2))" ]]
@@ -155,22 +155,22 @@ jobs:
           set -euo pipefail
           npm ci --prefix relay
           npm test --prefix relay
-          swift test --package-path shared/PedalsKit
-          swift test --package-path desktop/PedalsDaemon
+          swift test --package-path shared/TTYBuildKit
+          swift test --package-path desktop/TTYBuildDaemon
           npm run test:contract --prefix relay
 
       - name: Audit retired identifiers
         shell: bash
         run: |
           set -euo pipefail
-          legacy_pattern='in[.]eyhn[.]pedals|group[.]in[.]eyhn[.]pedals|app[.]yellowplus[.]pedals|group[.]app[.]yellowplus[.]pedals|pedals[.](eyhn[.]in|yellowplus[.]app)|5RWW''Z7DDG9|6792''224057|Pedals'' TTY|PEDALS-''20260718'
+          legacy_pattern='in[.]eyhn[.]ttybuild|group[.]in[.]eyhn[.]ttybuild|app[.]yellowplus[.]ttybuild|group[.]app[.]yellowplus[.]ttybuild|ttybuild[.](eyhn[.]in|yellowplus[.]app)|5RWW''Z7DDG9|6792''224057|TTYBuild'' TTY|TTYBUILD-''20260718'
           if rg -n -uu --hidden \
             --glob '!.git/**' \
             --glob '!**/node_modules/**' \
             --glob '!AGENTS.md' \
             "$legacy_pattern" \
             .; then
-            echo "Retired Pedals identifier found." >&2
+            echo "Retired TTYBuild identifier found." >&2
             exit 1
           else
             result=$?
@@ -190,10 +190,10 @@ jobs:
           xcrun simctl boot "$simulator" 2>/dev/null || true
           xcrun simctl bootstatus "$simulator" -b
           xcodebuild \
-            -project ios/Pedals.xcodeproj \
-            -scheme Pedals \
+            -project ios/TTYBuild.xcodeproj \
+            -scheme TTYBuild \
             -destination "platform=iOS Simulator,id=$simulator" \
-            -derivedDataPath "$PEDALS_RELEASE_DIR/derived-data-tests" \
+            -derivedDataPath "$TTYBUILD_RELEASE_DIR/derived-data-tests" \
             -parallel-testing-enabled NO \
             test
 
@@ -208,9 +208,9 @@ jobs:
             echo "iOS Distribution certificate secrets are missing." >&2
             exit 1
           fi
-          mkdir -p "$PEDALS_RELEASE_DIR"
+          mkdir -p "$TTYBUILD_RELEASE_DIR"
           certificate="$RUNNER_TEMP/ios-distribution.p12"
-          keychain="$RUNNER_TEMP/pedals-ios-signing.keychain-db"
+          keychain="$RUNNER_TEMP/ttybuild-ios-signing.keychain-db"
           keychain_password="$(openssl rand -hex 24)"
           printf '%s' "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$certificate"
           chmod 600 "$certificate"
@@ -281,8 +281,8 @@ jobs:
               plutil -extract Entitlements.keychain-access-groups json \
                 -o "$profile_dir/keychain-groups.json" "$decoded"
               jq -e \
-                --arg exact "$PEDALS_TEAM_ID.air.build.pedals.shared" \
-                --arg wildcard "$PEDALS_TEAM_ID.*" \
+                --arg exact "$TTYBUILD_TEAM_ID.air.build.pedals.shared" \
+                --arg wildcard "$TTYBUILD_TEAM_ID.*" \
                 'index($exact) != null or index($wildcard) != null' \
                 "$profile_dir/keychain-groups.json" >/dev/null
             fi
@@ -292,22 +292,22 @@ jobs:
 
           install_profile \
             "Pedals YellowPlus App Store" \
-            "$PEDALS_TEAM_ID.air.build.pedals" \
+            "$TTYBUILD_TEAM_ID.air.build.pedals" \
             true \
             true
           install_profile \
             "Pedals Widgets YellowPlus App Store" \
-            "$PEDALS_TEAM_ID.air.build.pedals.widgets" \
+            "$TTYBUILD_TEAM_ID.air.build.pedals.widgets" \
             true \
             true
           install_profile \
             "Pedals Watch YellowPlus App Store" \
-            "$PEDALS_TEAM_ID.air.build.pedals.watchapp" \
+            "$TTYBUILD_TEAM_ID.air.build.pedals.watchapp" \
             false \
             false
           install_profile \
             "Pedals Watch Widgets YellowPlus App Store" \
-            "$PEDALS_TEAM_ID.air.build.pedals.watchapp.widgets" \
+            "$TTYBUILD_TEAM_ID.air.build.pedals.watchapp.widgets" \
             true \
             false
 
@@ -315,7 +315,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export_options="$PEDALS_RELEASE_DIR/ExportOptions.plist"
+          export_options="$TTYBUILD_RELEASE_DIR/ExportOptions.plist"
           cat > "$export_options" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -333,7 +333,7 @@ jobs:
             </dict>
             <key>signingCertificate</key><string>$IOS_SIGNING_IDENTITY_SHA</string>
             <key>signingStyle</key><string>manual</string>
-            <key>teamID</key><string>$PEDALS_TEAM_ID</string>
+            <key>teamID</key><string>$TTYBUILD_TEAM_ID</string>
             <key>uploadSymbols</key><true/>
           </dict>
           </plist>
@@ -345,18 +345,18 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild \
-            -project ios/Pedals.xcodeproj \
-            -scheme Pedals \
+            -project ios/TTYBuild.xcodeproj \
+            -scheme TTYBuild \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath "$PEDALS_RELEASE_DIR/Pedals.xcarchive" \
+            -archivePath "$TTYBUILD_RELEASE_DIR/TTYBuild.xcarchive" \
             archive
 
       - name: Verify signed archive
         shell: bash
         run: |
           set -euo pipefail
-          app="$PEDALS_RELEASE_DIR/Pedals.xcarchive/Products/Applications/Pedals.app"
+          app="$TTYBUILD_RELEASE_DIR/TTYBuild.xcarchive/Products/Applications/TTYBuild.app"
           verify_bundle() {
             local bundle="$1"
             local bundle_id="$2"
@@ -371,13 +371,13 @@ jobs:
             [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Info.plist")" \
               == "$bundle_id" ]]
             [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$bundle/Info.plist")" \
-              == "$PEDALS_RELEASE_VERSION" ]]
+              == "$TTYBUILD_RELEASE_VERSION" ]]
             [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$bundle/Info.plist")" \
-              == "$PEDALS_RELEASE_BUILD" ]]
+              == "$TTYBUILD_RELEASE_BUILD" ]]
             codesign -d --entitlements :- --xml "$bundle" > "$entitlements" 2>/dev/null
             security cms -D -i "$bundle/embedded.mobileprovision" > "$profile"
             [[ "$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$entitlements")" \
-              == "$PEDALS_TEAM_ID.$bundle_id" ]]
+              == "$TTYBUILD_TEAM_ID.$bundle_id" ]]
             [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$entitlements")" \
               == "group.air.build.pedals" ]]
             [[ "$(/usr/libexec/PlistBuddy -c 'Print :Name' "$profile")" == "$profile_name" ]]
@@ -392,7 +392,7 @@ jobs:
                 -o "$RUNNER_TEMP/$bundle_name.keychain-groups.json" \
                 "$entitlements"
               jq -e \
-                --arg group "$PEDALS_TEAM_ID.air.build.pedals.shared" \
+                --arg group "$TTYBUILD_TEAM_ID.air.build.pedals.shared" \
                 'index($group) != null' \
                 "$RUNNER_TEMP/$bundle_name.keychain-groups.json" >/dev/null
             fi
@@ -405,19 +405,19 @@ jobs:
             true \
             true
           verify_bundle \
-            "$app/PlugIns/PedalsWidgets.appex" \
+            "$app/PlugIns/TTYBuildWidgets.appex" \
             air.build.pedals.widgets \
             "Pedals Widgets YellowPlus App Store" \
             true \
             true
           verify_bundle \
-            "$app/Watch/PedalsWatch.app" \
+            "$app/Watch/TTYBuildWatch.app" \
             air.build.pedals.watchapp \
             "Pedals Watch YellowPlus App Store" \
             false \
             false
           verify_bundle \
-            "$app/Watch/PedalsWatch.app/PlugIns/PedalsWatchWidgets.appex" \
+            "$app/Watch/TTYBuildWatch.app/PlugIns/TTYBuildWatchWidgets.appex" \
             air.build.pedals.watchapp.widgets \
             "Pedals Watch Widgets YellowPlus App Store" \
             true \
@@ -428,14 +428,14 @@ jobs:
         run: |
           set -euo pipefail
           asc xcode export \
-            --archive-path "$PEDALS_RELEASE_DIR/Pedals.xcarchive" \
-            --export-options "$PEDALS_RELEASE_DIR/ExportOptions.plist" \
-            --ipa-path "$PEDALS_RELEASE_DIR/Pedals.ipa" \
+            --archive-path "$TTYBUILD_RELEASE_DIR/TTYBuild.xcarchive" \
+            --export-options "$TTYBUILD_RELEASE_DIR/ExportOptions.plist" \
+            --ipa-path "$TTYBUILD_RELEASE_DIR/TTYBuild.ipa" \
             --timeout 20m \
             --output json \
             --pretty
-          test -s "$PEDALS_RELEASE_DIR/Pedals.ipa"
-          shasum -a 256 "$PEDALS_RELEASE_DIR/Pedals.ipa"
+          test -s "$TTYBUILD_RELEASE_DIR/TTYBuild.ipa"
+          shasum -a 256 "$TTYBUILD_RELEASE_DIR/TTYBuild.ipa"
 
       - name: Publish to internal TestFlight
         shell: bash
@@ -443,58 +443,58 @@ jobs:
           set -euo pipefail
           asc builds upload \
             --app "$ASC_APP_ID" \
-            --ipa "$PEDALS_RELEASE_DIR/Pedals.ipa" \
-            --version "$PEDALS_RELEASE_VERSION" \
-            --build-number "$PEDALS_RELEASE_BUILD" \
+            --ipa "$TTYBUILD_RELEASE_DIR/TTYBuild.ipa" \
+            --version "$TTYBUILD_RELEASE_VERSION" \
+            --build-number "$TTYBUILD_RELEASE_BUILD" \
             --output json \
-            --pretty | tee "$PEDALS_RELEASE_DIR/upload.json"
+            --pretty | tee "$TTYBUILD_RELEASE_DIR/upload.json"
 
           asc builds wait \
             --app "$ASC_APP_ID" \
-            --build-number "$PEDALS_RELEASE_BUILD" \
-            --version "$PEDALS_RELEASE_VERSION" \
+            --build-number "$TTYBUILD_RELEASE_BUILD" \
+            --version "$TTYBUILD_RELEASE_VERSION" \
             --platform IOS \
             --timeout 90m \
             --poll-interval 30s \
             --fail-on-invalid \
             --output json \
-            --pretty | tee "$PEDALS_RELEASE_DIR/build-wait.json"
+            --pretty | tee "$TTYBUILD_RELEASE_DIR/build-wait.json"
 
           jq -e '.data.attributes.processingState == "VALID"' \
-            "$PEDALS_RELEASE_DIR/build-wait.json" >/dev/null
-          build_id="$(jq -er '.data.id' "$PEDALS_RELEASE_DIR/build-wait.json")"
-          echo "PEDALS_BUILD_ID=$build_id" >> "$GITHUB_ENV"
+            "$TTYBUILD_RELEASE_DIR/build-wait.json" >/dev/null
+          build_id="$(jq -er '.data.id' "$TTYBUILD_RELEASE_DIR/build-wait.json")"
+          echo "TTYBUILD_BUILD_ID=$build_id" >> "$GITHUB_ENV"
 
           asc builds test-notes list \
             --build-id "$build_id" \
-            --output json > "$PEDALS_RELEASE_DIR/test-notes.json"
+            --output json > "$TTYBUILD_RELEASE_DIR/test-notes.json"
           if jq -e 'any(.data[]; .attributes.locale == "en-US")' \
-            "$PEDALS_RELEASE_DIR/test-notes.json" >/dev/null; then
+            "$TTYBUILD_RELEASE_DIR/test-notes.json" >/dev/null; then
             asc builds test-notes update \
               --build-id "$build_id" \
               --locale en-US \
-              --whats-new "$PEDALS_TEST_NOTES"
+              --whats-new "$TTYBUILD_TEST_NOTES"
           else
             asc builds test-notes create \
               --build-id "$build_id" \
               --locale en-US \
-              --whats-new "$PEDALS_TEST_NOTES"
+              --whats-new "$TTYBUILD_TEST_NOTES"
           fi
 
           asc testflight groups links view \
-            --group-id "$PEDALS_INTERNAL_GROUP_ID" \
+            --group-id "$TTYBUILD_INTERNAL_GROUP_ID" \
             --type builds \
             --paginate \
-            --output json > "$PEDALS_RELEASE_DIR/internal-group-builds.json"
+            --output json > "$TTYBUILD_RELEASE_DIR/internal-group-builds.json"
           if ! jq -e --arg build "$build_id" 'any(.data[]; .id == $build)' \
-            "$PEDALS_RELEASE_DIR/internal-group-builds.json" >/dev/null; then
+            "$TTYBUILD_RELEASE_DIR/internal-group-builds.json" >/dev/null; then
             # A freshly VALID build can briefly be unaddressable for
             # relationship writes; retry until App Store Connect catches up.
             linked=false
             for attempt in 1 2 3 4 5 6; do
               if asc builds add-groups \
                 --build-id "$build_id" \
-                --group "$PEDALS_INTERNAL_GROUP_ID"; then
+                --group "$TTYBUILD_INTERNAL_GROUP_ID"; then
                 linked=true
                 break
               fi
@@ -503,14 +503,14 @@ jobs:
             done
             [[ "$linked" == "true" ]]
             asc testflight groups links view \
-              --group-id "$PEDALS_INTERNAL_GROUP_ID" \
+              --group-id "$TTYBUILD_INTERNAL_GROUP_ID" \
               --type builds \
               --paginate \
-              --output json > "$PEDALS_RELEASE_DIR/internal-group-builds.json"
+              --output json > "$TTYBUILD_RELEASE_DIR/internal-group-builds.json"
           fi
           jq -e --arg build "$build_id" 'any(.data[]; .id == $build)' \
-            "$PEDALS_RELEASE_DIR/internal-group-builds.json" >/dev/null
-          notification_log="$PEDALS_RELEASE_DIR/internal-notification.log"
+            "$TTYBUILD_RELEASE_DIR/internal-group-builds.json" >/dev/null
+          notification_log="$TTYBUILD_RELEASE_DIR/internal-notification.log"
           if asc testflight notifications send \
             --build-id "$build_id" \
             --output json \
@@ -531,22 +531,22 @@ jobs:
           set -euo pipefail
           asc publish testflight \
             --app "$ASC_APP_ID" \
-            --build "$PEDALS_BUILD_ID" \
-            --group "$PEDALS_EXTERNAL_GROUP_ID" \
+            --build "$TTYBUILD_BUILD_ID" \
+            --group "$TTYBUILD_EXTERNAL_GROUP_ID" \
             --wait \
             --notify \
             --submit \
             --confirm \
             --output json \
-            --pretty | tee "$PEDALS_RELEASE_DIR/external-publish.json"
+            --pretty | tee "$TTYBUILD_RELEASE_DIR/external-publish.json"
 
           asc testflight groups links view \
-            --group-id "$PEDALS_EXTERNAL_GROUP_ID" \
+            --group-id "$TTYBUILD_EXTERNAL_GROUP_ID" \
             --type builds \
             --paginate \
-            --output json > "$PEDALS_RELEASE_DIR/external-group-builds.json"
-          jq -e --arg build "$PEDALS_BUILD_ID" 'any(.data[]; .id == $build)' \
-            "$PEDALS_RELEASE_DIR/external-group-builds.json" >/dev/null
+            --output json > "$TTYBUILD_RELEASE_DIR/external-group-builds.json"
+          jq -e --arg build "$TTYBUILD_BUILD_ID" 'any(.data[]; .id == $build)' \
+            "$TTYBUILD_RELEASE_DIR/external-group-builds.json" >/dev/null
 
       - name: Verify TestFlight state
         shell: bash
@@ -554,30 +554,30 @@ jobs:
           set -euo pipefail
           asc builds info \
             --app "$ASC_APP_ID" \
-            --build-number "$PEDALS_RELEASE_BUILD" \
-            --version "$PEDALS_RELEASE_VERSION" \
+            --build-number "$TTYBUILD_RELEASE_BUILD" \
+            --version "$TTYBUILD_RELEASE_VERSION" \
             --platform IOS \
-            --output json > "$PEDALS_RELEASE_DIR/build-info.json"
-          jq -e --arg id "$PEDALS_BUILD_ID" \
+            --output json > "$TTYBUILD_RELEASE_DIR/build-info.json"
+          jq -e --arg id "$TTYBUILD_BUILD_ID" \
             '.data.id == $id and .data.attributes.processingState == "VALID"' \
-            "$PEDALS_RELEASE_DIR/build-info.json" >/dev/null
+            "$TTYBUILD_RELEASE_DIR/build-info.json" >/dev/null
 
           distribution="internal"
           external_state="not requested"
-          if [[ "$PEDALS_DISTRIBUTE_EXTERNAL" == "true" ]]; then
+          if [[ "$TTYBUILD_DISTRIBUTE_EXTERNAL" == "true" ]]; then
             distribution="internal + external"
             asc testflight review submissions list \
-              --build-id "$PEDALS_BUILD_ID" \
-              --output json > "$PEDALS_RELEASE_DIR/beta-review.json"
+              --build-id "$TTYBUILD_BUILD_ID" \
+              --output json > "$TTYBUILD_RELEASE_DIR/beta-review.json"
             external_state="$(jq -er '.data[0].attributes.betaReviewState' \
-              "$PEDALS_RELEASE_DIR/beta-review.json")"
+              "$TTYBUILD_RELEASE_DIR/beta-review.json")"
           fi
 
           {
-            echo "## Pedals TestFlight release"
+            echo "## TTYBuild TestFlight release"
             echo
-            echo "- Version: \`$PEDALS_RELEASE_VERSION ($PEDALS_RELEASE_BUILD)\`"
-            echo "- Build ID: \`$PEDALS_BUILD_ID\`"
+            echo "- Version: \`$TTYBUILD_RELEASE_VERSION ($TTYBUILD_RELEASE_BUILD)\`"
+            echo "- Build ID: \`$TTYBUILD_BUILD_ID\`"
             echo "- Processing: \`VALID\`"
             echo "- Distribution: \`$distribution\`"
             echo "- Beta Review: \`$external_state\`"
@@ -588,7 +588,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          keychain="$RUNNER_TEMP/pedals-ios-signing.keychain-db"
+          keychain="$RUNNER_TEMP/ttybuild-ios-signing.keychain-db"
           if [[ -f "$keychain" ]]; then
             security delete-keychain "$keychain"
           fi

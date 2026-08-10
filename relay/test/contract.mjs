@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-const baseURL = new URL(process.env.RELAY_HTTP_URL ?? "https://pedals.air.build");
+const baseURL = new URL(process.env.RELAY_HTTP_URL ?? "https://tty.build");
 const timeoutMilliseconds = 15_000;
 const clientSourceEnvelopeBytes = 33;
 

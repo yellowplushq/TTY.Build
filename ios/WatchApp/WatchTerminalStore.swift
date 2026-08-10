@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import PedalsKit
+import TTYBuildKit
 
 struct WatchTerminalID: Hashable, Sendable {
     let computerID: String
@@ -210,10 +210,10 @@ final class WatchTerminalStore {
     }
 
     #if DEBUG
-    /// Dev-only layout fixture (`PEDALS_WATCH_HOME_FIXTURE=1`): a realistic
+    /// Dev-only layout fixture (`TTYBUILD_WATCH_HOME_FIXTURE=1`): a realistic
     /// two-section status list without needing a paired phone.
     private static let fixtureComputers: [WatchTerminalComputer]? = {
-        guard ProcessInfo.processInfo.environment["PEDALS_WATCH_HOME_FIXTURE"] == "1"
+        guard ProcessInfo.processInfo.environment["TTYBUILD_WATCH_HOME_FIXTURE"] == "1"
         else { return nil }
         let now = Date().timeIntervalSince1970
         func agent(

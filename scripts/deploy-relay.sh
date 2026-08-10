@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the Pedals relay to Cloudflare Workers (ARCHITECTURE.md "Relay deploy").
+# Deploy the TTYBuild relay to Cloudflare Workers (ARCHITECTURE.md "Relay deploy").
 #
 # Requires: `wrangler login` for the Cloudflare account that owns eyhn.in.
 # Runs the Worker/runtime tests before deploy and the external relay contract
@@ -8,7 +8,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RELAY_DIR="$REPO_ROOT/relay"
-URL="${RELAY_URL:-https://pedals.air.build}"
+URL="${RELAY_URL:-https://tty.build}"
 
 cd "$RELAY_DIR"
 npm ci
@@ -36,7 +36,7 @@ npm run db:migrate:remote
 # domain has loaded that version. Capture the immutable version UUID and wait
 # for the public health response to prove that exact version is active. A plain
 # 200 is insufficient because the previous Worker also serves /healthz.
-DEPLOY_LOG="$(mktemp "${TMPDIR:-/tmp}/pedals-relay-deploy.XXXXXX")"
+DEPLOY_LOG="$(mktemp "${TMPDIR:-/tmp}/tty-build-relay-deploy.XXXXXX")"
 cleanup_deploy_log() {
   rm -f "$DEPLOY_LOG"
 }
@@ -52,7 +52,7 @@ for _ in $(seq 1 60); do
   observed_version="$(
     curl -fsS --connect-timeout 5 --max-time 10 \
       -o /dev/null \
-      -w '%header{x-pedals-worker-version}' \
+      -w '%header{x-ttybuild-worker-version}' \
       "$URL/healthz" 2>/dev/null || true
   )"
   observed_version="${observed_version//$'\r'/}"

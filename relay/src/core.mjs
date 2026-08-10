@@ -372,10 +372,10 @@ export async function notifyAgentActivity(env, computerId, activity) {
 
 async function relayRevocation(env, computerId, path, principalId = undefined) {
   if (!env.RELAY_CHANNELS || !isId(computerId)) return;
-  const headers = new Headers({ "x-pedals-computer-id": computerId });
+  const headers = new Headers({ "x-ttybuild-computer-id": computerId });
   if (principalId !== undefined) {
     if (!isId(principalId)) return;
-    headers.set("x-pedals-principal-id", principalId);
+    headers.set("x-ttybuild-principal-id", principalId);
   }
   const response = await env.RELAY_CHANNELS.getByName(computerId).fetch(
     `https://relay.internal${path}`,

@@ -1,6 +1,6 @@
 import Combine
 import Foundation
-import PedalsKit
+import TTYBuildKit
 
 /// One bound computer: the long-lived `control` RelayLink to its room.
 /// Publishes the daemon's session list, machine name, and connection state;

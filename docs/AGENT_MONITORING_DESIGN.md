@@ -1,27 +1,27 @@
 # Agent activity monitoring — design discussion record
 
 Status: **direction agreed, no implementation breakdown yet.** This document
-records the product/design discussion for Pedals' second major capability:
+records the product/design discussion for tty.build' second major capability:
 subscribing to coding-agent activity (Claude Code, Codex, and similar CLIs)
 and surfacing it on iPhone, Apple Watch, widgets, and the Dynamic Island.
 Implementation planning happens later in a separate pass.
 
 ## 1. Motivation and positioning
 
-Pedals today is a remote terminal: Mac daemon + Cloudflare relay + iPhone /
+tty.build today is a remote terminal: Mac daemon + Cloudflare relay + iPhone /
 Watch clients, with the alive-TTY count on widgets, complications, and the
 Live Activity. The second capability adds agent awareness: install hooks into
 coding agents on the Mac (a settings panel in the menu bar app, comparable to
 supacode's "Coding Agents" developer panel), report session state through the
 daemon and relay, and notify the user when an agent is blocked or finished.
 
-Why this fits Pedals:
+Why this fits tty.build:
 
 - The push pipeline (daemon → Worker → APNs → widgets / Live Activity /
   Watch) and the pairing/identity/E2EE system already exist. Agent state is
   one more event source, not a second architecture.
 - Differentiation: supacode's monitoring is bound to its own Mac terminal
-  app, and its notifications land on the Mac. The Pedals daemon is
+  app, and its notifications land on the Mac. The tty.build daemon is
   system-wide — agents running in iTerm, VS Code, Warp, anywhere are visible —
   and notifications reach the phone and wrist when the user is away from the
   Mac. The mobile surface is the product.
@@ -73,7 +73,7 @@ have full takeover.
 A "Coding Agents" page in the menu bar app: one row per supported agent with
 an Install button and an honest description of what gets written where
 (e.g. hooks in `~/.claude/settings.json`). All hooks funnel into one thin
-reporter command shipped with the daemon (working name `pedals-hook`) that
+reporter command shipped with the daemon (working name `ttybuild-hook`) that
 talks to the daemon over a local socket with a small stable event
 vocabulary: `session-start`, `blocked`, `done`, `session-end`, plus the tty
 path / PID lineage of the reporting process. Keep the per-agent adapters
@@ -101,7 +101,7 @@ into that terminal.
 
 Home has two sections:
 
-1. **Terminals** — the Pedals-hosted TTY list. A row has two states: with no
+1. **Terminals** — the tty.build-hosted TTY list. A row has two states: with no
    agent running it shows the tty title and info; while an agent runs in it,
    the row morphs to the shared agent presentation: agent icon + state,
    session name as the title, and the latest assistant message/output (falling
@@ -109,7 +109,7 @@ Home has two sections:
    the description. Tapping the row always
    opens the terminal; the morph changes information density, never the
    interaction model.
-2. **Agents** — agents detected outside any Pedals-hosted tty, shown as
+2. **Agents** — agents detected outside any tty.build-hosted tty, shown as
    status rows using the same session title and latest-output description.
    These rows are glanceable, not attachable.
 

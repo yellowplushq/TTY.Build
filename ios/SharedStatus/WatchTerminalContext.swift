@@ -1,5 +1,5 @@
 import Foundation
-import PedalsKit
+import TTYBuildKit
 
 /// The Watch's independent relay credential plus E2EE bindings copied from the
 /// paired iPhone. The Worker never sees this payload; WatchConnectivity moves
@@ -14,10 +14,10 @@ import PedalsKit
 ///   WatchConnectivity delivery cannot regress or wipe a fresh credential.
 public struct WatchTerminalContext: Codable, Equatable, Sendable {
     public static let schemaVersion = 2
-    public static let applicationContextKey = "pedals.terminal.context.v2"
-    public static let applicationContextPresenceKey = "pedals.terminal.context.present.v2"
-    public static let applicationContextRevisionKey = "pedals.terminal.context.revision.v2"
-    public static let requestMessageKey = "pedals.terminal.context.request.v2"
+    public static let applicationContextKey = "ttybuild.terminal.context.v2"
+    public static let applicationContextPresenceKey = "ttybuild.terminal.context.present.v2"
+    public static let applicationContextRevisionKey = "ttybuild.terminal.context.revision.v2"
+    public static let requestMessageKey = "ttybuild.terminal.context.request.v2"
 
     public let schema: Int
     public let revision: UInt64

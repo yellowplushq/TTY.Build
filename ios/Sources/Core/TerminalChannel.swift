@@ -1,6 +1,6 @@
 import Combine
 import Foundation
-import PedalsKit
+import TTYBuildKit
 
 /// Identity of one terminal across all bound computers.
 struct TerminalID: Hashable, Sendable {

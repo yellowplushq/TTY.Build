@@ -1,4 +1,4 @@
-import PedalsKit
+import TTYBuildKit
 import UIKit
 
 /// Bottom sheet asking the user to approve one computer that claimed this
@@ -46,7 +46,7 @@ final class ReversePairingConfirmViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .secondarySystemBackground
-        view.accessibilityIdentifier = "pedals.reversePairing.card"
+        view.accessibilityIdentifier = "ttybuild.reversePairing.card"
 
         let icon = UIImageView(
             image: UIImage(
@@ -54,7 +54,7 @@ final class ReversePairingConfirmViewController: UIViewController {
                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 40, weight: .regular)
             )
         )
-        icon.tintColor = PedalsTheme.uiContent
+        icon.tintColor = TTYBuildTheme.uiContent
         icon.contentMode = .scaleAspectFit
         let iconRow = UIStackView(arrangedSubviews: [icon, UIView()])
         iconRow.axis = .horizontal
@@ -62,16 +62,16 @@ final class ReversePairingConfirmViewController: UIViewController {
         titleLabel.font = UIFontMetrics(forTextStyle: .title3).scaledFont(
             for: .systemFont(ofSize: 20, weight: .bold)
         )
-        titleLabel.textColor = PedalsTheme.uiContent
+        titleLabel.textColor = TTYBuildTheme.uiContent
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.numberOfLines = 0
 
         messageLabel.font = .preferredFont(forTextStyle: .subheadline)
-        messageLabel.textColor = PedalsTheme.uiSecondaryContent
+        messageLabel.textColor = TTYBuildTheme.uiSecondaryContent
         messageLabel.adjustsFontForContentSizeCategory = true
         messageLabel.numberOfLines = 0
 
-        spinner.color = PedalsTheme.uiSecondaryContent
+        spinner.color = TTYBuildTheme.uiSecondaryContent
         spinner.hidesWhenStopped = true
         let spinnerRow = UIStackView(arrangedSubviews: [spinner, UIView()])
         spinnerRow.axis = .horizontal
@@ -81,11 +81,11 @@ final class ReversePairingConfirmViewController: UIViewController {
         confirmConfiguration.contentInsets = NSDirectionalEdgeInsets(
             top: 14, leading: 18, bottom: 14, trailing: 18
         )
-        confirmConfiguration.baseBackgroundColor = PedalsTheme.uiContent
-        confirmConfiguration.baseForegroundColor = PedalsTheme.uiCanvas
-        PedalsTheme.applyTextFont(to: &confirmConfiguration, emphasized: true)
+        confirmConfiguration.baseBackgroundColor = TTYBuildTheme.uiContent
+        confirmConfiguration.baseForegroundColor = TTYBuildTheme.uiCanvas
+        TTYBuildTheme.applyTextFont(to: &confirmConfiguration, emphasized: true)
         confirmButton.configuration = confirmConfiguration
-        confirmButton.accessibilityIdentifier = "pedals.reversePairing.confirm"
+        confirmButton.accessibilityIdentifier = "ttybuild.reversePairing.confirm"
         confirmButton.addAction(
             UIAction { [weak self] _ in self?.confirmTapped() },
             for: .primaryActionTriggered
@@ -96,10 +96,10 @@ final class ReversePairingConfirmViewController: UIViewController {
         rejectConfiguration.contentInsets = NSDirectionalEdgeInsets(
             top: 14, leading: 18, bottom: 14, trailing: 18
         )
-        rejectConfiguration.baseForegroundColor = PedalsTheme.uiCritical
-        PedalsTheme.applyTextFont(to: &rejectConfiguration)
+        rejectConfiguration.baseForegroundColor = TTYBuildTheme.uiCritical
+        TTYBuildTheme.applyTextFont(to: &rejectConfiguration)
         rejectButton.configuration = rejectConfiguration
-        rejectButton.accessibilityIdentifier = "pedals.reversePairing.reject"
+        rejectButton.accessibilityIdentifier = "ttybuild.reversePairing.reject"
         rejectButton.addAction(
             UIAction { [weak self] _ in self?.rejectTapped() },
             for: .primaryActionTriggered

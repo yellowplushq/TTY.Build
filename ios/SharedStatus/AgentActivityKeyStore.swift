@@ -185,7 +185,7 @@ struct AgentActivityKeyFileStore: Sendable {
         var errorDescription: String? {
             switch self {
             case .missingAppGroupContainer:
-                "The Pedals App Group container is unavailable."
+                "The tty.build App Group container is unavailable."
             case .unsupportedVersion(let version):
                 "Unsupported Live Activity key archive version \(version)."
             case .invalidArchive:

@@ -8,7 +8,7 @@ struct IOSWidgetPushHandler: WidgetPushHandler {
         // Persist before returning from the extension callback; the process
         // may be suspended before an asynchronous network task starts.
         StatusSharedStore.saveWidgetPushObservation(
-            .init(surface: .iOSWidget, token: pushInfo.token.pedalsHexString),
+            .init(surface: .iOSWidget, token: pushInfo.token.ttybuildHexString),
             hasConfiguredWidgets: !widgets.isEmpty
         )
         PushEndpointRegistrar.requestFlush()

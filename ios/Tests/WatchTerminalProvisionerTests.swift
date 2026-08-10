@@ -1,8 +1,8 @@
 import Foundation
-import PedalsKit
+import TTYBuildKit
 import XCTest
 
-@testable import Pedals
+@testable import TTYBuild
 
 @MainActor
 final class WatchTerminalProvisionerTests: XCTestCase {
@@ -68,7 +68,7 @@ final class WatchTerminalProvisionerTests: XCTestCase {
         let replacement = try identity("c")
         let api = MockAPI(identities: [replacement])
         api.syncErrors = [
-            PedalsServiceAPI.APIError.rejected(status: 403, message: "invalid delegate"),
+            TTYBuildServiceAPI.APIError.rejected(status: 403, message: "invalid delegate"),
             nil,
         ]
         let provisioner = makeProvisioner(memory: memory, api: api)

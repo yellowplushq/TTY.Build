@@ -63,16 +63,16 @@ final class UpdateCheckViewController: UIViewController {
         titleLabel.font = UIFontMetrics(forTextStyle: .title3).scaledFont(
             for: .systemFont(ofSize: 20, weight: .bold)
         )
-        titleLabel.textColor = PedalsTheme.uiContent
+        titleLabel.textColor = TTYBuildTheme.uiContent
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.numberOfLines = 0
 
         messageLabel.font = .preferredFont(forTextStyle: .subheadline)
-        messageLabel.textColor = PedalsTheme.uiSecondaryContent
+        messageLabel.textColor = TTYBuildTheme.uiSecondaryContent
         messageLabel.adjustsFontForContentSizeCategory = true
         messageLabel.numberOfLines = 0
 
-        spinner.color = PedalsTheme.uiSecondaryContent
+        spinner.color = TTYBuildTheme.uiSecondaryContent
         spinner.hidesWhenStopped = true
         let spinnerRow = UIStackView(arrangedSubviews: [spinner, UIView()])
         spinnerRow.axis = .horizontal
@@ -130,17 +130,17 @@ final class UpdateCheckViewController: UIViewController {
         case .upToDate(let version):
             titleLabel.text = "You're up to date!"
             messageLabel.text = version.map {
-                "Pedals \($0) is currently the newest version available."
-            } ?? "Pedals on the Mac is currently the newest version available."
+                "tty.build \($0) is currently the newest version available."
+            } ?? "tty.build on the Mac is currently the newest version available."
             spinner.stopAnimating()
             setButtons(primary: "OK", secondary: nil)
         case .available(let current, let latest, let host, let canInstall):
             titleLabel.text = "Update Available"
-            let name = latest.map { "Pedals \($0)" } ?? "A new version of Pedals"
+            let name = latest.map { "tty.build \($0)" } ?? "A new version of tty.build"
             let have = current.map { " — \(host) has \($0)" } ?? ""
             if canInstall {
                 messageLabel.text = """
-                    \(name) is available\(have). Installing restarts Pedals on \
+                    \(name) is available\(have). Installing restarts TTYBuild on \
                     the Mac and closes every open terminal session there.
                     """
                 setButtons(primary: "Install Update", secondary: "Not Now")
@@ -209,9 +209,9 @@ final class UpdateCheckViewController: UIViewController {
         configuration.contentInsets = NSDirectionalEdgeInsets(
             top: 14, leading: 18, bottom: 14, trailing: 18
         )
-        configuration.baseBackgroundColor = PedalsTheme.uiContent
-        configuration.baseForegroundColor = PedalsTheme.uiCanvas
-        PedalsTheme.applyTextFont(to: &configuration, emphasized: true)
+        configuration.baseBackgroundColor = TTYBuildTheme.uiContent
+        configuration.baseForegroundColor = TTYBuildTheme.uiCanvas
+        TTYBuildTheme.applyTextFont(to: &configuration, emphasized: true)
         return configuration
     }
 
@@ -221,8 +221,8 @@ final class UpdateCheckViewController: UIViewController {
         configuration.contentInsets = NSDirectionalEdgeInsets(
             top: 14, leading: 18, bottom: 14, trailing: 18
         )
-        configuration.baseForegroundColor = PedalsTheme.uiContent
-        PedalsTheme.applyTextFont(to: &configuration)
+        configuration.baseForegroundColor = TTYBuildTheme.uiContent
+        TTYBuildTheme.applyTextFont(to: &configuration)
         return configuration
     }
 }

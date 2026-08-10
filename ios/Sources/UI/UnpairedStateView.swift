@@ -12,8 +12,8 @@ final class UnpairedStateView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = PedalsTheme.uiCanvas
-        accessibilityIdentifier = "pedals.onboarding"
+        backgroundColor = TTYBuildTheme.uiCanvas
+        accessibilityIdentifier = "ttybuild.onboarding"
         configureLayout()
     }
 
@@ -42,7 +42,7 @@ final class UnpairedStateView: UIView {
         let pairButton = makePairButton()
         let footnote = makeLabel(
             "8-digit code · One use · 15 minutes",
-            color: PedalsTheme.uiTertiaryContent,
+            color: TTYBuildTheme.uiTertiaryContent,
             alignment: .center
         )
 
@@ -114,8 +114,8 @@ final class UnpairedStateView: UIView {
         ])
 
         let title = makeLabel(
-            "Pedals",
-            color: PedalsTheme.uiContent,
+            "tty.build",
+            color: TTYBuildTheme.uiContent,
             alignment: .left,
             emphasized: true
         )
@@ -125,10 +125,10 @@ final class UnpairedStateView: UIView {
                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
             )
         )
-        privacyIcon.tintColor = PedalsTheme.uiSecondaryContent
+        privacyIcon.tintColor = TTYBuildTheme.uiSecondaryContent
         let privacyLabel = makeLabel(
             "Private",
-            color: PedalsTheme.uiSecondaryContent,
+            color: TTYBuildTheme.uiSecondaryContent,
             alignment: .left
         )
         privacyLabel.numberOfLines = 1
@@ -139,7 +139,7 @@ final class UnpairedStateView: UIView {
         privacy.spacing = 6
         privacy.isLayoutMarginsRelativeArrangement = true
         privacy.layoutMargins = UIEdgeInsets(top: 7, left: 10, bottom: 7, right: 10)
-        privacy.backgroundColor = PedalsTheme.uiSurface
+        privacy.backgroundColor = TTYBuildTheme.uiSurface
         privacy.layer.cornerRadius = 16
         privacy.layer.cornerCurve = .continuous
 
@@ -154,14 +154,14 @@ final class UnpairedStateView: UIView {
     private func makeWelcomeCopy() -> UIView {
         let title = makeLabel(
             "Your computer, within reach.",
-            color: PedalsTheme.uiContent,
+            color: TTYBuildTheme.uiContent,
             alignment: .center,
             emphasized: true
         )
-        title.accessibilityIdentifier = "pedals.onboarding.title"
+        title.accessibilityIdentifier = "ttybuild.onboarding.title"
         let body = makeLabel(
-            "Use its terminals from iPhone, anywhere. Pedals keeps the connection end-to-end encrypted.",
-            color: PedalsTheme.uiSecondaryContent,
+            "Use its terminals from iPhone, anywhere. tty.build keeps the connection end-to-end encrypted.",
+            color: TTYBuildTheme.uiSecondaryContent,
             alignment: .center
         )
 
@@ -187,12 +187,12 @@ final class UnpairedStateView: UIView {
             bottom: 14,
             trailing: 18
         )
-        configuration.baseBackgroundColor = PedalsTheme.uiContent
-        configuration.baseForegroundColor = PedalsTheme.uiCanvas
-        PedalsTheme.applyTextFont(to: &configuration, emphasized: true)
+        configuration.baseBackgroundColor = TTYBuildTheme.uiContent
+        configuration.baseForegroundColor = TTYBuildTheme.uiCanvas
+        TTYBuildTheme.applyTextFont(to: &configuration, emphasized: true)
 
         let button = UIButton(configuration: configuration)
-        button.accessibilityIdentifier = "pedals.onboarding.pair"
+        button.accessibilityIdentifier = "ttybuild.onboarding.pair"
         button.addAction(UIAction { [weak self] _ in self?.onEnterCode?() }, for: .touchUpInside)
         return button
     }
@@ -206,8 +206,8 @@ final class UnpairedStateView: UIView {
         let label = UILabel()
         label.text = text
         label.font = emphasized
-            ? PedalsTheme.uiEmphasizedTextFont
-            : PedalsTheme.uiTextFont
+            ? TTYBuildTheme.uiEmphasizedTextFont
+            : TTYBuildTheme.uiTextFont
         label.adjustsFontForContentSizeCategory = true
         label.textColor = color
         label.textAlignment = alignment
@@ -267,7 +267,7 @@ private final class RemoteTerminalHeroView: UIView {
             height: rect.height * 0.60
         )
         let desktopPath = UIBezierPath(roundedRect: desktopRect, cornerRadius: 28)
-        context.setFillColor(PedalsTheme.uiSurface.cgColor)
+        context.setFillColor(TTYBuildTheme.uiSurface.cgColor)
         context.addPath(desktopPath.cgPath)
         context.fillPath()
         context.setStrokeColor(UIColor.white.withAlphaComponent(0.22).cgColor)
@@ -297,7 +297,7 @@ private final class RemoteTerminalHeroView: UIView {
         drawPill(
             in: context,
             rect: CGRect(x: promptOrigin.x, y: promptOrigin.y, width: 11, height: 11),
-            color: PedalsTheme.uiContent
+            color: TTYBuildTheme.uiContent
         )
         drawPill(
             in: context,
@@ -336,7 +336,7 @@ private final class RemoteTerminalHeroView: UIView {
             width: 10,
             height: 18
         )
-        context.setFillColor(PedalsTheme.uiContent.cgColor)
+        context.setFillColor(TTYBuildTheme.uiContent.cgColor)
         context.fill(cursor)
 
         let phoneRect = CGRect(
@@ -352,14 +352,14 @@ private final class RemoteTerminalHeroView: UIView {
             blur: 28,
             color: UIColor.black.cgColor
         )
-        context.setFillColor(PedalsTheme.uiContent.cgColor)
+        context.setFillColor(TTYBuildTheme.uiContent.cgColor)
         context.addPath(phonePath.cgPath)
         context.fillPath()
         context.restoreGState()
 
         let phoneScreen = phoneRect.insetBy(dx: 5, dy: 5)
         let screenPath = UIBezierPath(roundedRect: phoneScreen, cornerRadius: 21)
-        context.setFillColor(PedalsTheme.uiCanvas.cgColor)
+        context.setFillColor(TTYBuildTheme.uiCanvas.cgColor)
         context.addPath(screenPath.cgPath)
         context.fillPath()
 
@@ -371,7 +371,7 @@ private final class RemoteTerminalHeroView: UIView {
         drawPill(
             in: context,
             rect: CGRect(x: phoneRect.minX + 18, y: phoneRect.midY - 12, width: 9, height: 9),
-            color: PedalsTheme.uiContent
+            color: TTYBuildTheme.uiContent
         )
         drawPill(
             in: context,
@@ -381,7 +381,7 @@ private final class RemoteTerminalHeroView: UIView {
                 width: phoneRect.width * 0.36,
                 height: 6
             ),
-            color: PedalsTheme.uiContent
+            color: TTYBuildTheme.uiContent
         )
         drawPill(
             in: context,
@@ -401,14 +401,14 @@ private final class RemoteTerminalHeroView: UIView {
             height: 58
         )
         let securePath = UIBezierPath(roundedRect: secureBadge, cornerRadius: 20)
-        context.setFillColor(PedalsTheme.uiContent.cgColor)
+        context.setFillColor(TTYBuildTheme.uiContent.cgColor)
         context.addPath(securePath.cgPath)
         context.fillPath()
 
         if let lock = UIImage(
             systemName: "lock.shield.fill",
             withConfiguration: UIImage.SymbolConfiguration(pointSize: 24, weight: .semibold)
-        )?.withTintColor(PedalsTheme.uiCanvas, renderingMode: .alwaysOriginal) {
+        )?.withTintColor(TTYBuildTheme.uiCanvas, renderingMode: .alwaysOriginal) {
             lock.draw(
                 in: CGRect(
                     x: secureBadge.midX - 14,

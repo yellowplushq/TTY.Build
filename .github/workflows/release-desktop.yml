@@ -18,8 +18,8 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     env:
-      PEDALS_DESKTOP_OUTPUT_DIR: ${{ github.workspace }}/.artifacts/desktop-release
-      PEDALS_DESKTOP_BUILD_NUMBER: ${{ github.run_number }}
+      TTYBUILD_DESKTOP_OUTPUT_DIR: ${{ github.workspace }}/.artifacts/desktop-release
+      TTYBUILD_DESKTOP_BUILD_NUMBER: ${{ github.run_number }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check out source
@@ -34,13 +34,13 @@ jobs:
             echo "Invalid desktop release tag: $GITHUB_REF_NAME" >&2
             exit 1
           fi
-          echo "PEDALS_DESKTOP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "TTYBUILD_DESKTOP_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Test desktop service core
-        run: swift test --package-path desktop/PedalsDaemon
+        run: swift test --package-path desktop/TTYBuildDaemon
 
       - name: Import Developer ID certificate
         shell: bash
@@ -50,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           certificate="$RUNNER_TEMP/developer-id-application.p12"
-          keychain="$RUNNER_TEMP/pedals-signing.keychain-db"
+          keychain="$RUNNER_TEMP/ttybuild-signing.keychain-db"
           keychain_password="$(openssl rand -hex 24)"
           printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$certificate"
           security create-keychain -p "$keychain_password" "$keychain"
@@ -71,7 +71,7 @@ jobs:
             echo "No Developer ID Application identity was imported." >&2
             exit 1
           fi
-          echo "PEDALS_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "TTYBUILD_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
 
       - name: Build universal app
         run: ./scripts/build-desktop-release.sh
@@ -80,25 +80,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals.app"
+          app="$TTYBUILD_DESKTOP_OUTPUT_DIR/TTYBuild.app"
           sparkle="$app/Contents/Frameworks/Sparkle.framework"
           sparkle_contents="$sparkle/Versions/B"
-          codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" \
+          codesign --force --options runtime --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" \
             "$sparkle_contents/XPCServices/Installer.xpc"
           codesign --force --options runtime --timestamp --preserve-metadata=entitlements \
-            --sign "$PEDALS_SIGNING_IDENTITY" \
+            --sign "$TTYBUILD_SIGNING_IDENTITY" \
             "$sparkle_contents/XPCServices/Downloader.xpc"
-          codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" \
+          codesign --force --options runtime --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" \
             "$sparkle_contents/Autoupdate"
-          codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" \
+          codesign --force --options runtime --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" \
             "$sparkle_contents/Updater.app"
-          codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" "$sparkle"
+          codesign --force --options runtime --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" "$sparkle"
           # The agent-hook reporter is copied in by the menubar build's
           # post-build script with a development signature; notarization
           # requires every Mach-O to carry Developer ID + secure timestamp.
-          codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" \
-            "$app/Contents/MacOS/pedals-hook"
-          codesign --force --options runtime --timestamp --sign "$PEDALS_SIGNING_IDENTITY" "$app"
+          codesign --force --options runtime --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" \
+            "$app/Contents/MacOS/ttybuild-hook"
+          codesign --force --options runtime --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
           signing_details="$(codesign -dv --verbose=4 "$app" 2>&1)"
           printf '%s\n' "$signing_details"
@@ -109,7 +109,7 @@ jobs:
             "$sparkle_contents/XPCServices/Downloader.xpc" \
             "$sparkle_contents/Autoupdate" \
             "$sparkle_contents/Updater.app" \
-            "$app/Contents/MacOS/pedals-hook" \
+            "$app/Contents/MacOS/ttybuild-hook" \
             "$sparkle"; do
             component_details="$(codesign -dv --verbose=4 "$component" 2>&1)"
             grep -q 'TeamIdentifier=QDJ93ZUQ9B' <<< "$component_details"
@@ -124,8 +124,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dmg="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals-macOS.dmg"
-          codesign --force --timestamp --sign "$PEDALS_SIGNING_IDENTITY" "$dmg"
+          dmg="$TTYBUILD_DESKTOP_OUTPUT_DIR/TTYBuild-macOS.dmg"
+          codesign --force --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" "$dmg"
           codesign --verify --strict --verbose=2 "$dmg"
 
       - name: Notarize and staple
@@ -137,8 +137,8 @@ jobs:
         run: |
           set -euo pipefail
           key="$RUNNER_TEMP/AuthKey_${NOTARY_KEY_ID}.p8"
-          dmg="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals-macOS.dmg"
-          result="$RUNNER_TEMP/pedals-notary-result.json"
+          dmg="$TTYBUILD_DESKTOP_OUTPUT_DIR/TTYBuild-macOS.dmg"
+          result="$RUNNER_TEMP/ttybuild-notary-result.json"
           printf '%s' "$NOTARY_KEY_BASE64" | base64 --decode > "$key"
           chmod 600 "$key"
           xcrun notarytool submit "$dmg" \
@@ -166,8 +166,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PEDALS_DESKTOP_OUTPUT_DIR"
-          shasum -a 256 Pedals-macOS.dmg > Pedals-macOS.dmg.sha256
+          cd "$TTYBUILD_DESKTOP_OUTPUT_DIR"
+          shasum -a 256 TTYBuild-macOS.dmg > TTYBuild-macOS.dmg.sha256
 
       - name: Generate signed update feed
         shell: bash
@@ -175,41 +175,41 @@ jobs:
           SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          appcast_tool="$PEDALS_DESKTOP_OUTPUT_DIR/build/derived-data/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast"
+          appcast_tool="$TTYBUILD_DESKTOP_OUTPUT_DIR/build/derived-data/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast"
           if [[ ! -x "$appcast_tool" ]]; then
             echo "Sparkle generate_appcast tool was not found at $appcast_tool" >&2
             exit 1
           fi
           printf '%s' "$SPARKLE_EDDSA_PRIVATE_KEY" | "$appcast_tool" \
             --ed-key-file - \
-            --download-url-prefix "https://github.com/yellowplushq/pedals/releases/download/$GITHUB_REF_NAME/" \
-            --link "https://pedals.air.build" \
+            --download-url-prefix "https://github.com/yellowplushq/tty.build/releases/download/$GITHUB_REF_NAME/" \
+            --link "https://tty.build" \
             --maximum-versions 1 \
-            "$PEDALS_DESKTOP_OUTPUT_DIR"
-          test -s "$PEDALS_DESKTOP_OUTPUT_DIR/appcast.xml"
-          grep -q 'sparkle:edSignature=' "$PEDALS_DESKTOP_OUTPUT_DIR/appcast.xml"
-          grep -q 'sparkle-signatures:' "$PEDALS_DESKTOP_OUTPUT_DIR/appcast.xml"
+            "$TTYBUILD_DESKTOP_OUTPUT_DIR"
+          test -s "$TTYBUILD_DESKTOP_OUTPUT_DIR/appcast.xml"
+          grep -q 'sparkle:edSignature=' "$TTYBUILD_DESKTOP_OUTPUT_DIR/appcast.xml"
+          grep -q 'sparkle-signatures:' "$TTYBUILD_DESKTOP_OUTPUT_DIR/appcast.xml"
 
       - name: Package zip archive
         shell: bash
         run: |
           set -euo pipefail
-          app="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals.app"
+          app="$TTYBUILD_DESKTOP_OUTPUT_DIR/TTYBuild.app"
           xcrun stapler staple "$app"
           xcrun stapler validate "$app"
           ./scripts/package-desktop-zip.sh
-          cd "$PEDALS_DESKTOP_OUTPUT_DIR"
-          shasum -a 256 Pedals-macOS.zip > Pedals-macOS.zip.sha256
+          cd "$TTYBUILD_DESKTOP_OUTPUT_DIR"
+          shasum -a 256 TTYBuild-macOS.zip > TTYBuild-macOS.zip.sha256
 
       - name: Publish GitHub release
         shell: bash
         run: |
           set -euo pipefail
-          dmg="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals-macOS.dmg"
-          checksum="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals-macOS.dmg.sha256"
-          zip="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals-macOS.zip"
-          zip_checksum="$PEDALS_DESKTOP_OUTPUT_DIR/Pedals-macOS.zip.sha256"
-          appcast="$PEDALS_DESKTOP_OUTPUT_DIR/appcast.xml"
+          dmg="$TTYBUILD_DESKTOP_OUTPUT_DIR/TTYBuild-macOS.dmg"
+          checksum="$TTYBUILD_DESKTOP_OUTPUT_DIR/TTYBuild-macOS.dmg.sha256"
+          zip="$TTYBUILD_DESKTOP_OUTPUT_DIR/TTYBuild-macOS.zip"
+          zip_checksum="$TTYBUILD_DESKTOP_OUTPUT_DIR/TTYBuild-macOS.zip.sha256"
+          appcast="$TTYBUILD_DESKTOP_OUTPUT_DIR/appcast.xml"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" \
               "$dmg" "$checksum" "$zip" "$zip_checksum" "$appcast" --clobber
@@ -221,6 +221,6 @@ jobs:
               "$zip_checksum" \
               "$appcast" \
               --verify-tag \
-              --title "Pedals $PEDALS_DESKTOP_VERSION" \
+              --title "TTYBuild $TTYBUILD_DESKTOP_VERSION" \
               --generate-notes
           fi

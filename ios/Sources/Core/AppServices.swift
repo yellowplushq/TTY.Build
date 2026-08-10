@@ -2,7 +2,7 @@ import Combine
 import CryptoKit
 import Foundation
 import GhosttyTerminal
-import PedalsKit
+import TTYBuildKit
 import UIKit
 import UserNotifications
 import WidgetKit
@@ -31,7 +31,7 @@ final class AppServices {
 
     init() {
         #if DEBUG
-        let forceReset = ProcessInfo.processInfo.environment["PEDALS_RESET_PAIRING"] == "1"
+        let forceReset = ProcessInfo.processInfo.environment["TTYBUILD_RESET_PAIRING"] == "1"
         let storedServiceURL = try? pairingStore.loadClientIdentity()?.serviceURL
         if forceReset || storedServiceURL.map({ $0 != Self.pairingServiceURL }) == true {
             PairingStore.resetKeychainForUITesting()
@@ -70,7 +70,7 @@ final class AppServices {
         IOSWatchConnectivityBridge.shared.activate()
         TTYLiveActivityController.shared.startObservingPushTokens()
         #if DEBUG
-        if let spec = ProcessInfo.processInfo.environment["PEDALS_LA_FIXTURE"] {
+        if let spec = ProcessInfo.processInfo.environment["TTYBUILD_LA_FIXTURE"] {
             TTYLiveActivityController.shared.startFixtureActivity(spec: spec)
         }
         #endif
@@ -102,11 +102,11 @@ final class AppServices {
     func installCommand() async -> String {
         guard let token = try? await reversePairing.ensureToken(
             serviceURL: Self.pairingServiceURL
-        ) else { return "curl -fsSL https://pedals.air.build/i | bash" }
+        ) else { return "curl -fsSL https://tty.build/i | bash" }
         // Token registration may have just minted the client identity; the
         // push-endpoint registrar needs its status credential installed.
         installSharedCredential()
-        return "curl -fsSL https://pedals.air.build/\(token.code.digits) | bash"
+        return "curl -fsSL https://tty.build/\(token.code.digits) | bash"
     }
 
     func refreshPendingReverseClaims() {
@@ -133,7 +133,7 @@ final class AppServices {
             try await reversePairing.confirmClaim(
                 claimID: claim.claimID, serviceURL: Self.pairingServiceURL
             )
-        } catch PedalsServiceAPI.APIError.rejected(let status, _) where status == 410 {
+        } catch TTYBuildServiceAPI.APIError.rejected(let status, _) where status == 410 {
             // Gone can mean either "this claim was already confirmed and the
             // success response was lost" or "the claim expired". The edge
             // set is the truth; keep the binding only when the edge exists.
@@ -141,7 +141,7 @@ final class AppServices {
             // computer shows offline at worst and can be unbound by hand.
             if await pairingStore.serverHasBinding(computerID: binding.computerID) == false {
                 try? await terminals.removeComputer(id: binding.computerID)
-                throw PedalsServiceAPI.APIError.rejected(
+                throw TTYBuildServiceAPI.APIError.rejected(
                     status: status, message: "pairing claim is closed or expired"
                 )
             }
@@ -225,7 +225,7 @@ final class AppServices {
 
     private static var pairingServiceURL: URL {
         #if DEBUG
-        if let value = ProcessInfo.processInfo.environment["PEDALS_SERVICE_URL"],
+        if let value = ProcessInfo.processInfo.environment["TTYBUILD_SERVICE_URL"],
            let url = URL(string: value),
            url.scheme == "http",
            let host = url.host?.lowercased(),
@@ -234,7 +234,7 @@ final class AppServices {
             return url
         }
         #endif
-        return PedalsServiceAPI.productionServiceURL
+        return TTYBuildServiceAPI.productionServiceURL
     }
 
     func applyTerminalAppearance() {
@@ -261,13 +261,13 @@ final class AppServices {
             // keep the Watch's last-known-good credential.
             return
         }
-        let credential = PedalsStatusCredential(
+        let credential = TTYBuildStatusCredential(
             serviceURL: identity.serviceURL,
             clientID: identity.clientID,
             statusToken: identity.statusToken
         )
         Task {
-            await PedalsStatusRuntime.installCredential(credential)
+            await TTYBuildStatusRuntime.installCredential(credential)
             IOSWatchConnectivityBridge.shared.sendCurrentContext()
         }
         synchronizeWatchTerminalContext()
@@ -367,11 +367,11 @@ final class AppServices {
                   StatusSharedStore.credential() != nil
             else { return }
             do {
-                let snapshot = try await PedalsStatusRuntime.refreshState()
+                let snapshot = try await TTYBuildStatusRuntime.refreshState()
                 try await TTYLiveActivityController.shared.synchronize(with: snapshot)
                 self?.synchronizeLatestAgentActivity()
                 WidgetCenter.shared.reloadTimelines(
-                    ofKind: PedalsStatusConstants.phoneWidgetKind
+                    ofKind: TTYBuildStatusConstants.phoneWidgetKind
                 )
                 IOSWatchConnectivityBridge.shared.sendCurrentContext()
             } catch {

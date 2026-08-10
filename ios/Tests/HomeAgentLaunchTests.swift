@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import Pedals
+@testable import TTYBuild
 
 final class HomeAgentLaunchTests: XCTestCase {
     @MainActor

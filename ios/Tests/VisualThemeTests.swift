@@ -1,23 +1,23 @@
 import UIKit
 import XCTest
 
-@testable import Pedals
+@testable import TTYBuild
 
 @MainActor
 final class VisualThemeTests: XCTestCase {
     func testMonochromeUIKitPaletteUsesOnlyWhiteWithAlphaOnBlack() {
-        assertWhite(PedalsTheme.uiCanvas, component: 0, alpha: 1)
-        assertWhite(PedalsTheme.uiContent, component: 1, alpha: 1)
-        assertWhite(PedalsTheme.uiSecondaryContent, component: 1, alpha: 0.64)
-        assertWhite(PedalsTheme.uiTertiaryContent, component: 1, alpha: 0.38)
-        assertWhite(PedalsTheme.uiSurface, component: 1, alpha: 0.08)
-        assertWhite(PedalsTheme.uiSeparator, component: 1, alpha: 0.16)
-        assertWhite(PedalsTheme.uiSelection, component: 1, alpha: 0.18)
+        assertWhite(TTYBuildTheme.uiCanvas, component: 0, alpha: 1)
+        assertWhite(TTYBuildTheme.uiContent, component: 1, alpha: 1)
+        assertWhite(TTYBuildTheme.uiSecondaryContent, component: 1, alpha: 0.64)
+        assertWhite(TTYBuildTheme.uiTertiaryContent, component: 1, alpha: 0.38)
+        assertWhite(TTYBuildTheme.uiSurface, component: 1, alpha: 0.08)
+        assertWhite(TTYBuildTheme.uiSeparator, component: 1, alpha: 0.16)
+        assertWhite(TTYBuildTheme.uiSelection, component: 1, alpha: 0.18)
     }
 
     func testColoredRolesAreLimitedToWarningAndCritical() {
-        XCTAssertEqual(PedalsTheme.uiWarning, UIColor.systemOrange)
-        XCTAssertEqual(PedalsTheme.uiCritical, UIColor.systemRed)
+        XCTAssertEqual(TTYBuildTheme.uiWarning, UIColor.systemOrange)
+        XCTAssertEqual(TTYBuildTheme.uiCritical, UIColor.systemRed)
     }
 
     func testBrandMarkIsPackagedForOnboarding() {

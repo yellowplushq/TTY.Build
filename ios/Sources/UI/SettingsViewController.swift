@@ -1,5 +1,5 @@
 import Combine
-import PedalsKit
+import TTYBuildKit
 import UIKit
 
 /// Grouped inset settings: bound computers (status, unbind, add), font size,
@@ -27,7 +27,7 @@ final class SettingsViewController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Settings"
-        view.tintColor = PedalsTheme.uiContent
+        view.tintColor = TTYBuildTheme.uiContent
         navigationItem.rightBarButtonItem = UIBarButtonItem(
             systemItem: .done,
             primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) }
@@ -115,9 +115,9 @@ final class SettingsViewController: UITableViewController {
         var content = cell.defaultContentConfiguration()
         if row == computers.count {
             content.text = "Add Computer…"
-            content.textProperties.color = PedalsTheme.uiContent
+            content.textProperties.color = TTYBuildTheme.uiContent
             content.image = UIImage(systemName: "number")
-            content.imageProperties.tintColor = PedalsTheme.uiContent
+            content.imageProperties.tintColor = TTYBuildTheme.uiContent
             cell.contentConfiguration = content
             return cell
         }
@@ -128,7 +128,7 @@ final class SettingsViewController: UITableViewController {
         content.secondaryTextProperties.color = .secondaryLabel
         content.image = UIImage(systemName: "desktopcomputer")
         content.imageProperties.tintColor = computer.hostOnline
-            ? PedalsTheme.uiContent : .secondaryLabel
+            ? TTYBuildTheme.uiContent : .secondaryLabel
         cell.contentConfiguration = content
         cell.accessoryType = .disclosureIndicator
         cell.selectionStyle = .default
@@ -158,7 +158,7 @@ final class SettingsViewController: UITableViewController {
             stepper.maximumValue = Double(TerminalPreferences.fontSizeRange.upperBound)
             stepper.stepValue = 1
             stepper.value = Double(services.preferences.fontSize)
-            stepper.tintColor = PedalsTheme.uiContent
+            stepper.tintColor = TTYBuildTheme.uiContent
             stepper.addAction(
                 UIAction { [weak self, weak stepper] _ in
                     guard let self, let stepper else { return }
@@ -279,7 +279,7 @@ final class SettingsViewController: UITableViewController {
 
     private func showBindingError(_ error: Error) {
         let alert = UIAlertController(
-            title: "Pedals Service Error",
+            title: "tty.build Service Error",
             message: error.localizedDescription,
             preferredStyle: .alert
         )
@@ -326,13 +326,13 @@ final class SettingsViewController: UITableViewController {
 
 extension SettingsViewController: UIColorPickerViewControllerDelegate {
     func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {
-        setBackground(viewController.selectedColor.pedalsHexString)
+        setBackground(viewController.selectedColor.ttybuildHexString)
     }
 }
 
 private extension UIColor {
     /// "#RRGGBB" of the color's sRGB components.
-    var pedalsHexString: String {
+    var ttybuildHexString: String {
         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0
         getRed(&red, green: &green, blue: &blue, alpha: nil)
         return String(

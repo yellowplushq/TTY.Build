@@ -1,0 +1,14 @@
+{
+	"$schema": "../node_modules/wrangler/config-schema.json",
+	"name": "tty-build-legacy-redirect",
+	"account_id": "8bfe8b1e792b46613348bd7de669da65",
+	"main": "worker.mjs",
+	"compatibility_date": "2026-07-17",
+	"workers_dev": false,
+	"routes": [
+		{
+			"pattern": "pedals.air.build",
+			"custom_domain": true
+		}
+	]
+}

@@ -17,7 +17,7 @@ struct PushMutationRetry: Codable, Equatable, Sendable {
 
 struct ClaimedPushMutation: Equatable, Sendable {
     let claim: PushMutationClaim
-    let credential: PedalsStatusCredential
+    let credential: TTYBuildStatusCredential
 }
 
 struct PushMutationClaimDecision: Equatable, Sendable {
@@ -35,7 +35,7 @@ struct PushMutationClaimDecision: Equatable, Sendable {
 /// only the exact claim ID and credential generation it acquired, so a request
 /// that was in flight during credential rotation cannot remove requeued work.
 struct PushMutationState: Codable, Equatable, Sendable {
-    var credential: PedalsStatusCredential? = nil
+    var credential: TTYBuildStatusCredential? = nil
     var credentialGeneration: UInt64 = 0
     var pending: [String: PendingPushEndpointMutation] = [:]
     var desired: [String: PendingPushEndpointMutation] = [:]
@@ -100,7 +100,7 @@ struct PushMutationState: Codable, Equatable, Sendable {
     }
 
     @discardableResult
-    mutating func installCredential(_ replacement: PedalsStatusCredential) -> Bool {
+    mutating func installCredential(_ replacement: TTYBuildStatusCredential) -> Bool {
         guard credential != replacement else { return false }
         credential = replacement
         credentialGeneration &+= 1
@@ -229,14 +229,14 @@ public enum StatusSharedStore {
         category: "StatusSharedStore"
     )
 
-    public static func credential() -> PedalsStatusCredential? {
+    public static func credential() -> TTYBuildStatusCredential? {
         withPushMutationState { state in
             (state.credential, false)
         } ?? nil
     }
 
     @discardableResult
-    public static func saveCredential(_ credential: PedalsStatusCredential) async -> Bool {
+    public static func saveCredential(_ credential: TTYBuildStatusCredential) async -> Bool {
         let changed = await Task.detached(priority: .utility) {
             withPushMutationState { state in
                 let changed = state.installCredential(credential)
@@ -370,7 +370,7 @@ public enum StatusSharedStore {
         _ body: (inout PushMutationState) -> (Result, Bool)
     ) -> Result? {
         guard let container = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: PedalsStatusConstants.appGroup
+            forSecurityApplicationGroupIdentifier: TTYBuildStatusConstants.appGroup
         ) else {
             logger.error("App Group unavailable; cannot persist push token mutation")
             return nil
@@ -378,7 +378,7 @@ public enum StatusSharedStore {
         let directory = container
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("PedalsStatus", isDirectory: true)
+            .appendingPathComponent("TTYBuildStatus", isDirectory: true)
         do {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true
@@ -414,7 +414,7 @@ public enum StatusSharedStore {
             do {
                 let data = try Data(contentsOf: fileURL)
                 if !data.isEmpty {
-                    state = try JSONDecoder.pedals.decode(
+                    state = try JSONDecoder.ttybuild.decode(
                         PushMutationState.self, from: data
                     )
                 }
@@ -433,7 +433,7 @@ public enum StatusSharedStore {
         let (result, changed) = body(&state)
         if changed {
             do {
-                let data = try JSONEncoder.pedals.encode(state)
+                let data = try JSONEncoder.ttybuild.encode(state)
                 try data.write(
                     to: fileURL,
                     options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
@@ -448,7 +448,7 @@ public enum StatusSharedStore {
 
     private static func sharedStatusDirectory() -> URL? {
         guard let container = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: PedalsStatusConstants.appGroup
+            forSecurityApplicationGroupIdentifier: TTYBuildStatusConstants.appGroup
         ) else {
             logger.error("App Group unavailable; cannot open shared status directory")
             return nil
@@ -456,7 +456,7 @@ public enum StatusSharedStore {
         let directory = container
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("PedalsStatus", isDirectory: true)
+            .appendingPathComponent("TTYBuildStatus", isDirectory: true)
         do {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true
@@ -471,7 +471,7 @@ public enum StatusSharedStore {
 }
 
 extension JSONEncoder {
-    static var pedals: JSONEncoder {
+    static var ttybuild: JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         return encoder
@@ -479,7 +479,7 @@ extension JSONEncoder {
 }
 
 extension JSONDecoder {
-    static var pedals: JSONDecoder {
+    static var ttybuild: JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
@@ -487,7 +487,7 @@ extension JSONDecoder {
 }
 
 extension Data {
-    public var pedalsHexString: String {
+    public var ttybuildHexString: String {
         map { String(format: "%02x", $0) }.joined()
     }
 }

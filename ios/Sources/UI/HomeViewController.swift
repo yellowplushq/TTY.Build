@@ -1,5 +1,5 @@
 import Combine
-import PedalsKit
+import TTYBuildKit
 import UIKit
 
 /// The leftmost page of the main screen: a calm black/white overview of every
@@ -61,11 +61,11 @@ final class HomeViewController: UIViewController {
     private var collectionView: UICollectionView!
 
     #if DEBUG
-    /// Dev-only visual fixture (`PEDALS_HOME_AGENTS_FIXTURE=1`): realistic
+    /// Dev-only visual fixture (`TTYBUILD_HOME_AGENTS_FIXTURE=1`): realistic
     /// agent rows with varied states and ages, since daemon-injected events
     /// always stamp "now". Ages are fixed at launch and grow naturally.
     private static let agentFixtureRows: [AgentRow]? = {
-        guard ProcessInfo.processInfo.environment["PEDALS_HOME_AGENTS_FIXTURE"] == "1"
+        guard ProcessInfo.processInfo.environment["TTYBUILD_HOME_AGENTS_FIXTURE"] == "1"
         else { return nil }
         let now = Date().timeIntervalSince1970
         func row(
@@ -86,7 +86,7 @@ final class HomeViewController: UIViewController {
         return [
             row(
                 "claude", .waiting, sessionName: "Polish agent monitoring",
-                cwd: "/Users/eyhn/Projects/yellowplus/pedals",
+                cwd: "/Users/eyhn/Projects/yellowplus/ttybuild",
                 age: 3 * 60,
                 prompt: "把设置页改成侧边栏布局",
                 message: "Claude needs your permission to use Bash"
@@ -125,8 +125,8 @@ final class HomeViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = PedalsTheme.uiCanvas
-        view.accessibilityIdentifier = "pedals.home"
+        view.backgroundColor = TTYBuildTheme.uiCanvas
+        view.accessibilityIdentifier = "ttybuild.home"
         buildLayout()
         buildDataSource()
         bind()
@@ -142,8 +142,8 @@ final class HomeViewController: UIViewController {
             ),
             for: .normal
         )
-        settingsButton.tintColor = PedalsTheme.uiSecondaryContent
-        settingsButton.accessibilityIdentifier = "pedals.home.settings"
+        settingsButton.tintColor = TTYBuildTheme.uiSecondaryContent
+        settingsButton.accessibilityIdentifier = "ttybuild.home.settings"
         settingsButton.accessibilityLabel = "Settings"
         settingsButton.addAction(
             UIAction { [weak self] _ in self?.onSettings?() }, for: .touchUpInside
@@ -171,7 +171,7 @@ final class HomeViewController: UIViewController {
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         collectionView.alwaysBounceVertical = true
-        collectionView.accessibilityIdentifier = "pedals.home.list"
+        collectionView.accessibilityIdentifier = "ttybuild.home.list"
 
         let stack = UIStackView(arrangedSubviews: [headerRow, collectionView])
         stack.axis = .vertical
@@ -243,7 +243,7 @@ final class HomeViewController: UIViewController {
             cell.configure(content: content)
             let section = Section(rawValue: indexPath.section) ?? .terminals
             let area = section == .terminals ? "terminals" : "agents"
-            cell.accessibilityIdentifier = "pedals.home.\(area).row.\(indexPath.item)"
+            cell.accessibilityIdentifier = "ttybuild.home.\(area).row.\(indexPath.item)"
             cell.accessibilityTraits.remove(.button)
             cell.accessibilityHint = nil
             if case .terminal = item {
@@ -264,14 +264,14 @@ final class HomeViewController: UIViewController {
                     text: "No terminals. Create one from the + button.",
                     card: true
                 )
-                cell.accessibilityIdentifier = "pedals.home.terminals.empty"
+                cell.accessibilityIdentifier = "ttybuild.home.terminals.empty"
             case .agentsEmpty:
                 cell.configure(
                     text: "Agents you run on your Mac appear here. "
-                        + "Install hooks from the Pedals menu bar app.",
+                        + "Install hooks from the tty.build menu bar app.",
                     card: false
                 )
-                cell.accessibilityIdentifier = "pedals.home.agents.empty"
+                cell.accessibilityIdentifier = "ttybuild.home.agents.empty"
             case .terminal, .agent:
                 break
             }
@@ -715,18 +715,18 @@ private final class HomeRowCell: UICollectionViewListCell {
         // cell on highlight/selection; this cell drives contentView's color
         // itself for both the card and flat styles.
         backgroundConfiguration = .clear()
-        contentView.backgroundColor = PedalsTheme.uiSurface
+        contentView.backgroundColor = TTYBuildTheme.uiSurface
         contentView.layer.cornerRadius = 16
         contentView.layer.cornerCurve = .continuous
 
-        primaryLabel.font = PedalsTheme.uiEmphasizedTextFont
-        primaryLabel.textColor = PedalsTheme.uiContent
+        primaryLabel.font = TTYBuildTheme.uiEmphasizedTextFont
+        primaryLabel.textColor = TTYBuildTheme.uiContent
         primaryLabel.numberOfLines = 1
         primaryLabel.lineBreakMode = .byTruncatingTail
         primaryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         secondaryLabel.font = .systemFont(ofSize: 13)
-        secondaryLabel.textColor = PedalsTheme.uiSecondaryContent
+        secondaryLabel.textColor = TTYBuildTheme.uiSecondaryContent
         secondaryLabel.numberOfLines = 1
         secondaryLabel.lineBreakMode = .byTruncatingTail
         secondaryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -741,7 +741,7 @@ private final class HomeRowCell: UICollectionViewListCell {
         chipsStack.spacing = 5
 
         timeLabel.font = .systemFont(ofSize: 11)
-        timeLabel.textColor = PedalsTheme.uiTertiaryContent
+        timeLabel.textColor = TTYBuildTheme.uiTertiaryContent
         timeLabel.textAlignment = .right
 
         let trailingStack = UIStackView(arrangedSubviews: [chipsStack, timeLabel])
@@ -752,7 +752,7 @@ private final class HomeRowCell: UICollectionViewListCell {
         trailingStack.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         iconView.contentMode = .scaleAspectFit
-        iconView.tintColor = PedalsTheme.uiContent
+        iconView.tintColor = TTYBuildTheme.uiContent
         iconView.isHidden = true
 
         badgeView.layer.cornerRadius = 5
@@ -803,21 +803,21 @@ private final class HomeRowCell: UICollectionViewListCell {
     override var isHighlighted: Bool {
         didSet {
             contentView.backgroundColor = isHighlighted
-                ? PedalsTheme.uiSelection
-                : (isFlat ? .clear : PedalsTheme.uiSurface)
+                ? TTYBuildTheme.uiSelection
+                : (isFlat ? .clear : TTYBuildTheme.uiSurface)
         }
     }
 
     func configure(content: HomeRowContent) {
         isFlat = content.flat
-        contentView.backgroundColor = content.flat ? .clear : PedalsTheme.uiSurface
+        contentView.backgroundColor = content.flat ? .clear : TTYBuildTheme.uiSurface
         let icon = content.icon.flatMap { UIImage(named: $0) }
         iconView.image = icon
         iconView.isHidden = icon == nil
         // The badge ring must match whatever the dot sits on: the card
         // surface for terminal rows, the bare canvas for flat agent rows.
         badgeView.layer.borderColor = (content.flat
-            ? PedalsTheme.uiCanvas
+            ? TTYBuildTheme.uiCanvas
             : UIColor(white: 0.075, alpha: 1)).cgColor
         configureBadge(for: content, hasIcon: icon != nil)
         // Deactivate before activating the other: both live for a beat
@@ -830,7 +830,7 @@ private final class HomeRowCell: UICollectionViewListCell {
             content: content, inlineIndicator: icon == nil
         )
         secondaryLabel.text = content.secondary
-        secondaryLabel.textColor = content.secondaryColor ?? PedalsTheme.uiSecondaryContent
+        secondaryLabel.textColor = content.secondaryColor ?? TTYBuildTheme.uiSecondaryContent
         secondaryLabel.isHidden = content.secondary.isEmpty
 
         // Reuse chip views: recreating them while the cell is being
@@ -875,13 +875,13 @@ private final class HomeRowCell: UICollectionViewListCell {
         if blinking {
             startBlinkAnimation()
         } else {
-            badgeView.layer.removeAnimation(forKey: "pedals.blink")
+            badgeView.layer.removeAnimation(forKey: "ttybuild.blink")
         }
     }
 
     private func startBlinkAnimation() {
         guard badgeBlinking,
-              badgeView.layer.animation(forKey: "pedals.blink") == nil
+              badgeView.layer.animation(forKey: "ttybuild.blink") == nil
         else { return }
         let blink = CABasicAnimation(keyPath: "opacity")
         blink.fromValue = 1.0
@@ -890,7 +890,7 @@ private final class HomeRowCell: UICollectionViewListCell {
         blink.autoreverses = true
         blink.repeatCount = .infinity
         blink.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        badgeView.layer.add(blink, forKey: "pedals.blink")
+        badgeView.layer.add(blink, forKey: "ttybuild.blink")
     }
 
     /// Core Animation drops animations when the cell leaves the window
@@ -904,10 +904,10 @@ private final class HomeRowCell: UICollectionViewListCell {
     /// finished green.
     static func stateColor(_ state: AgentState) -> UIColor {
         switch state {
-        case .waiting: PedalsTheme.uiWarning
-        case .error: PedalsTheme.uiCritical
-        case .running: PedalsTheme.uiContent
-        case .done: PedalsTheme.uiSuccess
+        case .waiting: TTYBuildTheme.uiWarning
+        case .error: TTYBuildTheme.uiCritical
+        case .running: TTYBuildTheme.uiContent
+        case .done: TTYBuildTheme.uiSuccess
         }
     }
 
@@ -930,15 +930,15 @@ private final class HomeRowCell: UICollectionViewListCell {
         case .dead:
             text.append(NSAttributedString(
                 string: "× ",
-                attributes: [.foregroundColor: PedalsTheme.uiCritical, .font: markFont]
+                attributes: [.foregroundColor: TTYBuildTheme.uiCritical, .font: markFont]
             ))
         }
         text.append(NSAttributedString(
             string: content.primary,
             attributes: [
                 .foregroundColor: content.indicator == .dead
-                    ? PedalsTheme.uiSecondaryContent : PedalsTheme.uiContent,
-                .font: PedalsTheme.uiEmphasizedTextFont,
+                    ? TTYBuildTheme.uiSecondaryContent : TTYBuildTheme.uiContent,
+                .font: TTYBuildTheme.uiEmphasizedTextFont,
             ]
         ))
         return text
@@ -955,7 +955,7 @@ private final class HomeHintCell: UICollectionViewCell {
         contentView.layer.cornerCurve = .continuous
 
         label.font = .systemFont(ofSize: 13)
-        label.textColor = PedalsTheme.uiSecondaryContent
+        label.textColor = TTYBuildTheme.uiSecondaryContent
         label.numberOfLines = 0
         label.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(label)
@@ -972,7 +972,7 @@ private final class HomeHintCell: UICollectionViewCell {
 
     func configure(text: String, card: Bool) {
         label.text = text
-        contentView.backgroundColor = card ? PedalsTheme.uiSurface : .clear
+        contentView.backgroundColor = card ? TTYBuildTheme.uiSurface : .clear
     }
 }
 
@@ -990,13 +990,13 @@ private final class HomeSectionHeaderView: UICollectionReusableView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         label.font = .systemFont(ofSize: 13, weight: .semibold)
-        label.textColor = PedalsTheme.uiSecondaryContent
+        label.textColor = TTYBuildTheme.uiSecondaryContent
         label.translatesAutoresizingMaskIntoConstraints = false
 
         clearButton.setTitle("Clear", for: .normal)
         clearButton.titleLabel?.font = .systemFont(ofSize: 11)
-        clearButton.setTitleColor(PedalsTheme.uiTertiaryContent, for: .normal)
-        clearButton.accessibilityIdentifier = "pedals.home.agents.clear"
+        clearButton.setTitleColor(TTYBuildTheme.uiTertiaryContent, for: .normal)
+        clearButton.accessibilityIdentifier = "ttybuild.home.agents.clear"
         clearButton.isHidden = true
         clearButton.addAction(
             UIAction { [weak self] _ in self?.onClear?() }, for: .touchUpInside
@@ -1046,11 +1046,11 @@ private final class HomeChipView: UIView {
     init(text: String) {
         super.init(frame: .zero)
         layer.borderWidth = 1
-        layer.borderColor = PedalsTheme.uiSeparator.cgColor
+        layer.borderColor = TTYBuildTheme.uiSeparator.cgColor
 
         label.text = text
         label.font = .systemFont(ofSize: 11)
-        label.textColor = PedalsTheme.uiSecondaryContent
+        label.textColor = TTYBuildTheme.uiSecondaryContent
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([

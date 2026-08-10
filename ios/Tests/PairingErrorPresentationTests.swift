@@ -1,15 +1,15 @@
-import PedalsKit
+import TTYBuildKit
 import UIKit
 import XCTest
 
-@testable import Pedals
+@testable import TTYBuild
 
 final class PairingErrorPresentationTests: XCTestCase {
     func testExpiredAndInvalidCodesUseCodeSpecificMessage() {
         for status in [400, 404, 410] {
             XCTAssertEqual(
                 PairingErrorPresentation.message(for:
-                    PedalsServiceAPI.APIError.rejected(
+                    TTYBuildServiceAPI.APIError.rejected(
                         status: status,
                         message: "invalid pairing code"
                     )
@@ -22,18 +22,18 @@ final class PairingErrorPresentationTests: XCTestCase {
     func testServiceMismatchIsNotReportedAsExpiredCode() {
         XCTAssertEqual(
             PairingErrorPresentation.message(for: PairingStore.StoreError.serviceMismatch),
-            "This installation has pairing data from another Pedals service. Restart the app and try again."
+            "This installation has pairing data from another tty.build service. Restart the app and try again."
         )
     }
 
     func testNetworkAndRateLimitErrorsHaveDistinctMessages() {
         XCTAssertEqual(
             PairingErrorPresentation.message(for: URLError(.notConnectedToInternet)),
-            "Couldn’t reach Pedals. Check your connection and try again."
+            "Couldn’t reach TTYBuild. Check your connection and try again."
         )
         XCTAssertEqual(
             PairingErrorPresentation.message(for:
-                PedalsServiceAPI.APIError.rejected(status: 429, message: "slow down")
+                TTYBuildServiceAPI.APIError.rejected(status: 429, message: "slow down")
             ),
             "Too many pairing attempts. Wait a moment and try again."
         )
@@ -49,10 +49,10 @@ final class PairingErrorPresentationTests: XCTestCase {
         let link = try XCTUnwrap(
             findSubview(
                 in: controller.view,
-                identifier: "pedals.pairing.website"
+                identifier: "ttybuild.pairing.website"
             ) as? UIButton
         )
-        XCTAssertEqual(link.title(for: .normal), "pedals.air.build")
+        XCTAssertEqual(link.title(for: .normal), "tty.build")
         XCTAssertTrue(link.titleLabel?.adjustsFontSizeToFitWidth == true)
         XCTAssertLessThan(link.titleLabel?.minimumScaleFactor ?? 1, 1)
         XCTAssertEqual(link.titleLabel?.lineBreakMode, .byClipping)
@@ -83,7 +83,7 @@ final class PairingErrorPresentationTests: XCTestCase {
         let guide = try XCTUnwrap(
             findSubview(
                 in: controller.view,
-                identifier: "pedals.pairing.download"
+                identifier: "ttybuild.pairing.download"
             )
         )
         XCTAssertFalse(guide.isHidden)
@@ -102,14 +102,14 @@ final class PairingErrorPresentationTests: XCTestCase {
         let copy = try XCTUnwrap(
             findSubview(
                 in: controller.view,
-                identifier: "pedals.pairing.copyInstall"
+                identifier: "ttybuild.pairing.copyInstall"
             ) as? UIButton
         )
         UIPasteboard.general.string = ""
         copy.sendActions(for: .touchUpInside)
         XCTAssertEqual(
             UIPasteboard.general.string,
-            "curl -fsSL https://pedals.air.build/i | bash"
+            "curl -fsSL https://tty.build/i | bash"
         )
     }
 

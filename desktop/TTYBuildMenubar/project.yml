@@ -1,0 +1,67 @@
+name: TTYBuildMenubar
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"
+packages:
+  TTYBuildDaemon:
+    path: ../TTYBuildDaemon
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.4
+targets:
+  TTYBuildMenubar:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+      - path: Resources
+        buildPhase: resources
+    dependencies:
+      - package: TTYBuildDaemon
+        product: TTYBuildDaemonCore
+      # Built for the copy-into-bundle step below; not linked.
+      - package: TTYBuildDaemon
+        product: ttybuild-hook
+        link: false
+      - package: Sparkle
+    postBuildScripts:
+      - name: Embed ttybuild-hook reporter
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          cp "$BUILT_PRODUCTS_DIR/ttybuild-hook" \
+            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/ttybuild-hook"
+          codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" \
+            --options runtime \
+            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/ttybuild-hook"
+    scheme:
+      testTargets: []
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: tty.build
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSUIElement: true
+        LSMinimumSystemVersion: "14.0"
+        SUAutomaticallyUpdate: true
+        SUEnableAutomaticChecks: true
+        SUFeedURL: https://tty.build/appcast.xml
+        SUPublicEDKey: fU6GOxOohmLiyQM7hTjHvWqfxSQLQ7Z3rQCX2RH34Ds=
+        SURequireSignedFeed: true
+        SUScheduledCheckInterval: 86400
+        SUVerifyUpdateBeforeExtraction: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: build.tty.menubar
+        PRODUCT_NAME: TTYBuild
+        MARKETING_VERSION: "1.5.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: true
+        COMBINE_HIDPI_IMAGES: true
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: false

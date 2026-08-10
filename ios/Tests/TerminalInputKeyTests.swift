@@ -2,7 +2,7 @@ import GhosttyTerminal
 import UIKit
 import XCTest
 
-@testable import Pedals
+@testable import TTYBuild
 
 final class TerminalInputKeyTests: XCTestCase {
     func testSystemKeyboardReturnBecomesTerminalEnterWithoutChangingPaste() {
@@ -373,7 +373,7 @@ final class TerminalInputSurfaceTests: XCTestCase {
     }
 
     func testTerminalViewRoutesSoftwareReturnThroughDirectHandler() {
-        let view = PedalsTerminalView(frame: .zero)
+        let view = TTYBuildTerminalView(frame: .zero)
         var returnCount = 0
         view.softwareKeyboardReturnHandler = { returnCount += 1 }
 

@@ -4,9 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 ARTIFACT_ROOT="$REPOSITORY_ROOT/.artifacts"
-OUTPUT_DIR="${PEDALS_DESKTOP_OUTPUT_DIR:-$ARTIFACT_ROOT/desktop-release}"
-APP_PATH="$OUTPUT_DIR/Pedals.app"
-DMG_PATH="$OUTPUT_DIR/Pedals-macOS.dmg"
+OUTPUT_DIR="${TTYBUILD_DESKTOP_OUTPUT_DIR:-$ARTIFACT_ROOT/desktop-release}"
+APP_PATH="$OUTPUT_DIR/TTYBuild.app"
+DMG_PATH="$OUTPUT_DIR/TTYBuild-macOS.dmg"
 STAGING_DIR="$OUTPUT_DIR/dmg-root"
 
 for command in hdiutil ditto; do
@@ -35,11 +35,11 @@ fi
 rm -rf "$STAGING_DIR"
 rm -f "$DMG_PATH"
 mkdir -p "$STAGING_DIR"
-ditto "$APP_PATH" "$STAGING_DIR/Pedals.app"
+ditto "$APP_PATH" "$STAGING_DIR/TTYBuild.app"
 ln -s /Applications "$STAGING_DIR/Applications"
 
 hdiutil create \
-  -volname Pedals \
+  -volname TTYBuild \
   -srcfolder "$STAGING_DIR" \
   -format UDZO \
   -imagekey zlib-level=9 \

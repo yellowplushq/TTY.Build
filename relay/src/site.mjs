@@ -3,8 +3,8 @@ import { injectPairingCode } from "./paired-zip.mjs";
 
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const UPSTREAM_ZIP_CACHE_SECONDS = 5 * 60;
-const MACOS_ASSET = "Pedals-macOS.dmg";
-const MACOS_ZIP_ASSET = "Pedals-macOS.zip";
+const MACOS_ASSET = "TTYBuild-macOS.dmg";
+const MACOS_ZIP_ASSET = "TTYBuild-macOS.zip";
 const APPCAST_ASSET = "appcast.xml";
 const DESKTOP_ASSETS = new Map([
   ["/download/macos", MACOS_ASSET],
@@ -35,7 +35,7 @@ export function handleDesktopDownload(request, env, url) {
     return new Response(
       request.method === "HEAD"
         ? null
-        : "The Pedals desktop download is not configured yet.\n",
+        : "The tty.build desktop download is not configured yet.\n",
       {
         status: 503,
         headers: {
@@ -54,12 +54,12 @@ export function handleDesktopDownload(request, env, url) {
 }
 
 // Short aliases that serve an existing static asset without a redirect, so
-// `curl https://pedals.air.build/i | bash` stays a single round trip.
+// `curl https://tty.build/i | bash` stays a single round trip.
 const ASSET_ALIASES = new Map([["/i", "/install.sh"]]);
 
-// `curl https://pedals.air.build/12345678 | bash` — the shortest install
+// `curl https://tty.build/12345678 | bash` — the shortest install
 // command: an 8-digit path serves install.sh with that enrollment code baked
-// in as the PEDALS_PAIR default. Purely textual — the code is never checked
+// in as the TTYBUILD_PAIR default. Purely textual — the code is never checked
 // against the token table here, so the route leaks nothing about which codes
 // exist.
 const INSTALL_CODE_PATH = /^\/(\d{8})$/;
@@ -67,7 +67,7 @@ const INSTALL_CODE_PATH = /^\/(\d{8})$/;
 /// `GET /download/<code>/macos.zip` — the release zip with the enrollment
 /// code stamped in as an AppleDouble xattr entry, so an AirDropped or
 /// browser-downloaded archive pairs on first launch with zero typing. The
-/// signed Pedals.app bytes pass through untouched; when the archive cannot
+/// signed TTYBuild.app bytes pass through untouched; when the archive cannot
 /// be rewritten safely the untouched original is served instead. The code is
 /// never validated here — the URL reveals nothing about which codes exist.
 export async function handlePairedDownload(
@@ -82,7 +82,7 @@ export async function handlePairedDownload(
     return new Response(
       request.method === "HEAD"
         ? null
-        : "The Pedals desktop download is not configured yet.\n",
+        : "The tty.build desktop download is not configured yet.\n",
       {
         status: 503,
         headers: {
@@ -121,7 +121,7 @@ export async function handlePairedDownload(
   if (!upstream) {
     upstream = await fetchImpl(upstreamURL, { redirect: "follow" });
     if (!upstream.ok) {
-      return new Response("The Pedals release download failed upstream.\n", {
+      return new Response("The tty.build release download failed upstream.\n", {
         status: 502,
         headers: {
           "cache-control": "no-store",
@@ -172,7 +172,7 @@ export async function handleWebsiteAsset(request, env) {
     headers.delete("content-length");
     if (body !== null) {
       const script = await response.text();
-      body = script.replace("PEDALS_PAIR:-", `PEDALS_PAIR:-${codeMatch[1]}`);
+      body = script.replace("TTYBUILD_PAIR:-", `TTYBUILD_PAIR:-${codeMatch[1]}`);
     }
   }
   return new Response(body, {

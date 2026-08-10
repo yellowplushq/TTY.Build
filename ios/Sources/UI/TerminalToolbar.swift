@@ -48,7 +48,7 @@ final class TerminalToolbar: UIView {
         scrollView.addSubview(stack)
 
         divider.translatesAutoresizingMaskIntoConstraints = false
-        divider.backgroundColor = PedalsTheme.uiSeparator
+        divider.backgroundColor = TTYBuildTheme.uiSeparator
         glass.contentView.addSubview(divider)
 
         fixedActions.translatesAutoresizingMaskIntoConstraints = false
@@ -295,8 +295,8 @@ private final class TerminalToolbarButton: UIButton {
 
     init() {
         super.init(frame: .zero)
-        tintColor = PedalsTheme.uiContent
-        setTitleColor(PedalsTheme.uiContent, for: .normal)
+        tintColor = TTYBuildTheme.uiContent
+        setTitleColor(TTYBuildTheme.uiContent, for: .normal)
         layer.cornerRadius = 8
         layer.cornerCurve = .continuous
         updateAppearance()
@@ -307,13 +307,13 @@ private final class TerminalToolbarButton: UIButton {
 
     private func updateAppearance() {
         backgroundColor = if isSelected {
-            PedalsTheme.uiSelection
+            TTYBuildTheme.uiSelection
         } else if isHighlighted {
-            PedalsTheme.uiSurface
+            TTYBuildTheme.uiSurface
         } else {
             .clear
         }
         layer.borderWidth = isSelected ? 1 : 0
-        layer.borderColor = PedalsTheme.uiContent.withAlphaComponent(0.92).cgColor
+        layer.borderColor = TTYBuildTheme.uiContent.withAlphaComponent(0.92).cgColor
     }
 }

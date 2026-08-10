@@ -1,7 +1,7 @@
-import PedalsKit
+import TTYBuildKit
 import XCTest
 
-@testable import Pedals
+@testable import TTYBuild
 
 @MainActor
 final class ReversePairingStoreTests: XCTestCase {
@@ -48,7 +48,7 @@ final class ReversePairingStoreTests: XCTestCase {
     func testEnsureTokenRecreatesASweptClientIdentityOnce() async throws {
         let memory = MemoryState()
         let api = MockAPI(token: try makeToken(code: "01234567"))
-        api.registerErrors = [PedalsServiceAPI.APIError.rejected(status: 401, message: "unauthorized")]
+        api.registerErrors = [TTYBuildServiceAPI.APIError.rejected(status: 401, message: "unauthorized")]
         let store = makeStore(memory: memory, api: api)
 
         let token = try await store.ensureToken(serviceURL: serviceURL)
@@ -208,7 +208,7 @@ final class ReversePairingStoreTests: XCTestCase {
         }
 
         func pair(code: PairingCode, as client: ClientIdentity) async throws -> ComputerBinding {
-            throw PedalsServiceAPI.APIError.invalidResponse
+            throw TTYBuildServiceAPI.APIError.invalidResponse
         }
 
         func reconcileBindings(

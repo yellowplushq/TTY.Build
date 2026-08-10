@@ -1,4 +1,4 @@
-import PedalsKit
+import TTYBuildKit
 import UIKit
 
 /// Safari-style top tab strip: one pill per session, the active pill expanded
@@ -51,9 +51,9 @@ final class TabStripView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
 
-        titleLabel.text = "Pedals"
+        titleLabel.text = "tty.build"
         titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
-        titleLabel.textColor = PedalsTheme.uiContent
+        titleLabel.textColor = TTYBuildTheme.uiContent
         titleLabel.textAlignment = .center
         titleLabel.isHidden = true
         addSubview(titleLabel)
@@ -87,7 +87,7 @@ final class TabStripView: UIView {
             for: .normal
         )
         homeButton.tintColor = .secondaryLabel
-        homeButton.accessibilityIdentifier = "pedals.home.tab"
+        homeButton.accessibilityIdentifier = "ttybuild.home.tab"
         homeButton.accessibilityLabel = "Home"
         homeButton.addAction(
             UIAction { [weak self] _ in self?.onHome?() }, for: .touchUpInside
@@ -98,7 +98,7 @@ final class TabStripView: UIView {
     /// Renders the fixed home pill selected (Home page visible) or not.
     func setHomeSelected(_ selected: Bool) {
         homeButton.tintColor = selected ? .label : .secondaryLabel
-        homeGlass.contentView.backgroundColor = selected ? PedalsTheme.uiSelection : .clear
+        homeGlass.contentView.backgroundColor = selected ? TTYBuildTheme.uiSelection : .clear
     }
 
     @available(*, unavailable)
@@ -345,14 +345,14 @@ final class TabPillView: UIView {
 
         iconView.contentMode = .scaleAspectFit
         iconView.tintColor = .secondaryLabel
-        iconView.accessibilityIdentifier = "pedals.tab.icon"
+        iconView.accessibilityIdentifier = "ttybuild.tab.icon"
         glass.contentView.addSubview(iconView)
 
         badgeView.layer.cornerRadius = 4
         badgeView.layer.borderWidth = 1.5
-        badgeView.layer.borderColor = PedalsTheme.uiCanvas.cgColor
+        badgeView.layer.borderColor = TTYBuildTheme.uiCanvas.cgColor
         badgeView.isHidden = true
-        badgeView.accessibilityIdentifier = "pedals.tab.agent-state-badge"
+        badgeView.accessibilityIdentifier = "ttybuild.tab.agent-state-badge"
         glass.contentView.addSubview(badgeView)
 
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
@@ -423,7 +423,7 @@ final class TabPillView: UIView {
         titleLabel.textColor = alive && isActive ? .label : .secondaryLabel
         iconView.tintColor = alive
             ? (isActive ? .label : .secondaryLabel)
-            : PedalsTheme.uiCritical
+            : TTYBuildTheme.uiCritical
     }
 
     /// Home hides the badge for a completed agent; the tab follows the same
@@ -448,13 +448,13 @@ final class TabPillView: UIView {
         if blinking {
             startBlinkAnimation()
         } else {
-            badgeView.layer.removeAnimation(forKey: "pedals.tab.badge.blink")
+            badgeView.layer.removeAnimation(forKey: "ttybuild.tab.badge.blink")
         }
     }
 
     private func startBlinkAnimation() {
         guard badgeBlinking,
-              badgeView.layer.animation(forKey: "pedals.tab.badge.blink") == nil
+              badgeView.layer.animation(forKey: "ttybuild.tab.badge.blink") == nil
         else { return }
         let blink = CABasicAnimation(keyPath: "opacity")
         blink.fromValue = 1.0
@@ -463,7 +463,7 @@ final class TabPillView: UIView {
         blink.autoreverses = true
         blink.repeatCount = .infinity
         blink.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        badgeView.layer.add(blink, forKey: "pedals.tab.badge.blink")
+        badgeView.layer.add(blink, forKey: "ttybuild.tab.badge.blink")
     }
 
     override func didMoveToWindow() {
@@ -473,10 +473,10 @@ final class TabPillView: UIView {
 
     private static func stateColor(_ state: AgentState) -> UIColor {
         switch state {
-        case .waiting: PedalsTheme.uiWarning
-        case .error: PedalsTheme.uiCritical
-        case .running: PedalsTheme.uiContent
-        case .done: PedalsTheme.uiSuccess
+        case .waiting: TTYBuildTheme.uiWarning
+        case .error: TTYBuildTheme.uiCritical
+        case .running: TTYBuildTheme.uiContent
+        case .done: TTYBuildTheme.uiSuccess
         }
     }
 

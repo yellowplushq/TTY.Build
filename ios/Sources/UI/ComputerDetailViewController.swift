@@ -1,5 +1,5 @@
 import Combine
-import PedalsKit
+import TTYBuildKit
 import UIKit
 
 /// Per-computer page pushed from Settings: connection info, remote
@@ -63,7 +63,7 @@ final class ComputerDetailViewController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = computer?.displayName ?? "Computer"
-        view.tintColor = PedalsTheme.uiContent
+        view.tintColor = TTYBuildTheme.uiContent
 
         computer?.events
             .receive(on: DispatchQueue.main)
@@ -148,7 +148,7 @@ final class ComputerDetailViewController: UITableViewController {
             if kind != .background {
                 updateSheet?.show(.failed(
                     title: kind == .install ? "Update Failed" : "Update Check Failed",
-                    message: "No reply from the Mac. It may be running an older Pedals — update it there to manage updates from here."
+                    message: "No reply from the Mac. It may be running an older tty.build — update it there to manage updates from here."
                 ))
             }
         }
@@ -222,12 +222,12 @@ final class ComputerDetailViewController: UITableViewController {
         switch Section(rawValue: section)! {
         case .agents:
             if hooksUnsupported {
-                return "This Mac runs an older Pedals without remote hook management. Update Pedals on the Mac to manage hooks from here."
+                return "This Mac runs an older tty.build without remote hook management. Update tty.build on the Mac to manage hooks from here."
             }
             return actionError
         case .updates:
             if updatesUnsupported {
-                return "This Mac runs an older Pedals without remote updates. Update Pedals on the Mac to check for updates from here."
+                return "This Mac runs an older tty.build without remote updates. Update tty.build on the Mac to check for updates from here."
             }
             return nil
         case .computer, .unbind:
@@ -312,7 +312,7 @@ final class ComputerDetailViewController: UITableViewController {
             content.image = UIImage(named: asset)
             content.imageProperties.maximumSize = CGSize(width: 24, height: 24)
             content.imageProperties.reservedLayoutSize = CGSize(width: 24, height: 24)
-            content.imageProperties.tintColor = PedalsTheme.uiContent
+            content.imageProperties.tintColor = TTYBuildTheme.uiContent
         }
         cell.contentConfiguration = content
         cell.accessoryView = agentAccessory(for: entry)
@@ -336,7 +336,7 @@ final class ComputerDetailViewController: UITableViewController {
             config.title = "Installed"
             config.image = UIImage(systemName: "checkmark.circle.fill")
             config.imagePadding = 4
-            config.baseForegroundColor = PedalsTheme.uiSuccess
+            config.baseForegroundColor = TTYBuildTheme.uiSuccess
             config.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(
                 textStyle: .subheadline
             )
@@ -374,7 +374,7 @@ final class ComputerDetailViewController: UITableViewController {
         config.title = title
         config.buttonSize = .small
         config.cornerStyle = .capsule
-        config.baseForegroundColor = PedalsTheme.uiContent
+        config.baseForegroundColor = TTYBuildTheme.uiContent
         return config
     }
 
@@ -384,7 +384,7 @@ final class ComputerDetailViewController: UITableViewController {
         let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
         var content = cell.defaultContentConfiguration()
         content.text = "Check for Updates…"
-        content.textProperties.color = PedalsTheme.uiContent
+        content.textProperties.color = TTYBuildTheme.uiContent
         cell.contentConfiguration = content
         cell.selectionStyle = .default
         return cell
@@ -504,7 +504,7 @@ final class ComputerDetailViewController: UITableViewController {
                 sheet.show(.started(
                     message: info.detail ?? """
                         \(host) is downloading the update and will install it \
-                        automatically. Pedals there restarts when it finishes.
+                        automatically. TTYBuild there restarts when it finishes.
                         """
                 ))
             } else if let detail = info.detail {
@@ -540,7 +540,7 @@ final class ComputerDetailViewController: UITableViewController {
                 // The $computers sink pops this page once the binding is gone.
             } catch {
                 let alert = UIAlertController(
-                    title: "Pedals Service Error",
+                    title: "TTYBuild Service Error",
                     message: error.localizedDescription,
                     preferredStyle: .alert
                 )
@@ -582,14 +582,14 @@ final class ComputerDetailViewController: UITableViewController {
         switch slug {
         case "claude": "Hooks in ~/.claude/settings.json."
         case "codex": "Hooks in ~/.codex/hooks.json; enables the hooks feature in ~/.codex/config.toml."
-        case "copilot": "Hook file in ~/.copilot/hooks/pedals.json."
-        case "grok": "Hook file in ~/.grok/hooks/pedals.json."
-        case "hermes": "Plugin in ~/.hermes/plugins/pedals-presence/."
+        case "copilot": "Hook file in ~/.copilot/hooks/ttybuild.json."
+        case "grok": "Hook file in ~/.grok/hooks/ttybuild.json."
+        case "hermes": "Plugin in ~/.hermes/plugins/ttybuild-presence/."
         case "kimi": "Hooks in ~/.kimi-code/config.toml."
         case "kiro": "Hooks in ~/.kiro/agents/kiro_default.json. Requires Kiro CLI 2."
-        case "omp": "Extension in ~/.omp/agent/extensions/pedals/."
-        case "opencode": "Plugin in ~/.config/opencode/plugins/pedals-presence.js."
-        case "pi": "Extension in ~/.pi/agent/extensions/pedals/."
+        case "omp": "Extension in ~/.omp/agent/extensions/ttybuild/."
+        case "opencode": "Plugin in ~/.config/opencode/plugins/ttybuild-presence.js."
+        case "pi": "Extension in ~/.pi/agent/extensions/ttybuild/."
         default: nil
         }
     }

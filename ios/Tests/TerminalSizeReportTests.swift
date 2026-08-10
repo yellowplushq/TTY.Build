@@ -1,7 +1,7 @@
 import Foundation
 import GhosttyTerminal
 import Testing
-@testable import Pedals
+@testable import TTYBuild
 
 struct TerminalSizeReportTests {
     @Test

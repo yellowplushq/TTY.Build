@@ -1,8 +1,8 @@
 import Foundation
-import PedalsKit
+import TTYBuildKit
 import XCTest
 
-@testable import Pedals
+@testable import TTYBuild
 
 @MainActor
 final class PairingStoreRecoveryTests: XCTestCase {
@@ -49,7 +49,7 @@ final class PairingStoreRecoveryTests: XCTestCase {
         func createClient() async throws -> ClientIdentity {
             createCalls += 1
             guard !identities.isEmpty else {
-                throw PedalsServiceAPI.APIError.invalidResponse
+                throw TTYBuildServiceAPI.APIError.invalidResponse
             }
             return identities.removeFirst()
         }
@@ -112,9 +112,9 @@ final class PairingStoreRecoveryTests: XCTestCase {
 
     func testOnlyUnauthorizedTriggersIdentityRecovery() async throws {
         let errors: [any Error] = [
-            PedalsServiceAPI.APIError.rejected(status: 400, message: "bad code"),
-            PedalsServiceAPI.APIError.rejected(status: 403, message: "forbidden"),
-            PedalsServiceAPI.APIError.rejected(status: 500, message: "server error"),
+            TTYBuildServiceAPI.APIError.rejected(status: 400, message: "bad code"),
+            TTYBuildServiceAPI.APIError.rejected(status: 403, message: "forbidden"),
+            TTYBuildServiceAPI.APIError.rejected(status: 500, message: "server error"),
             URLError(.cannotConnectToHost),
         ]
 
@@ -138,7 +138,7 @@ final class PairingStoreRecoveryTests: XCTestCase {
         let fixture = try await seededFixture()
         fixture.api.bindErrors = [
             unauthorized(),
-            PedalsServiceAPI.APIError.rejected(status: 500, message: "retry failed"),
+            TTYBuildServiceAPI.APIError.rejected(status: 500, message: "retry failed"),
         ]
 
         do {
@@ -311,7 +311,7 @@ final class PairingStoreRecoveryTests: XCTestCase {
     private var oldClientID: String { repeating("a") }
     private var replacementClientID: String { repeating("b") }
 
-    private func unauthorized() -> PedalsServiceAPI.APIError {
+    private func unauthorized() -> TTYBuildServiceAPI.APIError {
         .rejected(status: 401, message: "unauthorized")
     }
 

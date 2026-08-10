@@ -1,6 +1,6 @@
 import ActivityKit
 import Foundation
-import PedalsKit
+import TTYBuildKit
 import SwiftUI
 import WidgetKit
 
@@ -10,9 +10,9 @@ struct TTYLiveActivityWidget: Widget {
             ActivityCard(state: context.state)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
-                .foregroundStyle(PedalsTheme.content)
-                .activityBackgroundTint(PedalsTheme.canvas)
-                .activitySystemActionForegroundColor(PedalsTheme.content)
+                .foregroundStyle(TTYBuildTheme.content)
+                .activityBackgroundTint(TTYBuildTheme.canvas)
+                .activitySystemActionForegroundColor(TTYBuildTheme.content)
         } dynamicIsland: { context in
             let state = context.state
             let presentation = ActivityPresentation(state: state)
@@ -153,7 +153,7 @@ struct AgentMark: View {
                     .frame(width: badgeSize, height: badgeSize)
                     .overlay {
                         Circle()
-                            .stroke(PedalsTheme.canvas, lineWidth: size >= 22 ? 2 : 1.5)
+                            .stroke(TTYBuildTheme.canvas, lineWidth: size >= 22 ? 2 : 1.5)
                     }
                     .offset(x: size - badgeSize / 2 - 1)
                     .opacity(
@@ -163,7 +163,7 @@ struct AgentMark: View {
             }
         }
         .frame(width: size + 4, height: size + 4, alignment: .topLeading)
-        .foregroundStyle(PedalsTheme.content)
+        .foregroundStyle(TTYBuildTheme.content)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             "\(name), \(ActivityStyle.label(for: agentState))"
@@ -210,7 +210,7 @@ private struct AgentIdentity: View {
 
 struct TerminalIdentity: View {
     var body: some View {
-        Label("Pedals", systemImage: "terminal.fill")
+        Label("tty.build", systemImage: "terminal.fill")
             .font(.subheadline.weight(.semibold))
             .lineLimit(1)
     }
@@ -259,7 +259,7 @@ private struct ActivityBody: View {
                     .contentTransition(.numericText())
                 Text("Remote sessions are ready when you are.")
                     .font(.subheadline)
-                    .foregroundStyle(PedalsTheme.secondaryContent)
+                    .foregroundStyle(TTYBuildTheme.secondaryContent)
                     .lineLimit(1)
             }
 
@@ -413,7 +413,7 @@ struct ActivityMetrics: View {
             }
         }
         .font(.caption2)
-        .foregroundStyle(PedalsTheme.secondaryContent)
+        .foregroundStyle(TTYBuildTheme.secondaryContent)
         .lineLimit(1)
     }
 }
@@ -430,7 +430,7 @@ private struct CompactMark: View {
                     .frame(width: 17, height: 17)
             }
         }
-        .foregroundStyle(PedalsTheme.content)
+        .foregroundStyle(TTYBuildTheme.content)
         .accessibilityLabel(ActivityStyle.label(for: presentation))
     }
 }
@@ -483,11 +483,11 @@ enum ActivityStyle {
 
     static func color(for state: AgentState?) -> Color {
         switch state {
-        case .waiting: PedalsTheme.warning
-        case .error: PedalsTheme.critical
-        case .done: PedalsTheme.success
-        case .running: PedalsTheme.content
-        case nil: PedalsTheme.content
+        case .waiting: TTYBuildTheme.warning
+        case .error: TTYBuildTheme.critical
+        case .done: TTYBuildTheme.success
+        case .running: TTYBuildTheme.content
+        case nil: TTYBuildTheme.content
         }
     }
 

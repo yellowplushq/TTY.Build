@@ -16,11 +16,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         self.services = services
 
         let window = UIWindow(windowScene: windowScene)
-        // Pedals has a fixed black-and-white shell. Terminal ANSI colors stay
+        // TTYBuild has a fixed black-and-white shell. Terminal ANSI colors stay
         // inside the terminal canvas and never become application chrome.
         window.overrideUserInterfaceStyle = .dark
-        window.backgroundColor = PedalsTheme.uiCanvas
-        window.tintColor = PedalsTheme.uiContent
+        window.backgroundColor = TTYBuildTheme.uiCanvas
+        window.tintColor = TTYBuildTheme.uiContent
         window.rootViewController = MainViewController(services: services)
         window.makeKeyAndVisible()
         self.window = window

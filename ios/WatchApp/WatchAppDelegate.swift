@@ -6,14 +6,14 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate {
         WatchStatusBridge.shared.activate()
         Task {
             await PushEndpointRegistrar.flushPending()
-            _ = try? await PedalsStatusRuntime.refreshState()
+            _ = try? await TTYBuildStatusRuntime.refreshState()
         }
     }
 
     func applicationDidBecomeActive() {
         PushEndpointRegistrar.requestFlush()
         Task {
-            _ = try? await PedalsStatusRuntime.refreshState()
+            _ = try? await TTYBuildStatusRuntime.refreshState()
         }
     }
 }

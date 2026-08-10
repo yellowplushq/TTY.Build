@@ -1,4 +1,4 @@
-import PedalsKit
+import TTYBuildKit
 import UIKit
 
 /// The sole iPhone pairing surface. The 8-digit value is a short-lived server
@@ -39,7 +39,7 @@ final class PairingCodeViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = PedalsTheme.uiCanvas
+        view.backgroundColor = TTYBuildTheme.uiCanvas
         // UIKit's full-screen dismissal temporarily moves this view past its
         // bounds. Keep keyboard-driven controls from drawing over the
         // presenting settings sheet during that transition.
@@ -77,30 +77,30 @@ final class PairingCodeViewController: UIViewController {
             ),
             for: .normal
         )
-        closeButton.tintColor = PedalsTheme.uiContent
+        closeButton.tintColor = TTYBuildTheme.uiContent
         closeButton.backgroundColor = .clear
         closeButton.accessibilityLabel = "Cancel pairing"
-        closeButton.accessibilityIdentifier = "pedals.pairing.cancel"
+        closeButton.accessibilityIdentifier = "ttybuild.pairing.cancel"
         closeButton.addAction(UIAction { [weak self] _ in
             self?.dismissPairing(cancelPairing: true)
         }, for: .touchUpInside)
 
         titleLabel.text = "Connect"
-        titleLabel.font = PedalsTheme.uiEmphasizedTextFont
-        titleLabel.textColor = PedalsTheme.uiContent
+        titleLabel.font = TTYBuildTheme.uiEmphasizedTextFont
+        titleLabel.textColor = TTYBuildTheme.uiContent
         titleLabel.textAlignment = .center
 
-        bodyLabel.text = "Enter the 8-digit code shown by Pedals on your computer."
-        bodyLabel.font = PedalsTheme.uiTextFont
-        bodyLabel.textColor = PedalsTheme.uiSecondaryContent
+        bodyLabel.text = "Enter the 8-digit code shown by tty.build on your computer."
+        bodyLabel.font = TTYBuildTheme.uiTextFont
+        bodyLabel.textColor = TTYBuildTheme.uiSecondaryContent
         bodyLabel.textAlignment = .center
         bodyLabel.numberOfLines = 0
 
-        statusLabel.font = PedalsTheme.uiTextFont
-        statusLabel.textColor = PedalsTheme.uiTertiaryContent
+        statusLabel.font = TTYBuildTheme.uiTextFont
+        statusLabel.textColor = TTYBuildTheme.uiTertiaryContent
         statusLabel.textAlignment = .center
         statusLabel.numberOfLines = 2
-        statusLabel.accessibilityIdentifier = "pedals.pairing.status"
+        statusLabel.accessibilityIdentifier = "ttybuild.pairing.status"
 
         var configuration = UIButton.Configuration.borderedProminent()
         configuration.title = "Connect"
@@ -113,18 +113,18 @@ final class PairingCodeViewController: UIViewController {
         configuration.contentInsets = NSDirectionalEdgeInsets(
             top: 14, leading: 18, bottom: 14, trailing: 18
         )
-        configuration.baseBackgroundColor = PedalsTheme.uiContent
-        configuration.baseForegroundColor = PedalsTheme.uiCanvas
-        PedalsTheme.applyTextFont(to: &configuration, emphasized: true)
+        configuration.baseBackgroundColor = TTYBuildTheme.uiContent
+        configuration.baseForegroundColor = TTYBuildTheme.uiCanvas
+        TTYBuildTheme.applyTextFont(to: &configuration, emphasized: true)
         pairButton.configuration = configuration
-        pairButton.accessibilityIdentifier = "pedals.pairing.submit"
+        pairButton.accessibilityIdentifier = "ttybuild.pairing.submit"
         pairButton.addAction(UIAction { [weak self] _ in self?.submit() }, for: .touchUpInside)
 
         [bodyLabel, codeField, statusLabel].forEach(inputStack.addArrangedSubview)
         inputStack.axis = .vertical
         inputStack.spacing = 10
         inputStack.setCustomSpacing(18, after: bodyLabel)
-        inputStack.accessibilityIdentifier = "pedals.pairing.input"
+        inputStack.accessibilityIdentifier = "ttybuild.pairing.input"
 
         [closeButton, titleLabel, downloadGuide, inputStack, pairButton].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
@@ -363,20 +363,20 @@ final class PairingCodeViewController: UIViewController {
 
     private func configureInput() {
         codeField.otpDefaultCharacter = ""
-        codeField.otpBackgroundColor = PedalsTheme.uiSurface
-        codeField.otpFilledBackgroundColor = PedalsTheme.uiSurface
+        codeField.otpBackgroundColor = TTYBuildTheme.uiSurface
+        codeField.otpFilledBackgroundColor = TTYBuildTheme.uiSurface
         codeField.otpCornerRadius = 12
-        codeField.otpDefaultBorderColor = PedalsTheme.uiSeparator
-        codeField.otpFilledBorderColor = PedalsTheme.uiContent
+        codeField.otpDefaultBorderColor = TTYBuildTheme.uiSeparator
+        codeField.otpFilledBorderColor = TTYBuildTheme.uiContent
         codeField.otpDefaultBorderWidth = 1
         codeField.otpFilledBorderWidth = 1.5
-        codeField.otpTextColor = PedalsTheme.uiContent
+        codeField.otpTextColor = TTYBuildTheme.uiContent
         codeField.otpFont = UIFont.monospacedDigitSystemFont(ofSize: 18, weight: .semibold)
         codeField.otpDelegate = self
         codeField.configure(with: PairingCode.digitCount)
         codeField.accessibilityLabel = "8-digit pairing code"
         codeField.accessibilityHint = "Each digit appears in its own box"
-        codeField.accessibilityIdentifier = "pedals.pairing.code"
+        codeField.accessibilityIdentifier = "ttybuild.pairing.code"
         codeField.addTarget(self, action: #selector(codeChanged), for: .editingChanged)
     }
 
@@ -410,7 +410,7 @@ final class PairingCodeViewController: UIViewController {
         pairButton.configuration?.image = nil
         pairButton.configuration?.title = "Connecting…"
         statusLabel.text = "Securely exchanging keys with your computer…"
-        statusLabel.textColor = PedalsTheme.uiSecondaryContent
+        statusLabel.textColor = TTYBuildTheme.uiSecondaryContent
         updateInputState()
 
         pairingTask = Task { [weak self] in
@@ -422,7 +422,7 @@ final class PairingCodeViewController: UIViewController {
                 pairButton.configuration?.image = UIImage(systemName: "checkmark")
                 pairButton.configuration?.title = "Connected"
                 statusLabel.text = "The one-time code has been used and is no longer valid."
-                statusLabel.textColor = PedalsTheme.uiContent
+                statusLabel.textColor = TTYBuildTheme.uiContent
                 try? await Task.sleep(for: .milliseconds(750))
                 guard !Task.isCancelled else { return }
                 dismissPairing(cancelPairing: false)
@@ -434,7 +434,7 @@ final class PairingCodeViewController: UIViewController {
                 pairButton.configuration?.image = UIImage(systemName: "arrow.clockwise")
                 pairButton.configuration?.title = "Try Again"
                 statusLabel.text = PairingErrorPresentation.message(for: error)
-                statusLabel.textColor = PedalsTheme.uiCritical
+                statusLabel.textColor = TTYBuildTheme.uiCritical
                 updateInputState()
                 codeField.becomeFirstResponder()
             }
@@ -447,13 +447,13 @@ enum PairingErrorPresentation {
         if let storeError = error as? PairingStore.StoreError {
             switch storeError {
             case .serviceMismatch:
-                return "This installation has pairing data from another Pedals service. Restart the app and try again."
+                return "This installation has pairing data from another tty.build service. Restart the app and try again."
             case .missingClientIdentity:
-                return "Pairing data is incomplete. Restart Pedals and try again."
+                return "Pairing data is incomplete. Restart tty.build and try again."
             }
         }
 
-        if let apiError = error as? PedalsServiceAPI.APIError {
+        if let apiError = error as? TTYBuildServiceAPI.APIError {
             switch apiError {
             case .rejected(let status, _):
                 if status == 400 || status == 404 || status == 410 {
@@ -462,16 +462,16 @@ enum PairingErrorPresentation {
                 if status == 429 {
                     return "Too many pairing attempts. Wait a moment and try again."
                 }
-                return "Pedals couldn’t complete pairing. Try again."
+                return "tty.build couldn’t complete pairing. Try again."
             case .serviceMismatch:
-                return "This pairing code belongs to another Pedals service."
+                return "This pairing code belongs to another tty.build service."
             case .invalidResponse:
-                return "Pedals returned an unexpected response. Try again."
+                return "tty.build returned an unexpected response. Try again."
             }
         }
 
         if error is URLError {
-            return "Couldn’t reach Pedals. Check your connection and try again."
+            return "Couldn’t reach TTYBuild. Check your connection and try again."
         }
         return "Couldn’t connect to your computer. Try again."
     }
@@ -490,7 +490,7 @@ extension PairingCodeViewController: AEOTPTextFieldDelegate {
 /// the correct platform without changing the app.
 @MainActor
 private final class PairingDownloadGuideView: UIView {
-    private static let websiteURL = URL(string: "https://pedals.air.build")!
+    private static let websiteURL = URL(string: "https://tty.build")!
 
     /// Fixed card height the pairing controller lays out around; the keyboard
     /// avoidance math in `requiredUpwardShift` relies on this exact value.
@@ -498,7 +498,7 @@ private final class PairingDownloadGuideView: UIView {
 
     /// Replaced with the `--pair <code>`-carrying command once the phone's
     /// enrollment token resolves; the copy action always copies this value.
-    private var installCommand = "curl -fsSL https://pedals.air.build/i | bash"
+    private var installCommand = "curl -fsSL https://tty.build/i | bash"
     private var copyEnabled = true
     private let commandLabel = UILabel()
     private let copyButton = UIButton(type: .system)
@@ -522,10 +522,10 @@ private final class PairingDownloadGuideView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = PedalsTheme.uiSurface
+        backgroundColor = TTYBuildTheme.uiSurface
         layer.cornerRadius = 18
         layer.cornerCurve = .continuous
-        accessibilityIdentifier = "pedals.pairing.download"
+        accessibilityIdentifier = "ttybuild.pairing.download"
         configureLayout()
     }
 
@@ -541,14 +541,14 @@ private final class PairingDownloadGuideView: UIView {
             image: UIImage(systemName: "laptopcomputer", withConfiguration: symbolConfiguration)
         )
         [phone, computer].forEach {
-            $0.tintColor = PedalsTheme.uiSecondaryContent
+            $0.tintColor = TTYBuildTheme.uiSecondaryContent
             $0.contentMode = .scaleAspectFit
         }
 
         let route = UILabel()
         route.text = "• • • •"
         route.font = .monospacedSystemFont(ofSize: 9, weight: .medium)
-        route.textColor = PedalsTheme.uiTertiaryContent
+        route.textColor = TTYBuildTheme.uiTertiaryContent
         route.textAlignment = .center
 
         let icons = UIStackView(arrangedSubviews: [phone, route, computer])
@@ -558,9 +558,9 @@ private final class PairingDownloadGuideView: UIView {
         icons.spacing = 14
 
         let caption = UILabel()
-        caption.text = "Download Pedals for your computer at"
-        caption.font = PedalsTheme.uiTextFont
-        caption.textColor = PedalsTheme.uiSecondaryContent
+        caption.text = "Download tty.build for your computer at"
+        caption.font = TTYBuildTheme.uiTextFont
+        caption.textColor = TTYBuildTheme.uiSecondaryContent
         caption.textAlignment = .center
 
         // A configuration title can report its intrinsic width before the
@@ -568,9 +568,9 @@ private final class PairingDownloadGuideView: UIView {
         // characters on some content-size/device combinations. Configure the
         // title label directly so Auto Layout measures the font it renders.
         let link = UIButton(type: .system)
-        link.setTitle("pedals.air.build", for: .normal)
-        link.setTitleColor(PedalsTheme.uiContent, for: .normal)
-        link.titleLabel?.font = PedalsTheme.uiEmphasizedTextFont
+        link.setTitle("tty.build", for: .normal)
+        link.setTitleColor(TTYBuildTheme.uiContent, for: .normal)
+        link.titleLabel?.font = TTYBuildTheme.uiEmphasizedTextFont
         link.titleLabel?.adjustsFontForContentSizeCategory = true
         link.titleLabel?.adjustsFontSizeToFitWidth = true
         link.titleLabel?.minimumScaleFactor = 0.72
@@ -579,9 +579,9 @@ private final class PairingDownloadGuideView: UIView {
         link.clipsToBounds = false
         link.contentHorizontalAlignment = .center
         link.setContentCompressionResistancePriority(.required, for: .horizontal)
-        link.accessibilityIdentifier = "pedals.pairing.website"
-        link.accessibilityLabel = "Download Pedals from pedals.air.build"
-        link.accessibilityHint = "Opens the Pedals website"
+        link.accessibilityIdentifier = "ttybuild.pairing.website"
+        link.accessibilityLabel = "Download tty.build from tty.build"
+        link.accessibilityHint = "Opens the tty.build website"
         link.addAction(UIAction { _ in
             UIApplication.shared.open(Self.websiteURL)
         }, for: .touchUpInside)
@@ -618,24 +618,24 @@ private final class PairingDownloadGuideView: UIView {
     /// the full command on the pasteboard.
     private func makeInstallCommandRow() -> UIView {
         let pill = UIView()
-        pill.backgroundColor = PedalsTheme.uiCanvas
+        pill.backgroundColor = TTYBuildTheme.uiCanvas
         pill.layer.cornerRadius = 12
         pill.layer.cornerCurve = .continuous
         pill.layer.borderWidth = 1
-        pill.layer.borderColor = PedalsTheme.uiSeparator.cgColor
-        pill.accessibilityIdentifier = "pedals.pairing.installCommand"
+        pill.layer.borderColor = TTYBuildTheme.uiSeparator.cgColor
+        pill.accessibilityIdentifier = "ttybuild.pairing.installCommand"
 
         let prompt = UILabel()
         prompt.text = "$"
         prompt.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
-        prompt.textColor = PedalsTheme.uiTertiaryContent
+        prompt.textColor = TTYBuildTheme.uiTertiaryContent
         prompt.setContentCompressionResistancePriority(.required, for: .horizontal)
         prompt.isAccessibilityElement = false
 
         let command = commandLabel
         command.text = installCommand
         command.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        command.textColor = PedalsTheme.uiSecondaryContent
+        command.textColor = TTYBuildTheme.uiSecondaryContent
         command.adjustsFontSizeToFitWidth = true
         command.minimumScaleFactor = 0.75
         command.baselineAdjustment = .alignCenters
@@ -650,9 +650,9 @@ private final class PairingDownloadGuideView: UIView {
             ),
             for: .normal
         )
-        copyButton.tintColor = PedalsTheme.uiContent
+        copyButton.tintColor = TTYBuildTheme.uiContent
         copyButton.accessibilityLabel = "Copy install command"
-        copyButton.accessibilityIdentifier = "pedals.pairing.copyInstall"
+        copyButton.accessibilityIdentifier = "ttybuild.pairing.copyInstall"
         copyButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         copyButton.addAction(UIAction { [weak self] _ in self?.copyInstallCommand() }, for: .touchUpInside)
 
@@ -696,7 +696,7 @@ private final class PairingDownloadGuideView: UIView {
             ),
             for: .normal
         )
-        copyButton.tintColor = PedalsTheme.uiSuccess
+        copyButton.tintColor = TTYBuildTheme.uiSuccess
 
         copyFeedbackTask?.cancel()
         copyFeedbackTask = Task { [weak self] in
@@ -709,7 +709,7 @@ private final class PairingDownloadGuideView: UIView {
                 ),
                 for: .normal
             )
-            self.copyButton.tintColor = PedalsTheme.uiContent
+            self.copyButton.tintColor = TTYBuildTheme.uiContent
         }
     }
 }

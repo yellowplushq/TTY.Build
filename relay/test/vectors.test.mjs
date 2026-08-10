@@ -1,5 +1,5 @@
-// Cross-implementation crypto vectors from shared/PedalsKit/TESTVECTORS.md.
-// The same bytes are asserted by PedalsKit's Swift suite (TestVectorTests.swift);
+// Cross-implementation crypto vectors from shared/TTYBuildKit/TESTVECTORS.md.
+// The same bytes are asserted by TTYBuildKit's Swift suite (TestVectorTests.swift);
 // this file proves the Node reference implementation interoperates.
 
 import test from "node:test";
@@ -9,14 +9,14 @@ import { deriveKeys, open, seal, seqBytes, decodeFrame, FrameType } from "./cryp
 const SECRET = Buffer.alloc(32, 0x42);
 
 const KEY_H2C_HEX =
-  "6972bc6da52c7ca19a55c1304c25846b032531a6142175312d54fdf09592ff40";
+  "f57dfa58483b0961b807a597accdf09ad32d7898d6068e2e27606dddced0e878";
 const KEY_C2H_HEX =
-  "92961f97fbed1c21af672ab1f143c8b13589b10b849b0afed483aaff6cc4b3b7";
+  "bfcae2fa3792508f62ad8fbf386d04ca61577abf5dfed1b3b236dcb16fe3ed96";
 
-// seq(8, LE) || nonce("pedals-nonce") || ciphertext(10) || tag(16)
+// seq(8, LE) || nonce("ttybld-nonce") || ciphertext(10) || tag(16)
 const FULL_MESSAGE_HEX =
-  "0100000000000000706564616c732d6e6f6e636594d3740a19c7dc465ace" +
-  "5279fe452d7a661383a99da076062944";
+  "0100000000000000747479626c642d6e6f6e6365575f3c48a735ba958334" +
+  "81d24d2f06b0a8c4b6ffd7a33074321e";
 const PLAINTEXT_FRAME_HEX = "000000000068656c6c6f"; // ctl, sid 0, "hello"
 
 test("HKDF-SHA256 direction keys match TESTVECTORS.md", () => {
@@ -43,7 +43,7 @@ test("re-sealing with the vector's fixed nonce reproduces the exact blob", () =>
     h2c,
     1,
     Buffer.from(PLAINTEXT_FRAME_HEX, "hex"),
-    Buffer.from("pedals-nonce", "utf8"),
+    Buffer.from("ttybld-nonce", "utf8"),
   );
   assert.equal(message.toString("hex"), FULL_MESSAGE_HEX);
 });

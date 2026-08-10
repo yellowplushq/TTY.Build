@@ -7,16 +7,16 @@ import UIKit
 /// and scrollback survives.
 @MainActor
 final class TerminalHost {
-    let view: PedalsTerminalView
+    let view: TTYBuildTerminalView
     /// Each host owns its controller — see AppServices.makeTerminalController.
     let controller: TerminalController
 
     /// Keyboard/accessory-bar input bytes, to be sent as `stdin` frames.
     var onInput: ((Data) -> Void)?
-    /// Mirrors Pedals' one-shot modifier state into its custom input surfaces.
+    /// Mirrors TTYBuild' one-shot modifier state into its custom input surfaces.
     var onModifierStateChange: ((TerminalModifierState) -> Void)?
     /// Focus follows UIKit's first responder state, including a terminal tap
-    /// that dismisses either the system or Pedals keyboard.
+    /// that dismisses either the system or TTYBuild keyboard.
     var onFocusChange: ((Bool) -> Void)?
     /// Grid size changes, to be sent as `resize` frames. Fired only once the
     /// emulator has applied the grid, so a TUI repaint triggered by the frame
@@ -72,7 +72,7 @@ final class TerminalHost {
             resize: { _ in }
         )
 
-        view = PedalsTerminalView(frame: .zero)
+        view = TTYBuildTerminalView(frame: .zero)
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(session))
         view.controller = controller
         view.delegate = self
@@ -203,7 +203,7 @@ final class TerminalHost {
         return modifiers
     }
 
-    /// libghostty's built-in sticky state supports double-tap locking. Pedals'
+    /// libghostty's built-in sticky state supports double-tap locking. TTYBuild'
     /// keyboard deliberately uses simpler one-shot modifiers: tap to arm, tap
     /// again to cancel, and any non-modifier key consumes the entire chord.
     private func toggleOneShotStickyModifier(_ modifier: TerminalPublicStickyModifier) {
@@ -477,7 +477,7 @@ extension TerminalHost: TerminalSurfaceGridResizeDelegate,
 /// `UIResponder.inputView` is read-only by default. A terminal responder that
 /// wants an app-specific keyboard redeclares it through a mutable backing view,
 /// then asks UIKit to reload the responder's input views when the mode changes.
-final class PedalsTerminalView: TerminalView {
+final class TTYBuildTerminalView: TerminalView {
     private var replacementInputView: UIView?
     private var preservesFirstResponderDuringSelection = false
     private var hardwareReturnIsPressed = false
