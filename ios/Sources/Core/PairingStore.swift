@@ -110,12 +110,15 @@ final class PairingStore {
         serviceURL: URL
     ) async throws -> (ComputerBinding, ClientIdentity) {
         let api = apiFactory(serviceURL)
-        let previousState = try loadState()
+        // State whose identity was registered with a different service is
+        // retired: there is exactly one production service and no backward
+        // compatibility, so the old host no longer recognizes that identity.
+        // Discard it and register fresh instead of stranding the install.
+        let previousState = try loadState().flatMap {
+            $0.identity.serviceURL == serviceURL ? $0 : nil
+        }
 
         if let previousState {
-            guard previousState.identity.serviceURL == serviceURL else {
-                throw StoreError.serviceMismatch
-            }
             do {
                 let binding = try await api.pair(code: code, as: previousState.identity)
                 return try commitBinding(
@@ -183,10 +186,9 @@ final class PairingStore {
     ) async throws -> ClientIdentity {
         await acquireMutation()
         defer { releaseMutation() }
-        if let state = try loadState() {
-            guard state.identity.serviceURL == serviceURL else {
-                throw StoreError.serviceMismatch
-            }
+        // An identity registered with a different service is retired state
+        // from a decommissioned host; replace it with a fresh registration.
+        if let state = try loadState(), state.identity.serviceURL == serviceURL {
             return state.identity
         }
         let api = apiFactory(serviceURL)
@@ -249,10 +251,9 @@ final class PairingStore {
     func replaceClientIdentityIfUnpaired(serviceURL: URL) async throws -> ClientIdentity {
         await acquireMutation()
         defer { releaseMutation() }
-        if let state = try loadState() {
-            guard state.identity.serviceURL == serviceURL else {
-                throw StoreError.serviceMismatch
-            }
+        // A same-service identity with live bindings must be kept; state from
+        // a different (retired) service is replaced like any orphan.
+        if let state = try loadState(), state.identity.serviceURL == serviceURL {
             guard state.bindings.isEmpty else { return state.identity }
         }
         let api = apiFactory(serviceURL)

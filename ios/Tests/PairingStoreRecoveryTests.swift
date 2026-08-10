@@ -110,6 +110,30 @@ final class PairingStoreRecoveryTests: XCTestCase {
         XCTAssertEqual(fixture.api.reconcileCalls, [])
     }
 
+    func testIdentityFromARetiredServiceIsDiscardedAndReRegistered() async throws {
+        let memory = MemoryState()
+        let legacyURL = URL(string: "https://legacy.example")!
+        let api = MockAPI(identities: [
+            try ClientIdentity(
+                serviceURL: legacyURL,
+                clientID: oldClientID,
+                clientToken: "token-\(oldClientID)",
+                statusToken: "status-\(oldClientID)"
+            ),
+            try identity(id: replacementClientID),
+        ])
+        let store = makeStore(memory: memory, api: api)
+        _ = try await store.bind(code: pairingCode("1"), serviceURL: legacyURL)
+
+        let result = try await store.bind(code: pairingCode("2"), serviceURL: serviceURL)
+
+        XCTAssertEqual(result.1.clientID, replacementClientID)
+        XCTAssertEqual(result.1.serviceURL, serviceURL)
+        XCTAssertEqual(try store.loadClientIdentity()?.clientID, replacementClientID)
+        XCTAssertEqual(try store.loadAll().map(\.computerID), [repeating("2")])
+        XCTAssertEqual(api.createCalls, 2)
+    }
+
     func testOnlyUnauthorizedTriggersIdentityRecovery() async throws {
         let errors: [any Error] = [
             TTYBuildServiceAPI.APIError.rejected(status: 400, message: "bad code"),
