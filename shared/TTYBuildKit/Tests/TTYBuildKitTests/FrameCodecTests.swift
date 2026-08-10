@@ -157,7 +157,7 @@ final class FrameCodecTests: XCTestCase {
             ), req: 9),
             .updateStatus(info: UpdateStatusInfo(
                 updateAvailable: false, canInstall: false,
-                detail: "updates require the tty.build menu bar app"
+                detail: "updates require the TTY.Build menu bar app"
             ), req: nil),
             .updateInstall(req: 11),
             .updateInstall(req: nil),

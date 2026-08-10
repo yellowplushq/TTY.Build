@@ -279,7 +279,7 @@ final class SettingsViewController: UITableViewController {
 
     private func showBindingError(_ error: Error) {
         let alert = UIAlertController(
-            title: "tty.build Service Error",
+            title: "TTY.Build Service Error",
             message: error.localizedDescription,
             preferredStyle: .alert
         )

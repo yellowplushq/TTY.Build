@@ -50,7 +50,7 @@ struct WatchStatusView: View {
         }
         .foregroundStyle(TTYBuildTheme.content)
         .tint(TTYBuildTheme.content)
-        .navigationTitle("tty.build")
+        .navigationTitle("TTY.Build")
         .task {
             terminalStore.retryConnections()
             WatchStatusBridge.shared.requestCurrentContext()
@@ -67,7 +67,7 @@ struct WatchStatusView: View {
             .padding(.vertical, 4)
 
         if !terminalStore.hasCredentials {
-            Label("Open tty.build on iPhone", systemImage: "iphone.and.arrow.forward")
+            Label("Open TTY.Build on iPhone", systemImage: "iphone.and.arrow.forward")
                 .font(.caption)
                 .foregroundStyle(TTYBuildTheme.secondaryContent)
                 .multilineTextAlignment(.center)

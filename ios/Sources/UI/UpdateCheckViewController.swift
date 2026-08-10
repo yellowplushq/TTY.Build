@@ -130,13 +130,13 @@ final class UpdateCheckViewController: UIViewController {
         case .upToDate(let version):
             titleLabel.text = "You're up to date!"
             messageLabel.text = version.map {
-                "tty.build \($0) is currently the newest version available."
-            } ?? "tty.build on the Mac is currently the newest version available."
+                "TTY.Build \($0) is currently the newest version available."
+            } ?? "TTY.Build on the Mac is currently the newest version available."
             spinner.stopAnimating()
             setButtons(primary: "OK", secondary: nil)
         case .available(let current, let latest, let host, let canInstall):
             titleLabel.text = "Update Available"
-            let name = latest.map { "tty.build \($0)" } ?? "A new version of tty.build"
+            let name = latest.map { "TTY.Build \($0)" } ?? "A new version of TTY.Build"
             let have = current.map { " — \(host) has \($0)" } ?? ""
             if canInstall {
                 messageLabel.text = """

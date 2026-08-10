@@ -1,6 +1,6 @@
 # Desktop release
 
-tty.build desktop releases are universal, notarized macOS disk images. The menu
+TTY.Build desktop releases are universal, notarized macOS disk images. The menu
 bar app links `TTYBuildDaemonCore` directly and is itself the long-running PTY and
 relay service process; it does not launch or embed a second daemon executable.
 
@@ -51,7 +51,7 @@ GitHub release, while `/download/macos.zip` and `/download/macos.zip.sha256`
 redirect to the zip archive and its checksum. Set the Worker's
 `DESKTOP_RELEASE_REPOSITORY` variable to the repository slug, for example
 `owner/ttybuild`, before deploying the website. The stable `/appcast.xml` route
-redirects to the signed feed from the same release. tty.build checks it on launch
+redirects to the signed feed from the same release. TTY.Build checks it on launch
 and every 24 hours, and users can also run `Check for Updates…` from the menu
 or Settings. Both the feed and the update archive are verified with the app's
 pinned Ed25519 public key before an update is installed.

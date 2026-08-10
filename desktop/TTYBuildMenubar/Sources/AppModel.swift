@@ -25,7 +25,7 @@ enum RelayState: Equatable {
 
     var label: String {
         switch self {
-        case .starting: "Starting tty.build…"
+        case .starting: "Starting TTY.Build…"
         case .connecting: "Connecting to service…"
         case .connected: "Connected"
         case .unavailable: "Service unavailable"
@@ -166,7 +166,7 @@ final class AppModel: ObservableObject {
                 serviceRunning = false
                 isStartingService = false
                 relayState = .unavailable
-                lastError = "Could not start tty.build: \(error.localizedDescription)"
+                lastError = "Could not start TTY.Build: \(error.localizedDescription)"
                 startupTask = nil
             }
         }
@@ -273,19 +273,19 @@ final class AppModel: ObservableObject {
                         computerName: computerName
                     )
                 }.value
-                NSLog("tty.build submitted an enrollment claim; confirm on the iPhone")
+                NSLog("TTY.Build submitted an enrollment claim; confirm on the iPhone")
             } catch {
                 // Only a definitive service rejection (unknown or replaced
                 // code) is terminal. Rate limits, service errors, and
                 // transport failures keep the stamp for the periodic retry.
                 guard Self.isTerminalClaimRejection(error) else {
                     NSLog(
-                        "tty.build enrollment claim failed, will retry: %@",
+                        "TTY.Build enrollment claim failed, will retry: %@",
                         error.localizedDescription
                     )
                     return
                 }
-                NSLog("tty.build enrollment claim was rejected: %@", "\(error)")
+                NSLog("TTY.Build enrollment claim was rejected: %@", "\(error)")
             }
             EnrollmentCodeStamp.clear(bundleURL: bundleURL)
         }

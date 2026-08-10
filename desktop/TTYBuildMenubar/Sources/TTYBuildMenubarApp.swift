@@ -114,7 +114,7 @@ final class TTYBuildAppDelegate: NSObject, NSApplicationDelegate {
                     from: bundledReporter, to: reporterDestination
                 )
             } catch {
-                NSLog("tty.build could not refresh the agent reporter: %@", "\(error)")
+                NSLog("TTY.Build could not refresh the agent reporter: %@", "\(error)")
             }
         }
         do {
@@ -123,14 +123,14 @@ final class TTYBuildAppDelegate: NSObject, NSApplicationDelegate {
                 reporterDestination: reporterDestination
             )
         } catch {
-            NSLog("tty.build could not refresh managed Codex hooks: %@", "\(error)")
+            NSLog("TTY.Build could not refresh managed Codex hooks: %@", "\(error)")
         }
         do {
             try HookInstaller.refreshManagedGeneratedPluginInstallations(
                 reporterPath: reporterDestination.path
             )
         } catch {
-            NSLog("tty.build could not refresh generated agent plugins: %@", "\(error)")
+            NSLog("TTY.Build could not refresh generated agent plugins: %@", "\(error)")
         }
     }
 

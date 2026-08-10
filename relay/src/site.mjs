@@ -35,7 +35,7 @@ export function handleDesktopDownload(request, env, url) {
     return new Response(
       request.method === "HEAD"
         ? null
-        : "The tty.build desktop download is not configured yet.\n",
+        : "The TTY.Build desktop download is not configured yet.\n",
       {
         status: 503,
         headers: {
@@ -82,7 +82,7 @@ export async function handlePairedDownload(
     return new Response(
       request.method === "HEAD"
         ? null
-        : "The tty.build desktop download is not configured yet.\n",
+        : "The TTY.Build desktop download is not configured yet.\n",
       {
         status: 503,
         headers: {
@@ -121,7 +121,7 @@ export async function handlePairedDownload(
   if (!upstream) {
     upstream = await fetchImpl(upstreamURL, { redirect: "follow" });
     if (!upstream.ok) {
-      return new Response("The tty.build release download failed upstream.\n", {
+      return new Response("The TTY.Build release download failed upstream.\n", {
         status: 502,
         headers: {
           "cache-control": "no-store",

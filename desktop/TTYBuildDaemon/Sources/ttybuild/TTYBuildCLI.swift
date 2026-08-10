@@ -9,7 +9,7 @@ import TTYBuildKit
 struct TTYBuildCLI: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ttybuild",
-        abstract: "tty.build desktop daemon — remote terminal host.",
+        abstract: "TTY.Build desktop daemon — remote terminal host.",
         subcommands: [
             Serve.self, Ls.self, New.self, Kill.self, Pair.self, Status.self,
             Agents.self, Hooks.self,
@@ -29,7 +29,7 @@ struct Serve: ParsableCommand {
         abstract: "Run the daemon in the foreground (PTY host + relay connection)."
     )
 
-    @Option(help: "tty.build HTTPS service origin; written to config.json for future runs.")
+    @Option(help: "TTY.Build HTTPS service origin; written to config.json for future runs.")
     var service: String?
 
     func run() throws {
@@ -292,7 +292,7 @@ struct Pair: ParsableCommand {
     @Flag(help: "Register a fresh computer identity and E2EE secret.")
     var reset = false
 
-    @Option(help: "tty.build HTTPS service origin; written to config.json for future runs.")
+    @Option(help: "TTY.Build HTTPS service origin; written to config.json for future runs.")
     var service: String?
 
     func run() throws {
@@ -309,7 +309,7 @@ struct Pair: ParsableCommand {
             reset: reset,
             offline: {
                 throw ValidationError(
-                    "The tty.build daemon must be running while a pairing code is active. "
+                    "The TTY.Build daemon must be running while a pairing code is active. "
                         + "Start it with `ttybuild serve`, then run this command again."
                 )
             }

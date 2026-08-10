@@ -114,7 +114,7 @@ final class UnpairedStateView: UIView {
         ])
 
         let title = makeLabel(
-            "tty.build",
+            "TTY.Build",
             color: TTYBuildTheme.uiContent,
             alignment: .left,
             emphasized: true
@@ -160,7 +160,7 @@ final class UnpairedStateView: UIView {
         )
         title.accessibilityIdentifier = "ttybuild.onboarding.title"
         let body = makeLabel(
-            "Use its terminals from iPhone, anywhere. tty.build keeps the connection end-to-end encrypted.",
+            "Use its terminals from iPhone, anywhere. TTY.Build keeps the connection end-to-end encrypted.",
             color: TTYBuildTheme.uiSecondaryContent,
             alignment: .center
         )

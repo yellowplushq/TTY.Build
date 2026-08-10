@@ -356,7 +356,7 @@ final class AgentMonitorTests: XCTestCase {
     func testMatchByTTY() throws {
         targets.current = [
             .init(
-                sessionId: 7, sessionName: "Claude — tty.build",
+                sessionId: 7, sessionName: "Claude — TTY.Build",
                 ttyPath: "/dev/ttys009", shellPid: 4242
             )
         ]
@@ -365,7 +365,7 @@ final class AgentMonitorTests: XCTestCase {
         ]))
         let info = try only()
         XCTAssertEqual(info.sessionId, 7)
-        XCTAssertEqual(info.sessionName, "Claude — tty.build")
+        XCTAssertEqual(info.sessionName, "Claude — TTY.Build")
         XCTAssertNil(info.term, "managed agents carry no terminal-app name")
     }
 

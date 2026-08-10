@@ -1,6 +1,6 @@
-# tty.build service protocol v2
+# TTY.Build service protocol v2
 
-This Worker is the only tty.build server. It combines an authenticated WebSocket
+This Worker is the only TTY.Build server. It combines an authenticated WebSocket
 relay, the device-to-computer binding registry, a Durable Object-owned terminal
 directory, and APNs delivery. Terminal frames remain end-to-end encrypted; D1
 never stores the pairing encryption secret, terminal bytes, titles, or working
@@ -291,7 +291,7 @@ so `/state`, WidgetKit, Live Activities, and Watch all use exactly the same
 server-authoritative count. Unchanged heartbeats renew only DO storage and do
 not produce redundant APNs work.
 
-Binary terminal frames continue to use the tty.build v2 E2EE format and HKDF salt
+Binary terminal frames continue to use the TTY.Build v2 E2EE format and HKDF salt
 `ttybuild-v2`.
 
 ## Push endpoints

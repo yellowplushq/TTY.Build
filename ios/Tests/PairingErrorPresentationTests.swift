@@ -22,7 +22,7 @@ final class PairingErrorPresentationTests: XCTestCase {
     func testServiceMismatchIsNotReportedAsExpiredCode() {
         XCTAssertEqual(
             PairingErrorPresentation.message(for: PairingStore.StoreError.serviceMismatch),
-            "This installation has pairing data from another tty.build service. Restart the app and try again."
+            "This installation has pairing data from another TTY.Build service. Restart the app and try again."
         )
     }
 
@@ -52,7 +52,7 @@ final class PairingErrorPresentationTests: XCTestCase {
                 identifier: "ttybuild.pairing.website"
             ) as? UIButton
         )
-        XCTAssertEqual(link.title(for: .normal), "tty.build")
+        XCTAssertEqual(link.title(for: .normal), "TTY.Build")
         XCTAssertTrue(link.titleLabel?.adjustsFontSizeToFitWidth == true)
         XCTAssertLessThan(link.titleLabel?.minimumScaleFactor ?? 1, 1)
         XCTAssertEqual(link.titleLabel?.lineBreakMode, .byClipping)

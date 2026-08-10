@@ -40,7 +40,7 @@ targets:
     info:
       path: Info.plist
       properties:
-        CFBundleDisplayName: tty.build
+        CFBundleDisplayName: TTY.Build
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSUIElement: true

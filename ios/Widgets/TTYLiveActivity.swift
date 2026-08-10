@@ -210,7 +210,7 @@ private struct AgentIdentity: View {
 
 struct TerminalIdentity: View {
     var body: some View {
-        Label("tty.build", systemImage: "terminal.fill")
+        Label("TTY.Build", systemImage: "terminal.fill")
             .font(.subheadline.weight(.semibold))
             .lineLimit(1)
     }

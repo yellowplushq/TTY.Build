@@ -164,7 +164,7 @@ struct TTYCountWidget: Widget {
                 .widgetAccentable(false)
                 .containerBackground(TTYBuildTheme.canvas, for: .widget)
         }
-        .configurationDisplayName("tty.build Activity")
+        .configurationDisplayName("TTY.Build Activity")
         .description("Terminal and coding-agent activity across your paired computers.")
         .supportedFamilies([
             .systemSmall,
@@ -284,7 +284,7 @@ private struct TTYCountWidgetView: View {
             let status = ActivityStyle.compactLabel(for: presentation)
             return "\(title) · \(status)"
         }
-        return "tty.build · \(terminalCountText)"
+        return "TTY.Build · \(terminalCountText)"
     }
 
     private var terminalCountText: String {

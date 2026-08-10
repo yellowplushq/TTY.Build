@@ -90,7 +90,7 @@ final class PairingCodeViewController: UIViewController {
         titleLabel.textColor = TTYBuildTheme.uiContent
         titleLabel.textAlignment = .center
 
-        bodyLabel.text = "Enter the 8-digit code shown by tty.build on your computer."
+        bodyLabel.text = "Enter the 8-digit code shown by TTY.Build on your computer."
         bodyLabel.font = TTYBuildTheme.uiTextFont
         bodyLabel.textColor = TTYBuildTheme.uiSecondaryContent
         bodyLabel.textAlignment = .center
@@ -447,9 +447,9 @@ enum PairingErrorPresentation {
         if let storeError = error as? PairingStore.StoreError {
             switch storeError {
             case .serviceMismatch:
-                return "This installation has pairing data from another tty.build service. Restart the app and try again."
+                return "This installation has pairing data from another TTY.Build service. Restart the app and try again."
             case .missingClientIdentity:
-                return "Pairing data is incomplete. Restart tty.build and try again."
+                return "Pairing data is incomplete. Restart TTY.Build and try again."
             }
         }
 
@@ -462,11 +462,11 @@ enum PairingErrorPresentation {
                 if status == 429 {
                     return "Too many pairing attempts. Wait a moment and try again."
                 }
-                return "tty.build couldn’t complete pairing. Try again."
+                return "TTY.Build couldn’t complete pairing. Try again."
             case .serviceMismatch:
-                return "This pairing code belongs to another tty.build service."
+                return "This pairing code belongs to another TTY.Build service."
             case .invalidResponse:
-                return "tty.build returned an unexpected response. Try again."
+                return "TTY.Build returned an unexpected response. Try again."
             }
         }
 
@@ -558,7 +558,7 @@ private final class PairingDownloadGuideView: UIView {
         icons.spacing = 14
 
         let caption = UILabel()
-        caption.text = "Download tty.build for your computer at"
+        caption.text = "Download TTY.Build for your computer at"
         caption.font = TTYBuildTheme.uiTextFont
         caption.textColor = TTYBuildTheme.uiSecondaryContent
         caption.textAlignment = .center
@@ -580,8 +580,8 @@ private final class PairingDownloadGuideView: UIView {
         link.contentHorizontalAlignment = .center
         link.setContentCompressionResistancePriority(.required, for: .horizontal)
         link.accessibilityIdentifier = "ttybuild.pairing.website"
-        link.accessibilityLabel = "Download tty.build from tty.build"
-        link.accessibilityHint = "Opens the tty.build website"
+        link.accessibilityLabel = "Download TTY.Build from tty.build"
+        link.accessibilityHint = "Opens the TTY.Build website"
         link.addAction(UIAction { _ in
             UIApplication.shared.open(Self.websiteURL)
         }, for: .touchUpInside)

@@ -1,27 +1,27 @@
 # Agent activity monitoring — design discussion record
 
 Status: **direction agreed, no implementation breakdown yet.** This document
-records the product/design discussion for tty.build' second major capability:
+records the product/design discussion for TTY.Build' second major capability:
 subscribing to coding-agent activity (Claude Code, Codex, and similar CLIs)
 and surfacing it on iPhone, Apple Watch, widgets, and the Dynamic Island.
 Implementation planning happens later in a separate pass.
 
 ## 1. Motivation and positioning
 
-tty.build today is a remote terminal: Mac daemon + Cloudflare relay + iPhone /
+TTY.Build today is a remote terminal: Mac daemon + Cloudflare relay + iPhone /
 Watch clients, with the alive-TTY count on widgets, complications, and the
 Live Activity. The second capability adds agent awareness: install hooks into
 coding agents on the Mac (a settings panel in the menu bar app, comparable to
 supacode's "Coding Agents" developer panel), report session state through the
 daemon and relay, and notify the user when an agent is blocked or finished.
 
-Why this fits tty.build:
+Why this fits TTY.Build:
 
 - The push pipeline (daemon → Worker → APNs → widgets / Live Activity /
   Watch) and the pairing/identity/E2EE system already exist. Agent state is
   one more event source, not a second architecture.
 - Differentiation: supacode's monitoring is bound to its own Mac terminal
-  app, and its notifications land on the Mac. The tty.build daemon is
+  app, and its notifications land on the Mac. The TTY.Build daemon is
   system-wide — agents running in iTerm, VS Code, Warp, anywhere are visible —
   and notifications reach the phone and wrist when the user is away from the
   Mac. The mobile surface is the product.

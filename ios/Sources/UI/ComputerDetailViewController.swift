@@ -148,7 +148,7 @@ final class ComputerDetailViewController: UITableViewController {
             if kind != .background {
                 updateSheet?.show(.failed(
                     title: kind == .install ? "Update Failed" : "Update Check Failed",
-                    message: "No reply from the Mac. It may be running an older tty.build — update it there to manage updates from here."
+                    message: "No reply from the Mac. It may be running an older TTY.Build — update it there to manage updates from here."
                 ))
             }
         }
@@ -222,12 +222,12 @@ final class ComputerDetailViewController: UITableViewController {
         switch Section(rawValue: section)! {
         case .agents:
             if hooksUnsupported {
-                return "This Mac runs an older tty.build without remote hook management. Update tty.build on the Mac to manage hooks from here."
+                return "This Mac runs an older TTY.Build without remote hook management. Update TTY.Build on the Mac to manage hooks from here."
             }
             return actionError
         case .updates:
             if updatesUnsupported {
-                return "This Mac runs an older tty.build without remote updates. Update tty.build on the Mac to check for updates from here."
+                return "This Mac runs an older TTY.Build without remote updates. Update TTY.Build on the Mac to check for updates from here."
             }
             return nil
         case .computer, .unbind:

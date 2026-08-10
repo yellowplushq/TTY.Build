@@ -1,6 +1,6 @@
 {
-  "name": "tty.build",
-  "short_name": "tty.build",
+  "name": "TTY.Build",
+  "short_name": "TTY.Build",
   "description": "Your terminal, wherever you are.",
   "start_url": "/",
   "display": "standalone",

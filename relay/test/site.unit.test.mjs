@@ -17,14 +17,14 @@ test("the stable download path redirects to the latest desktop release", async (
   const req = request("/download/macos");
   const response = handleDesktopDownload(
     req,
-    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/tty.build" },
+    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/TTY.Build" },
     new URL(req.url),
   );
 
   assert.equal(response.status, 302);
   assert.equal(
     response.headers.get("location"),
-    `https://github.com/yellowplushq/tty.build/releases/latest/download/${MACOS_ASSET}`,
+    `https://github.com/yellowplushq/TTY.Build/releases/latest/download/${MACOS_ASSET}`,
   );
   assert.equal(response.headers.get("cache-control"), "no-store");
 });
@@ -33,14 +33,14 @@ test("the stable appcast path redirects to the latest signed update feed", () =>
   const req = request("/appcast.xml", { method: "HEAD" });
   const response = handleDesktopDownload(
     req,
-    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/tty.build" },
+    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/TTY.Build" },
     new URL(req.url),
   );
 
   assert.equal(response.status, 302);
   assert.equal(
     response.headers.get("location"),
-    `https://github.com/yellowplushq/tty.build/releases/latest/download/${APPCAST_ASSET}`,
+    `https://github.com/yellowplushq/TTY.Build/releases/latest/download/${APPCAST_ASSET}`,
   );
   assert.equal(response.headers.get("content-length"), "0");
 });
@@ -53,14 +53,14 @@ test("the zip download paths redirect to the latest release archive and checksum
     const req = request(path);
     const response = handleDesktopDownload(
       req,
-      { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/tty.build" },
+      { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/TTY.Build" },
       new URL(req.url),
     );
 
     assert.equal(response.status, 302);
     assert.equal(
       response.headers.get("location"),
-      `https://github.com/yellowplushq/tty.build/releases/latest/download/${asset}`,
+      `https://github.com/yellowplushq/TTY.Build/releases/latest/download/${asset}`,
     );
   }
 });
@@ -215,7 +215,7 @@ test("the curl installer distinguishes the desktop app from iOS Simulator", asyn
 
 test("the curl installer relaunches after a graceful quit timeout", async () => {
   const script = await readFile(new URL("../public/install.sh", import.meta.url), "utf8");
-  assert.match(script, /tty\.build did not quit normally; stopping it before relaunch/);
+  assert.match(script, /TTY\.Build did not quit normally; stopping it before relaunch/);
   assert.match(script, /terminate_desktop_app/);
   assert.match(script, /close it and rerun the installer/);
 });

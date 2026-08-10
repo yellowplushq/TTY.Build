@@ -14,7 +14,7 @@ struct DesktopPairingView: View {
         Group {
             if model.isStartingService {
                 progress(
-                    title: "Starting tty.build",
+                    title: "Starting TTY.Build",
                     detail: "Preparing a secure connection…"
                 )
             } else if !model.serviceRunning {
@@ -73,7 +73,7 @@ struct DesktopPairingView: View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.circle")
                 .foregroundStyle(TTYBuildTheme.secondaryContent)
-            Text("tty.build couldn’t start")
+            Text("TTY.Build couldn’t start")
                 .font(TTYBuildTheme.emphasizedText)
                 .foregroundStyle(TTYBuildTheme.content)
             Text(model.lastError ?? "Try starting the app again.")
@@ -101,7 +101,7 @@ struct DesktopPairingPanel: View {
                 Text("Connect your iPhone")
                     .font(TTYBuildTheme.emphasizedText)
                     .foregroundStyle(TTYBuildTheme.content)
-                Text("Open tty.build on iPhone and enter this one-time code.")
+                Text("Open TTY.Build on iPhone and enter this one-time code.")
                     .foregroundStyle(TTYBuildTheme.secondaryContent)
                     .multilineTextAlignment(.center)
             }

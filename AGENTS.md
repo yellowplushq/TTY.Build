@@ -1,4 +1,4 @@
-# tty.build development and release guide
+# TTY.Build development and release guide
 
 This is the repository-level operating guide for agents and maintainers. Run
 commands from the repository root unless a section explicitly changes
@@ -9,8 +9,8 @@ scripts include the production safety checks that this project relies on.
 
 | Item | Canonical value |
 |---|---|
-| Product and on-device name | `tty.build` |
-| App Store Connect name | `tty.build - Agents & Terminal` |
+| Product and on-device name | `TTY.Build` |
+| App Store Connect name | `TTY.Build - Agents & Terminal` |
 | App Store Connect app ID | `6792312114` |
 | Apple team ID | `QDJ93ZUQ9B` |
 | iOS app | `air.build.pedals` |
@@ -57,7 +57,7 @@ The supported development host is macOS with:
 - Swift 6
 - XcodeGen
 - Node.js 22 or newer and npm
-- Wrangler 4.x, authenticated to the YellowPlus Cloudflare account for `tty.build` (the `air.build` zone hosts only the legacy redirect)
+- Wrangler 4.x, authenticated to the YellowPlus Cloudflare account for `TTY.Build` (the `air.build` zone hosts only the legacy redirect)
 - `asc` 3.x, authenticated to the `YellowPlus, Inc.` App Store Connect account
 - Baguette for headless simulator inspection and screenshots
 
@@ -378,7 +378,7 @@ cd relay
 npx wrangler deployments list --config wrangler.jsonc
 npx wrangler rollback VERSION_ID \
   --config wrangler.jsonc \
-  --message 'Rollback failed tty.build deployment'
+  --message 'Rollback failed TTY.Build deployment'
 ```
 
 ## Apple signing configuration
@@ -547,7 +547,7 @@ asc publish testflight \
   --version "$TTYBUILD_RELEASE_VERSION" \
   --build-number "$TTYBUILD_RELEASE_BUILD" \
   --group a3f73f1d-e7a5-47d8-9b57-8ada4baad549 \
-  --test-notes 'Connect a computer and verify TTY count synchronization across tty.build, iPhone widgets, Live Activity and Dynamic Island, and Apple Watch widgets, including background APNs updates.' \
+  --test-notes 'Connect a computer and verify TTY count synchronization across TTY.Build, iPhone widgets, Live Activity and Dynamic Island, and Apple Watch widgets, including background APNs updates.' \
   --locale en-US \
   --wait \
   --timeout 45m \

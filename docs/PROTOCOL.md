@@ -1,6 +1,6 @@
-# tty.build Protocol Specification v2
+# TTY.Build Protocol Specification v2
 
-tty.build exposes encrypted remote terminals while keeping a privacy-safe terminal
+TTY.Build exposes encrypted remote terminals while keeping a privacy-safe terminal
 directory in each computer's Durable Object for clients, widgets, and Live
 Activities.
 

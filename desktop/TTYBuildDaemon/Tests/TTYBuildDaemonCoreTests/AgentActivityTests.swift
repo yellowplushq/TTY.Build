@@ -14,7 +14,7 @@ final class AgentActivityTests: XCTestCase {
             id: id,
             agent: "claude",
             state: state,
-            sessionName: "tty.build release",
+            sessionName: "TTY.Build release",
             cwd: "/tmp/ttybuild",
             action: "AskUserQuestion",
             message: "Pick one",
@@ -29,7 +29,7 @@ final class AgentActivityTests: XCTestCase {
         let secret = Data(repeating: 0x42, count: 32)
         let key = AgentActivity.activityKey(secret: secret)
         let content = AgentActivity.Content(info: info())
-        XCTAssertEqual(content.sessionName, "tty.build release")
+        XCTAssertEqual(content.sessionName, "TTY.Build release")
         XCTAssertEqual(content.project, "ttybuild")
         XCTAssertEqual(content.prompt, "choose a plan")
 

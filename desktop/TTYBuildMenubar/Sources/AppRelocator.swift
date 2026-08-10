@@ -38,7 +38,7 @@ enum AppRelocator {
                 && application.bundleURL?.standardizedFileURL == plan.destinationURL
         }
         if runningElsewhere {
-            NSLog("tty.build is already running from %@; not relocating", plan.destinationURL.path)
+            NSLog("TTY.Build is already running from %@; not relocating", plan.destinationURL.path)
             return false
         }
 
@@ -58,7 +58,7 @@ enum AppRelocator {
             try fileManager.moveItem(at: staging, to: plan.destinationURL)
         } catch {
             try? fileManager.removeItem(at: staging)
-            NSLog("tty.build could not move itself to Applications: %@", "\(error)")
+            NSLog("TTY.Build could not move itself to Applications: %@", "\(error)")
             return false
         }
 
@@ -67,14 +67,14 @@ enum AppRelocator {
         // the moved copy installed but never launched.
         guard startRelaunchHelper(at: plan.destinationURL) else {
             try? fileManager.removeItem(at: plan.destinationURL)
-            NSLog("tty.build could not relaunch from Applications; continuing in place")
+            NSLog("TTY.Build could not relaunch from Applications; continuing in place")
             return false
         }
         if plan.deleteSource {
             do {
                 try fileManager.removeItem(at: plan.sourceURL)
             } catch {
-                NSLog("tty.build moved to Applications but could not remove %@", plan.sourceURL.path)
+                NSLog("TTY.Build moved to Applications but could not remove %@", plan.sourceURL.path)
             }
         }
         DispatchQueue.main.async {
@@ -122,7 +122,7 @@ enum AppRelocator {
             try process.run()
             return true
         } catch {
-            NSLog("tty.build could not start its relaunch helper: %@", "\(error)")
+            NSLog("TTY.Build could not start its relaunch helper: %@", "\(error)")
             return false
         }
     }

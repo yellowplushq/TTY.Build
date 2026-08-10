@@ -184,7 +184,7 @@ final class UpdaterModel: ObservableObject {
         do {
             try updater.start()
         } catch {
-            NSLog("tty.build: Sparkle updater failed to start: %@", String(describing: error))
+            NSLog("TTY.Build: Sparkle updater failed to start: %@", String(describing: error))
         }
 
         updater.publisher(for: \.canCheckForUpdates)

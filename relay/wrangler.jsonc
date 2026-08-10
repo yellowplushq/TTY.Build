@@ -4,7 +4,7 @@
 	"account_id": "8bfe8b1e792b46613348bd7de669da65",
 	"main": "src/worker.mjs",
 	"vars": {
-		"DESKTOP_RELEASE_REPOSITORY": "yellowplushq/tty.build"
+		"DESKTOP_RELEASE_REPOSITORY": "yellowplushq/TTY.Build"
 	},
 	"assets": {
 		"directory": "./public",

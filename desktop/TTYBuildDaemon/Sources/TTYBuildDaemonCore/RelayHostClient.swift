@@ -292,7 +292,7 @@ public final class RelayHostClient: @unchecked Sendable {
             guard info == nil else { break } // reply form is host→client only
             guard let handler = updateStatusHandler else {
                 control?.send(.err(
-                    msg: "updates require the tty.build menu bar app", req: req
+                    msg: "updates require the TTY.Build menu bar app", req: req
                 ))
                 break
             }
@@ -303,7 +303,7 @@ public final class RelayHostClient: @unchecked Sendable {
         case .updateInstall(let req):
             guard let handler = updateInstallHandler else {
                 control?.send(.err(
-                    msg: "updates require the tty.build menu bar app", req: req
+                    msg: "updates require the TTY.Build menu bar app", req: req
                 ))
                 break
             }

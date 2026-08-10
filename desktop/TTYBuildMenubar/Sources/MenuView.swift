@@ -69,7 +69,7 @@ struct MenuView: View {
                 .frame(width: 28, height: 28)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("tty.build")
+                Text("TTY.Build")
                     .font(TTYBuildTheme.emphasizedText)
                 Text(statusLine)
                     .foregroundStyle(TTYBuildTheme.secondaryContent)
@@ -107,7 +107,7 @@ struct MenuView: View {
     private var sessionList: some View {
         VStack(alignment: .leading, spacing: 0) {
             if model.sessions.isEmpty {
-                Text(model.serviceRunning ? "No sessions" : "Starting tty.build…")
+                Text(model.serviceRunning ? "No sessions" : "Starting TTY.Build…")
                     .foregroundStyle(TTYBuildTheme.secondaryContent)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 16)

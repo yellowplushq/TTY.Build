@@ -27,11 +27,11 @@ final class ClaudeHookMapperTests: XCTestCase {
 
     func testSessionAndCwdCarried() {
         var object = base("SessionStart")
-        object["session_name"] = "tty.build release"
+        object["session_name"] = "TTY.Build release"
         object["transcript_path"] = "/Users/test/.claude/projects/s-1.jsonl"
         let report = map(object)
         XCTAssertEqual(report?.agentSessionId, "s-1")
-        XCTAssertEqual(report?.sessionName, "tty.build release")
+        XCTAssertEqual(report?.sessionName, "TTY.Build release")
         XCTAssertEqual(report?.cwd, "/tmp/project")
         XCTAssertEqual(
             report?.transcriptPath, "/Users/test/.claude/projects/s-1.jsonl"

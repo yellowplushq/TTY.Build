@@ -182,7 +182,7 @@ jobs:
           fi
           printf '%s' "$SPARKLE_EDDSA_PRIVATE_KEY" | "$appcast_tool" \
             --ed-key-file - \
-            --download-url-prefix "https://github.com/yellowplushq/tty.build/releases/download/$GITHUB_REF_NAME/" \
+            --download-url-prefix "https://github.com/yellowplushq/TTY.Build/releases/download/$GITHUB_REF_NAME/" \
             --link "https://tty.build" \
             --maximum-versions 1 \
             "$TTYBUILD_DESKTOP_OUTPUT_DIR"
@@ -221,6 +221,6 @@ jobs:
               "$zip_checksum" \
               "$appcast" \
               --verify-tag \
-              --title "tty.build $TTYBUILD_DESKTOP_VERSION" \
+              --title "TTY.Build $TTYBUILD_DESKTOP_VERSION" \
               --generate-notes
           fi

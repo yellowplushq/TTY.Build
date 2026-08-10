@@ -268,7 +268,7 @@ final class HomeViewController: UIViewController {
             case .agentsEmpty:
                 cell.configure(
                     text: "Agents you run on your Mac appear here. "
-                        + "Install hooks from the tty.build menu bar app.",
+                        + "Install hooks from the TTY.Build menu bar app.",
                     card: false
                 )
                 cell.accessibilityIdentifier = "ttybuild.home.agents.empty"

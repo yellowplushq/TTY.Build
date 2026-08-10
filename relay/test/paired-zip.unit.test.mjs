@@ -162,7 +162,7 @@ test("the paired download endpoint stamps the upstream release zip", async () =>
   const fetched = [];
   const response = await handlePairedDownload(
     new Request("https://tty.build/download/90285513/macos.zip"),
-    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/tty.build", TEST_BYPASS_RATE_LIMITS: "true" },
+    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/TTY.Build", TEST_BYPASS_RATE_LIMITS: "true" },
     "90285513",
     async (url) => {
       fetched.push(String(url));
@@ -177,7 +177,7 @@ test("the paired download endpoint stamps the upstream release zip", async () =>
     /attachment; filename="TTYBuild-macOS\.zip"/,
   );
   assert.deepEqual(fetched, [
-    "https://github.com/yellowplushq/tty.build/releases/latest/download/TTYBuild-macOS.zip",
+    "https://github.com/yellowplushq/TTY.Build/releases/latest/download/TTYBuild-macOS.zip",
   ]);
   const body = new Uint8Array(await response.arrayBuffer());
   assert.equal(readEOCD(body).entries, RELEASE_LIKE.length + 1);
@@ -189,7 +189,7 @@ test("the paired download endpoint answers HEAD and unconfigured repos safely", 
     new Request("https://tty.build/download/90285513/macos.zip", {
       method: "HEAD",
     }),
-    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/tty.build", TEST_BYPASS_RATE_LIMITS: "true" },
+    { DESKTOP_RELEASE_REPOSITORY: "yellowplushq/TTY.Build", TEST_BYPASS_RATE_LIMITS: "true" },
     "90285513",
     async () => {
       throw new Error("HEAD must not fetch upstream");

@@ -291,7 +291,7 @@ struct WatchTerminalFixtureView: View {
         var projection = TerminalTextProjection(cols: 80, rows: 24)
         let output = ([
             "$ ttybuild status --verbose --include-all-computers --format human-readable",
-            "Connected to Studio Mac through the encrypted tty.build relay.",
+            "Connected to Studio Mac through the encrypted TTY.Build relay.",
             "This eighty-column terminal row keeps every cell and scales to the watch width.",
             "中文、emoji 🖥️ and wide glyphs remain aligned while ANSI styling is removed.",
         ] + (1 ... 18).map { "log \($0): terminal grid rows remain vertically scrollable" })

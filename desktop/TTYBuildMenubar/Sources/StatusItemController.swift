@@ -50,7 +50,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         statusItem.length = compactLength
         button.image = NSImage(named: "StatusBarIcon")
-        button.image?.accessibilityDescription = "tty.build"
+        button.image?.accessibilityDescription = "TTY.Build"
         button.image?.size = NSSize(width: 18, height: 18)
         button.image?.isTemplate = true
         button.imageScaling = .scaleProportionallyDown
@@ -93,8 +93,8 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSMenuDelegate {
             button.toolTip = count == 1 ? "1 active terminal" : "\(count) active terminals"
             button.setAccessibilityLabel(button.toolTip)
         } else {
-            button.toolTip = "tty.build"
-            button.setAccessibilityLabel("tty.build")
+            button.toolTip = "TTY.Build"
+            button.setAccessibilityLabel("TTY.Build")
         }
 
         let targetLength = isExpanded ? expandedLength(for: count, button: button) : compactLength
@@ -229,7 +229,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSMenuDelegate {
         contextMenu.addItem(.separator())
 
         let quit = NSMenuItem(
-            title: "Quit tty.build",
+            title: "Quit TTY.Build",
             action: #selector(quitTTYBuild),
             keyEquivalent: "q"
         )

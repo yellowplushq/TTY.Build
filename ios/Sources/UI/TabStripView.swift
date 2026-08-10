@@ -51,7 +51,7 @@ final class TabStripView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
 
-        titleLabel.text = "tty.build"
+        titleLabel.text = "TTY.Build"
         titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
         titleLabel.textColor = TTYBuildTheme.uiContent
         titleLabel.textAlignment = .center

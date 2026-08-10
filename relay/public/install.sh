@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tty.build desktop installer for macOS.
+# TTY.Build desktop installer for macOS.
 #
 # Usage:
 #   curl -fsSL https://tty.build/i | bash
@@ -122,7 +122,7 @@ terminate_desktop_app() {
 }
 
 launch_app() {
-  step "Opening tty.build"
+  step "Opening TTY.Build"
   open "$install_dir/$APP_NAME" \
     || fail "macOS could not open $install_dir/$APP_NAME"
 }
@@ -146,7 +146,7 @@ fi
 installed_version=""
 if [[ -d "$install_dir/$APP_NAME" ]]; then
   installed_version="$(app_version "$install_dir/$APP_NAME")"
-  step "tty.build ${installed_version:-unknown version} is already installed in $install_dir"
+  step "TTY.Build ${installed_version:-unknown version} is already installed in $install_dir"
   # stdin may be the script itself (curl | bash), so prompt via /dev/tty and
   # default to updating when no terminal is available to answer.
   answer=""
@@ -167,7 +167,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-step "Downloading the latest tty.build release"
+step "Downloading the latest TTY.Build release"
 download "$BASE_URL/download/macos.zip" "$workdir/$ZIP_NAME" \
   || fail "the release download failed"
 curl -fsSL "$BASE_URL/download/macos.zip.sha256" -o "$workdir/$CHECKSUM_NAME" \
@@ -182,11 +182,11 @@ ditto -xk "$workdir/$ZIP_NAME" "$workdir/extract"
 
 new_version="$(app_version "$workdir/extract/$APP_NAME")"
 if [[ -n "$new_version" && "$new_version" == "$installed_version" ]]; then
-  step "Reinstalling tty.build $new_version (already the latest release)"
+  step "Reinstalling TTY.Build $new_version (already the latest release)"
 elif [[ -n "$new_version" ]]; then
-  step "Installing tty.build $new_version to $install_dir"
+  step "Installing TTY.Build $new_version to $install_dir"
 else
-  step "Installing tty.build to $install_dir"
+  step "Installing TTY.Build to $install_dir"
 fi
 
 # Stage next to the destination, then swap, so a failed copy can never leave
@@ -197,7 +197,7 @@ if [[ -n "$pair_code" ]]; then
   # Stamp the enrollment code as an extended attribute on the bundle. It is
   # outside the code-signature seal, survives the swap below and Finder
   # copies, and the app consumes it on launch — pairing completes even if
-  # tty.build only starts (or restarts) later.
+  # TTY.Build only starts (or restarts) later.
   xattr -w build.tty.pairing-code "$pair_code" "$staging" \
     || echo "ttybuild-install: could not stamp the pairing code; connect with a code instead" >&2
 fi
@@ -209,11 +209,11 @@ step "Installed $install_dir/$APP_NAME"
 if app_is_running; then
   # Never quit a running app without an explicit yes from a real terminal.
   answer=""
-  printf 'tty.build is running. Press return to relaunch it now, or q to keep the current session: '
+  printf 'TTY.Build is running. Press return to relaunch it now, or q to keep the current session: '
   read -r answer 2>/dev/null < /dev/tty || answer="q"
   case "$answer" in
     q | Q | n | N)
-      echo "Quit and reopen tty.build whenever you're ready to use the new version."
+      echo "Quit and reopen TTY.Build whenever you're ready to use the new version."
       ;;
     *)
       osascript -e "tell application id \"$APP_BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
@@ -223,7 +223,7 @@ if app_is_running; then
         tries=$(( tries + 1 ))
       done
       if app_is_running; then
-        step "tty.build did not quit normally; stopping it before relaunch"
+        step "TTY.Build did not quit normally; stopping it before relaunch"
         terminate_desktop_app
         tries=0
         while app_is_running && (( tries < 20 )); do
@@ -232,7 +232,7 @@ if app_is_running; then
         done
       fi
       app_is_running \
-        && fail "tty.build did not quit; close it and rerun the installer"
+        && fail "TTY.Build did not quit; close it and rerun the installer"
       launch_app
       ;;
   esac
@@ -242,8 +242,8 @@ fi
 
 if [[ -n "$pair_code" ]]; then
   if app_is_running; then
-    step "Open tty.build on your iPhone and confirm this computer"
+    step "Open TTY.Build on your iPhone and confirm this computer"
   else
-    step "Pairing completes the next time tty.build starts; then confirm on your iPhone"
+    step "Pairing completes the next time TTY.Build starts; then confirm on your iPhone"
   fi
 fi

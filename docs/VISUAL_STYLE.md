@@ -1,6 +1,6 @@
-# tty.build visual style
+# TTY.Build visual style
 
-tty.build uses a deliberately monochrome visual system. The application shell,
+TTY.Build uses a deliberately monochrome visual system. The application shell,
 brand mark, controls, widgets, Live Activity, Dynamic Island, Watch app, and
 menu-bar app use only black, white, and neutral opacity levels by default.
 

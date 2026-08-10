@@ -33,9 +33,9 @@ final class PairingStore {
         var errorDescription: String? {
             switch self {
             case .serviceMismatch:
-                "This tty.build installation is already registered with another service."
+                "This TTY.Build installation is already registered with another service."
             case .missingClientIdentity:
-                "The tty.build client identity is missing. Pair this device again."
+                "The TTY.Build client identity is missing. Pair this device again."
             }
         }
     }

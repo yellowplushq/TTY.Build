@@ -48,11 +48,11 @@ public enum HookInstaller {
             case .malformedSettings(let path, let detail):
                 "hook settings at \(path): \(detail)"
             case .unownedFile(let path):
-                "refusing to overwrite \(path): it exists but was not written by tty.build"
+                "refusing to overwrite \(path): it exists but was not written by TTY.Build"
             case .kiroCLIUnavailable(let detail):
                 "Kiro CLI unavailable: \(detail)"
             case .unsupportedKiroVersion(let found):
-                "Kiro CLI version \(found) is unsupported (tty.build needs 2.x)"
+                "Kiro CLI version \(found) is unsupported (TTY.Build needs 2.x)"
             }
         }
     }

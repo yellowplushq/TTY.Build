@@ -13,11 +13,11 @@ public final class TTYBuildServiceAPI: @unchecked Sendable {
         public var description: String {
             switch self {
             case .invalidResponse:
-                "invalid response from tty.build service"
+                "invalid response from TTY.Build service"
             case .rejected(let status, let message):
-                "tty.build service rejected the request (HTTP \(status)): \(message)"
+                "TTY.Build service rejected the request (HTTP \(status)): \(message)"
             case .serviceMismatch:
-                "pairing request belongs to a different tty.build service"
+                "pairing request belongs to a different TTY.Build service"
             }
         }
 

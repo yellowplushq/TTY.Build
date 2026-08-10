@@ -1,6 +1,6 @@
-# tty.build Architecture
+# TTY.Build Architecture
 
-tty.build v2 combines a zero-knowledge terminal relay with a deliberately small
+TTY.Build v2 combines a zero-knowledge terminal relay with a deliberately small
 status service for widgets, Dynamic Island, and Apple Watch.
 
 ```text
@@ -69,7 +69,7 @@ running app networking code.
 
 `TTYBuildDaemonCore` owns the PTY processes, replay buffers, Unix control socket,
 and authenticated relay links. The menu bar app links this core directly and
-owns its lifecycle, so quitting tty.build also stops the service. It opens directly
+owns its lifecycle, so quitting TTY.Build also stops the service. It opens directly
 to pairing on an unpaired computer and never asks the user to configure or
 start a daemon. The optional headless `ttybuild` executable exposes `serve`, `ls`,
 `new`, `kill`, `pair`, and `status` through Swift Argument Parser for CLI use.

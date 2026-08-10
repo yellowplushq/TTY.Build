@@ -7,7 +7,7 @@ final class AgentActivityPresentationTests: XCTestCase {
             id: "a-1",
             agent: "codex",
             state: .done,
-            sessionName: "  Ship tty.build  ",
+            sessionName: "  Ship TTY.Build  ",
             cwd: "/tmp/ttybuild",
             message: "  The new client is ready.  ",
             prompt: "This prompt must never become the title",
@@ -15,7 +15,7 @@ final class AgentActivityPresentationTests: XCTestCase {
         )
 
         let presentation = AgentActivity.Presentation(info: info)
-        XCTAssertEqual(presentation.title, "Ship tty.build")
+        XCTAssertEqual(presentation.title, "Ship TTY.Build")
         XCTAssertEqual(presentation.detail, "The new client is ready.")
     }
 
