@@ -19,6 +19,7 @@ public final class RelayHostClient: @unchecked Sendable {
     /// and the agents' settings files. Serial per host.
     private let hookQueue = DispatchQueue(label: "air.build.pedals.hooks")
     private let sessions: SessionManager
+    private let arbiter: AttachArbiter
     private let hostName: String
     private let home: TTYBuildHome
 
@@ -31,6 +32,10 @@ public final class RelayHostClient: @unchecked Sendable {
     /// live stdout at or below it is not re-sent (bytes would double after the
     /// splice, see PROTOCOL.md §4).
     private var replayedThrough: [Int: UInt64] = [:]
+    /// Session ids seen in the last `sessionsChanged`, to detect sessions
+    /// that appeared without a relay `create` (their holder state must still
+    /// be broadcast). On `queue`.
+    private var knownSessionIds: Set<Int> = []
     private var lastReportedDirectory: [RelayMetadata.DirectoryEntry]?
     private var lastReportedAgentCounts: RelayMetadata.AgentCounts?
     private var lastReportedActivity: AgentActivity.Content?
@@ -58,13 +63,22 @@ public final class RelayHostClient: @unchecked Sendable {
     public var computerID: String { queue.sync { identity.computer.computerID } }
     public var serviceURL: URL { queue.sync { identity.computer.serviceURL } }
 
-    public init(identity: HostIdentity, sessions: SessionManager, home: TTYBuildHome) {
+    public init(
+        identity: HostIdentity,
+        sessions: SessionManager,
+        arbiter: AttachArbiter,
+        home: TTYBuildHome
+    ) {
         self.identity = identity
         self.sessions = sessions
+        self.arbiter = arbiter
         self.home = home
         self.hostName = Self.sanitizedHostName(
             Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         )
+        arbiter.addObserver { [weak self] sessionId, holder in
+            self?.sendOnQueue(.takeover(id: sessionId, holder: holder))
+        }
     }
 
     /// Wires the host app's updater into client-triggered `update-status` /
@@ -175,7 +189,9 @@ public final class RelayHostClient: @unchecked Sendable {
             hostName: hostName, callbackQueue: queue
         )
         link.onState = { [weak self] state in self?.controlStateChanged(state) }
-        link.onFrame = { [weak self] frame in self?.handleControl(frame: frame) }
+        link.onFrameFrom = { [weak self] frame, principal in
+            self?.handleControl(frame: frame, from: principal)
+        }
         control = link
         link.start()
         startHeartbeatLocked()
@@ -218,8 +234,8 @@ public final class RelayHostClient: @unchecked Sendable {
                 channel: .session(sid: UInt32(id)),
                 hostName: hostName, callbackQueue: queue
             )
-            link.onFrame = { [weak self] frame in
-                self?.handleSession(id: id, frame: frame)
+            link.onFrameFrom = { [weak self] frame, principal in
+                self?.handleSession(id: id, frame: frame, from: principal)
             }
             sessionLinks[id] = link
             link.start()
@@ -228,7 +244,7 @@ public final class RelayHostClient: @unchecked Sendable {
 
     // MARK: - Control channel (on `queue`)
 
-    private func handleControl(frame: Frame) {
+    private func handleControl(frame: Frame, from principal: String?) {
         guard frame.type == .ctl, let message = try? frame.controlMessage() else {
             if frame.type == .ctl { control?.send(.err(msg: "malformed ctl payload")) }
             return
@@ -239,9 +255,24 @@ public final class RelayHostClient: @unchecked Sendable {
             _clientSeen = true
             control?.send(.sessions(list: sessions.list()))
             control?.send(.agents(list: lastAgents))
+            // Holder replay for EVERY session (`none` included): a client
+            // treats a session with no holder info as talking to a pre-holder
+            // daemon and stays interactive, so the absence must be reserved
+            // for daemons that genuinely never gate stdin.
+            for info in sessions.list() {
+                control?.send(.takeover(
+                    id: info.id, holder: arbiter.holderInfo(sessionId: info.id)
+                ))
+            }
         case .create(let cwd, let cols, let rows, let req):
             do {
                 let id = try sessions.create(cwd: cwd, cols: cols, rows: rows)
+                // Initial holder = creator (EXCLUSIVE_ATTACH_DESIGN.md §2).
+                if let principal {
+                    arbiter.claim(
+                        sessionId: id, source: .client(principal: principal)
+                    )
+                }
                 // The `sessions` broadcast is emitted by the SessionManager event.
                 control?.send(.created(id: id, req: req))
             } catch {
@@ -249,6 +280,18 @@ public final class RelayHostClient: @unchecked Sendable {
                 // surface the failure instead of timing out silently.
                 control?.send(.err(msg: "create failed: \(error)", req: req))
             }
+        case .claim(let id, let req):
+            guard sessions.list().contains(where: { $0.id == id }) else {
+                control?.send(.err(msg: "no such session \(id)", req: req))
+                break
+            }
+            guard let principal else {
+                control?.send(.err(msg: "claim requires an authenticated source", req: req))
+                break
+            }
+            // The state answer is the broadcast `takeover` the claim always
+            // triggers (even when the holder is unchanged).
+            arbiter.claim(sessionId: id, source: .client(principal: principal))
         case .close(let id):
             if !sessions.close(id: id) {
                 control?.send(.err(msg: "no such session \(id)"))
@@ -311,7 +354,8 @@ public final class RelayHostClient: @unchecked Sendable {
                 let status = await handler()
                 self?.sendOnQueue(.updateStatus(info: status.info, req: req))
             }
-        case .sessions, .agents, .created, .title, .exit, .ready, .requestReplay:
+        case .sessions, .agents, .created, .title, .exit, .ready, .requestReplay,
+             .takeover:
             break // host→client only; ignore if mirrored back
         case .err(let msg, _):
             FileHandle.standardError.write(Data("client error: \(msg)\n".utf8))
@@ -328,12 +372,22 @@ public final class RelayHostClient: @unchecked Sendable {
 
     // MARK: - Session channels (on `queue`)
 
-    private func handleSession(id: Int, frame: Frame) {
+    private func handleSession(id: Int, frame: Frame, from principal: String?) {
         // Defense in depth: per-channel keys already stop cross-channel
         // ciphertext at decrypt, so a mismatched sid on a data frame can only
         // be a bug — drop it rather than write to the wrong PTY.
         if (frame.type == .stdin || frame.type == .resize), frame.sessionId != UInt32(id) {
             return
+        }
+        // Exclusive hold: only the holder's stdin/resize are applied
+        // (EXCLUSIVE_ATTACH_DESIGN.md §2 rule 3). Non-holders keep receiving
+        // stdout/replay — the holder gates interaction, not visibility.
+        if frame.type == .stdin || frame.type == .resize {
+            guard let principal,
+                  arbiter.isHolder(
+                      sessionId: id, source: .client(principal: principal)
+                  )
+            else { return }
         }
         switch frame.type {
         case .ctl:
@@ -526,6 +580,19 @@ public final class RelayHostClient: @unchecked Sendable {
             }
             control?.send(.sessions(list: list))
             reconcileSessionLinksLocked(with: list)
+            // Closed sessions drop their holder silently — the row itself is
+            // gone from every client. Exits broadcast via `sessionExited`.
+            let ids = Set(list.map(\.id))
+            arbiter.retainSessions(ids: ids)
+            // Sessions appearing without a relay `create` (CLI `new`, attach
+            // --new, the menu bar) never trigger a claim broadcast, yet every
+            // client needs their holder state (see the hello replay note).
+            for id in ids.subtracting(knownSessionIds).sorted() {
+                control?.send(.takeover(
+                    id: id, holder: arbiter.holderInfo(sessionId: id)
+                ))
+            }
+            knownSessionIds = ids
         case .resized(let id, let cols, let rows):
             sessionLinks[id]?.send(.resize(
                 sessionId: UInt32(id), cols: cols, rows: rows
@@ -541,6 +608,7 @@ public final class RelayHostClient: @unchecked Sendable {
             control?.send(.title(id: id, title: title))
         case .exit(let id, let code):
             control?.send(.exit(id: id, code: code))
+            arbiter.sessionExited(sessionId: id)
         }
     }
 

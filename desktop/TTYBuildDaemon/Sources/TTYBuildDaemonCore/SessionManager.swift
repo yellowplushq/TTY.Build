@@ -124,11 +124,37 @@ public final class SessionManager: @unchecked Sendable {
 
     /// Delivered on the manager's serial queue. Handlers may call back into the
     /// manager (its public API only dispatches async or reads on the same queue).
+    /// This is the primary consumer slot (RelayHostClient); setting it replaces
+    /// the previous value. Additional consumers (attach connections) register
+    /// through `addEventObserver`.
     public var onEvent: (@Sendable (SessionEvent) -> Void)? {
         get { queue.sync { _onEvent } }
         set { queue.sync { _onEvent = newValue } }
     }
     private var _onEvent: (@Sendable (SessionEvent) -> Void)?
+    private var eventObservers: [UUID: @Sendable (SessionEvent) -> Void] = [:]
+
+    /// Registers an additional event consumer, called on the manager's serial
+    /// queue after the primary `onEvent`. Observers must hop to their own
+    /// queue for any blocking work — a stalled observer stalls every session.
+    @discardableResult
+    public func addEventObserver(
+        _ observer: @escaping @Sendable (SessionEvent) -> Void
+    ) -> UUID {
+        let token = UUID()
+        queue.sync { eventObservers[token] = observer }
+        return token
+    }
+
+    public func removeEventObserver(_ token: UUID) {
+        queue.sync { _ = eventObservers.removeValue(forKey: token) }
+    }
+
+    /// Emits to the primary slot and every observer (on `queue`).
+    private func emitLocked(_ event: SessionEvent) {
+        _onEvent?(event)
+        for observer in eventObservers.values { observer(event) }
+    }
 
     public init(options: Options = Options()) {
         self.options = options
@@ -224,7 +250,7 @@ public final class SessionManager: @unchecked Sendable {
             session.cols = cols
             session.rows = rows
             session.pty.resize(cols: cols, rows: rows)
-            self._onEvent?(.resized(id: id, cols: cols, rows: rows))
+            self.emitLocked(.resized(id: id, cols: cols, rows: rows))
             emitSessionsChangedLocked()
         }
     }
@@ -316,7 +342,7 @@ public final class SessionManager: @unchecked Sendable {
         let offset = session.outputOffset
         session.ring.append(data)
         session.outputOffset += UInt64(data.count)
-        _onEvent?(.output(id: id, data: data, offset: offset))
+        emitLocked(.output(id: id, data: data, offset: offset))
 
         if let title = session.oscParser.consume(data).last {
             session.titleFromOSC = true
@@ -328,7 +354,7 @@ public final class SessionManager: @unchecked Sendable {
         guard let session = sessions[id] else { return }
         session.alive = false
         session.exitCode = Int(code)
-        _onEvent?(.exit(id: id, code: Int(code)))
+        emitLocked(.exit(id: id, code: Int(code)))
         emitSessionsChangedLocked()
     }
 
@@ -375,11 +401,11 @@ public final class SessionManager: @unchecked Sendable {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != session.title else { return }
         session.title = trimmed
-        _onEvent?(.title(id: session.id, title: trimmed))
+        emitLocked(.title(id: session.id, title: trimmed))
     }
 
     private func emitSessionsChangedLocked() {
-        _onEvent?(.sessionsChanged(sessions.values.sorted { $0.id < $1.id }.map(\.info)))
+        emitLocked(.sessionsChanged(sessions.values.sorted { $0.id < $1.id }.map(\.info)))
     }
 
     // MARK: - Helpers

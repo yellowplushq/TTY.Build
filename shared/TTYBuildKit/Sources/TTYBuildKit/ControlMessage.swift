@@ -139,6 +139,41 @@ public struct UpdateStatusInfo: Codable, Equatable, Sendable {
     }
 }
 
+/// The interactive holder of one session (docs/EXCLUSIVE_ATTACH_DESIGN.md).
+/// E2EE-only content: holder names and principals must never appear in relay
+/// metadata or D1.
+public struct HolderInfo: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, Sendable {
+        /// A local attach connection in a terminal on the host Mac.
+        case attach
+        /// A bound relay client (iPhone, or the Watch's delegate identity).
+        case client
+        /// Unheld: any surface may claim without displacing anyone.
+        case none
+
+        /// Unknown wire values decode as `.attach`: a holder kind this build
+        /// doesn't know is still *someone else*, so non-holders keep showing
+        /// the placeholder instead of treating the session as free.
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Kind(rawValue: raw) ?? .attach
+        }
+    }
+
+    public var kind: Kind
+    /// The holder's 32-hex relay principal, present for `kind == .client` so
+    /// each client can compare against its own identity.
+    public var principal: String?
+    /// Display label for placeholders ("iTerm2", "iPhone"); best-effort.
+    public var name: String?
+
+    public init(kind: Kind, principal: String? = nil, name: String? = nil) {
+        self.kind = kind
+        self.principal = principal
+        self.name = name
+    }
+}
+
 /// ctl JSON messages (PROTOCOL.md §5). Wire form is `{"t":"<kind>", ...}`.
 ///
 /// ctl only flows on the control channel. Data channels (one WebSocket per
@@ -206,11 +241,20 @@ public enum ControlMessage: Equatable, Sendable {
     /// app; may present UI and relaunch the app on the Mac). The host replies
     /// with a fresh `updateStatus` echoing `req`, or `err` on failure.
     case updateInstall(req: UInt32?)
+    /// client→host: claim exclusive interactive hold of a session. The holder
+    /// becomes the sender's authenticated principal (never a payload-supplied
+    /// identity); a claim is unconditional and last-writer-wins. The state
+    /// answer is the broadcast `takeover`; failures answer `err {req}`.
+    case claim(id: Int, req: UInt32?)
+    /// host→client: a session's holder changed, broadcast to every control
+    /// client. Also replayed for every session after `sessions` on each
+    /// client hello so reconnects recover holder state without asking.
+    case takeover(id: Int, holder: HolderInfo)
 }
 
 extension ControlMessage: Codable {
     private enum CodingKeys: String, CodingKey {
-        case t, who, principal, connEpoch, nonce, ver, host, echoNonce, list, cwd, cols, rows, id, title, code, msg, req, agents, agentId, agent, info
+        case t, who, principal, connEpoch, nonce, ver, host, echoNonce, list, cwd, cols, rows, id, title, code, msg, req, agents, agentId, agent, info, holder
     }
 
     private var kind: String {
@@ -232,6 +276,8 @@ extension ControlMessage: Codable {
         case .hookUninstall: "hook-uninstall"
         case .updateStatus: "update-status"
         case .updateInstall: "update-install"
+        case .claim: "claim"
+        case .takeover: "takeover"
         }
     }
 
@@ -290,6 +336,12 @@ extension ControlMessage: Codable {
             try container.encodeIfPresent(req, forKey: .req)
         case let .updateInstall(req):
             try container.encodeIfPresent(req, forKey: .req)
+        case let .claim(id, req):
+            try container.encode(id, forKey: .id)
+            try container.encodeIfPresent(req, forKey: .req)
+        case let .takeover(id, holder):
+            try container.encode(id, forKey: .id)
+            try container.encode(holder, forKey: .holder)
         }
     }
 
@@ -371,6 +423,16 @@ extension ControlMessage: Codable {
         case "update-install":
             self = .updateInstall(
                 req: try container.decodeIfPresent(UInt32.self, forKey: .req)
+            )
+        case "claim":
+            self = .claim(
+                id: try container.decode(Int.self, forKey: .id),
+                req: try container.decodeIfPresent(UInt32.self, forKey: .req)
+            )
+        case "takeover":
+            self = .takeover(
+                id: try container.decode(Int.self, forKey: .id),
+                holder: try container.decode(HolderInfo.self, forKey: .holder)
             )
         default:
             throw DecodingError.dataCorruptedError(

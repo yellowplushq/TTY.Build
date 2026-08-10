@@ -319,7 +319,21 @@ final class MainViewController: UIViewController {
             .sink { [weak self] phases in
                 guard let self else { return }
                 reconcileStreamIntegrity(phases: phases)
-                updateOverlays(terminals: manager.terminals, phases: phases)
+                updateOverlays(
+                    terminals: manager.terminals, phases: phases,
+                    holders: manager.holders
+                )
+            }
+            .store(in: &cancellables)
+
+        manager.$holders
+            .sink { [weak self] holders in
+                guard let self else { return }
+                handleHolderTransitions(holders: holders)
+                updateOverlays(
+                    terminals: manager.terminals, phases: manager.phases,
+                    holders: holders
+                )
             }
             .store(in: &cancellables)
 
@@ -476,6 +490,34 @@ final class MainViewController: UIViewController {
     /// been continuously live: eviction, background sleep, and reconnects all
     /// drop bytes that only the next replay restores. (`.live` is reached via
     /// a replay, which re-marks the stream intact through `handle(id:output:)`.)
+    /// Last observed holder interactivity per page, to catch the moment we
+    /// (re)gain the hold: the other holder likely drove a different grid, so
+    /// re-announce ours and refresh a stale stream.
+    private var wasInteractive: [TerminalID: Bool] = [:]
+
+    private func handleHolderTransitions(holders: [TerminalID: HolderInfo]) {
+        for (id, page) in pages {
+            let interactive = TerminalManager.holderState(
+                for: id, in: holders, clientID: manager.clientPrincipal
+            ) == .interactive
+            let was = wasInteractive[id] ?? true
+            wasInteractive[id] = interactive
+            guard interactive, !was, id == visibleId else { continue }
+            // Deferred one tick: this sink runs during willSet, so the
+            // manager's own holder gate still sees the old (non-holder)
+            // state and would drop the resize.
+            Task { @MainActor [weak self] in
+                guard let self, let page = pages[id] else { return }
+                if let cols = page.host.cols, let rows = page.host.rows {
+                    manager.sendResize(id, cols: cols, rows: rows)
+                }
+                if !page.streamIntact {
+                    manager.requestReplay(id)
+                }
+            }
+        }
+    }
+
     private func reconcileStreamIntegrity(phases: [TerminalID: TerminalChannel.Phase]) {
         for (id, page) in pages where page.streamIntact {
             if phases[id] != .live {
@@ -508,6 +550,7 @@ final class MainViewController: UIViewController {
             }
             page.container.removeFromSuperview()
             pages.removeValue(forKey: id)
+            wasInteractive.removeValue(forKey: id)
         }
 
         for terminal in terminals where pages[terminal.id] == nil {
@@ -518,6 +561,9 @@ final class MainViewController: UIViewController {
             }
             page.host.onResize = { [weak self] cols, rows in
                 self?.manager.sendResize(id, cols: cols, rows: rows)
+            }
+            page.overlay.onClaim = { [weak self] in
+                self?.manager.claimTerminal(id)
             }
             page.host.onModifierStateChange = { [weak self] state in
                 guard let self, visibleId == id else { return }
@@ -565,7 +611,9 @@ final class MainViewController: UIViewController {
             }
         }
         setVisiblePage(visiblePage)
-        updateOverlays(terminals: terminals, phases: manager.phases)
+        updateOverlays(
+            terminals: terminals, phases: manager.phases, holders: manager.holders
+        )
 
         let showComputer = computerCount > 1
         tabStrip.update(
@@ -840,11 +888,24 @@ final class MainViewController: UIViewController {
         }
     }
 
-    private func updateOverlays(terminals: [Terminal], phases: [TerminalID: TerminalChannel.Phase]) {
+    private func updateOverlays(
+        terminals: [Terminal],
+        phases: [TerminalID: TerminalChannel.Phase],
+        holders: [TerminalID: HolderInfo]
+    ) {
         for (id, page) in pages {
             let mode: TerminalStatusOverlay.Mode
+            let holderState = TerminalManager.holderState(
+                for: id, in: holders, clientID: manager.clientPrincipal
+            )
             if terminals.first(where: { $0.id == id })?.closing == true {
                 mode = .closing
+            } else if case .takenOver(let name) = holderState {
+                // A non-holder doesn't care about its data channel's health;
+                // the placeholder outranks connecting/reconnecting.
+                mode = .takenOver(name: name)
+            } else if holderState == .unheld {
+                mode = .unheld
             } else {
                 switch phases[id] {
                 case .connecting: mode = .connecting

@@ -56,6 +56,11 @@ public final class RelayLink: NSObject, @unchecked Sendable {
 
     /// Every decrypted frame, including the peer's `hello` ctl.
     public var onFrame: (@Sendable (Frame) -> Void)?
+    /// Like `onFrame`, adding the authenticated principal the frame was
+    /// routed from (the relay's serialized socket attachment, never payload
+    /// data). A host link uses this to gate holder-only frames; the principal
+    /// is nil only on a client link, whose sole peer is the host.
+    public var onFrameFrom: (@Sendable (Frame, String?) -> Void)?
     public var onState: (@Sendable (State) -> Void)?
     /// Authenticated relay control-plane metadata. The Durable Object owns the
     /// terminal directory; peer terminal content remains in binary E2EE frames.
@@ -669,7 +674,7 @@ public final class RelayLink: NSObject, @unchecked Sendable {
                         break
                     }
                 }
-                deliverLocked(frame)
+                deliverLocked(frame, from: peerPrincipalByTag[tag])
                 return
             }
 
@@ -696,9 +701,12 @@ public final class RelayLink: NSObject, @unchecked Sendable {
         }
     }
 
-    private func deliverLocked(_ frame: Frame) {
+    private func deliverLocked(_ frame: Frame, from principal: String?) {
         if let onFrame {
             callbackQueue.async { onFrame(frame) }
+        }
+        if let onFrameFrom {
+            callbackQueue.async { onFrameFrom(frame, principal) }
         }
     }
 
@@ -737,7 +745,7 @@ public final class RelayLink: NSObject, @unchecked Sendable {
         peerPrincipalByTag[tag] = principal
         peerTagByPrincipal[principal] = tag
         peerOrder.append(tag)
-        deliverLocked(hello)
+        deliverLocked(hello, from: principal)
         flushPendingClientFramesLocked()
     }
 

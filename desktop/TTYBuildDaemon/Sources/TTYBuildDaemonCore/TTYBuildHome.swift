@@ -29,6 +29,14 @@ public struct TTYBuildHome: Sendable {
     /// so installed hooks survive daemon rebuilds and relocations.
     public var binDirectory: URL { directory.appendingPathComponent("bin", isDirectory: true) }
     public var hookReporterURL: URL { binDirectory.appendingPathComponent("ttybuild-hook") }
+    /// The shipped attach client (docs/EXCLUSIVE_ATTACH_DESIGN.md §7),
+    /// installed here by the menu bar app so "Open in Terminal" scripts and
+    /// PATH symlinks survive app relocation.
+    public var attachClientURL: URL { binDirectory.appendingPathComponent("ttybuild-attach") }
+    /// Per-session `.command` launchers for "Open in Terminal".
+    public var openScriptsDirectory: URL {
+        directory.appendingPathComponent("open", isDirectory: true)
+    }
 
     public func ensureDirectoryExists() throws {
         try FileManager.default.createDirectory(

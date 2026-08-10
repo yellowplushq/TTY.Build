@@ -24,17 +24,22 @@ targets:
       - package: TTYBuildDaemon
         product: ttybuild-hook
         link: false
+      - package: TTYBuildDaemon
+        product: ttybuild-attach
+        link: false
       - package: Sparkle
     postBuildScripts:
-      - name: Embed ttybuild-hook reporter
+      - name: Embed ttybuild-hook reporter and ttybuild-attach client
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
-          cp "$BUILT_PRODUCTS_DIR/ttybuild-hook" \
-            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/ttybuild-hook"
-          codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" \
-            --options runtime \
-            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/ttybuild-hook"
+          for helper in ttybuild-hook ttybuild-attach; do
+            cp "$BUILT_PRODUCTS_DIR/$helper" \
+              "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/$helper"
+            codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" \
+              --options runtime \
+              "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/$helper"
+          done
     scheme:
       testTargets: []
     info:

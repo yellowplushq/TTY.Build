@@ -466,8 +466,11 @@ private final class WatchTerminalComputerConnection {
             dismissed = dismissed.filter { id, state in
                 list.contains { $0.id == id && $0.state == state }
             }
+        // The Watch projection is read-only (it never sends stdin/resize), so
+        // exclusive-holder state does not change what it renders.
         case .ready, .requestReplay, .create, .created, .close, .dismissAgent, .err,
-             .hooksStatus, .hookInstall, .hookUninstall, .updateStatus, .updateInstall:
+             .hooksStatus, .hookInstall, .hookUninstall, .updateStatus, .updateInstall,
+             .claim, .takeover:
             break
         }
         onChange?()
