@@ -49,6 +49,19 @@ final class TerminalManager {
     /// Every observed coding agent from every bound computer, in computer
     /// order (unsorted within a computer — presentation sorts).
     @Published private(set) var agentRows: [AgentRow] = []
+    /// Exclusive holder per terminal (docs/EXCLUSIVE_ATTACH_DESIGN.md).
+    /// Missing key = pre-holder daemon: fully interactive, no placeholder.
+    @Published private(set) var holders: [TerminalID: HolderInfo] = [:]
+
+    /// How one terminal relates to this device's interactivity.
+    enum HolderState: Equatable {
+        /// We hold it, or the daemon predates holders: type freely.
+        case interactive
+        /// A holder-aware daemon reports nobody holding: tap to attach.
+        case unheld
+        /// Someone else holds it: full-screen placeholder, tap to take over.
+        case takenOver(name: String?)
+    }
 
     enum Output {
         case replay(Data)
@@ -82,6 +95,11 @@ final class TerminalManager {
     private static let placementGrace: TimeInterval = 2
 
     private let pairingStore: PairingStore
+    /// Our relay principal, for `holders` comparisons (nil until paired).
+    private var clientID: String?
+    /// Read-only view for UI-side holder-state resolution against emitted
+    /// snapshots.
+    var clientPrincipal: String? { clientID }
     private var channels: [TerminalID: TerminalChannel] = [:]
     private var subscriptions: [String: Set<AnyCancellable>] = [:]
     /// req → computerID of our in-flight creates.
@@ -106,6 +124,7 @@ final class TerminalManager {
         do {
             guard let storedIdentity = try pairingStore.loadClientIdentity() else { return }
             identity = storedIdentity
+            clientID = identity.clientID
             bindings = try pairingStore.loadAll()
         } catch {
             // A corrupt or inaccessible Keychain value is not empty state.
@@ -145,6 +164,7 @@ final class TerminalManager {
         previousClientID: String?
     ) {
 
+        clientID = identity.clientID
         if let previousClientID, previousClientID != identity.clientID {
             // Every existing relay bearer belongs to the rejected identity.
             // Tear down connections, channels, terminal tabs, and pending
@@ -209,6 +229,17 @@ final class TerminalManager {
                 self.rebuildAgentRows()
             }
             .store(in: &cancellables)
+        connection.$holders
+            .sink { [weak self, weak connection] map in
+                guard let self, let connection else { return }
+                let cid = connection.id
+                var merged = self.holders.filter { $0.key.computerID != cid }
+                for (sid, holder) in map {
+                    merged[TerminalID(computerID: cid, sid: sid)] = holder
+                }
+                self.holders = merged
+            }
+            .store(in: &cancellables)
         subscriptions[connection.id] = cancellables
         connection.start()
     }
@@ -217,6 +248,7 @@ final class TerminalManager {
         subscriptions.removeValue(forKey: connection.id)
         connection.stop()
         computers.removeAll { $0.id == connection.id }
+        holders = holders.filter { $0.key.computerID != connection.id }
         let removed = terminals.filter { $0.id.computerID == connection.id }.map(\.id)
         for id in removed { dropTerminal(id) }
         pendingCreates = pendingCreates.filter { $0.value != connection.id }
@@ -395,15 +427,47 @@ final class TerminalManager {
         computer(id: computerID)?.dismissAgent(id: agentID)
     }
 
+    // MARK: - Exclusive hold
+
+    /// Resolves against *emitted* values (a sink must never read @Published
+    /// state back off the manager — emission happens during willSet).
+    static func holderState(
+        for id: TerminalID, in holders: [TerminalID: HolderInfo], clientID: String?
+    ) -> HolderState {
+        guard let holder = holders[id] else { return .interactive }
+        switch holder.kind {
+        case .none:
+            return .unheld
+        case .client where holder.principal == clientID:
+            return .interactive
+        case .client:
+            return .takenOver(name: holder.name ?? "another device")
+        case .attach:
+            return .takenOver(name: holder.name ?? "Terminal")
+        }
+    }
+
+    func holderState(_ id: TerminalID) -> HolderState {
+        Self.holderState(for: id, in: holders, clientID: clientID)
+    }
+
+    /// Unconditional take-over (tap on the placeholder). The confirmation is
+    /// the `takeover` broadcast flipping `holders`.
+    func claimTerminal(_ id: TerminalID) {
+        computer(id: id.computerID)?.claimSession(id: id.sid)
+    }
+
     // MARK: - Terminal I/O passthrough
 
     func sendStdin(_ id: TerminalID, data: Data) {
-        guard activeID == id, terminal(id)?.closing != true else { return }
+        guard activeID == id, terminal(id)?.closing != true,
+              holderState(id) == .interactive
+        else { return }
         channels[id]?.sendStdin(data)
     }
 
     func sendResize(_ id: TerminalID, cols: UInt16, rows: UInt16) {
-        guard activeID == id else { return }
+        guard activeID == id, holderState(id) == .interactive else { return }
         channels[id]?.sendResize(cols: cols, rows: rows)
     }
 

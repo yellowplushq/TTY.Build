@@ -81,7 +81,11 @@ Do not assume that enabling the `APP_GROUPS` capability proves assignment.
   service API types.
 - `desktop/TTYBuildDaemon/`: macOS daemon and `ttybuild` command-line client. The
   `ttybuild` CLI is for internal debugging only — never ship it in external
-  releases; the menu bar app is the only released desktop frontend.
+  releases; the menu bar app is the only released desktop frontend. The
+  attach-only `ttybuild-attach` client (docs/EXCLUSIVE_ATTACH_DESIGN.md) is
+  the one deliberate exception: it is embedded in the menu bar app bundle
+  for "Open in Terminal" and the PATH install, and must never grow
+  serve/pair/reset surface.
 - `desktop/TTYBuildMenubar/`: macOS menu bar UI.
 - `ios/`: iPhone app, iPhone widgets, Live Activity/Dynamic Island, Watch app,
   Watch widgets, shared status code, entitlements, and XcodeGen project source.

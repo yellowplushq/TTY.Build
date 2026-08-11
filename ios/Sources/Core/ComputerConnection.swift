@@ -23,7 +23,8 @@ final class ComputerConnection {
     }
 
     let binding: ComputerBinding
-    private let clientID: String
+    /// Our relay principal; `holders` entries naming it mean *we* hold.
+    let clientID: String
     private let clientToken: String
     /// Stable server-issued identity.
     var id: String { binding.computerID }
@@ -37,6 +38,11 @@ final class ComputerConnection {
     /// Latest coding-agent snapshot from the daemon's hooks; cleared with the
     /// session list when the host goes offline.
     @Published private(set) var agents: [AgentInfo] = []
+    /// Exclusive interactive holder per session id, from `takeover` frames
+    /// (docs/EXCLUSIVE_ATTACH_DESIGN.md). A session with NO entry belongs to
+    /// a pre-holder daemon and stays fully interactive; holder-aware daemons
+    /// broadcast an entry (including `none`) for every session.
+    @Published private(set) var holders: [Int: HolderInfo] = [:]
     @Published private(set) var roundTripTime: TimeInterval?
 
     let events = PassthroughSubject<Event, Never>()
@@ -115,6 +121,14 @@ final class ComputerConnection {
         control.send(.dismissAgent(agentId: id))
     }
 
+    /// Claims exclusive interactive hold of a session (unconditional,
+    /// last-writer-wins). The state answer is the broadcast `takeover`; an
+    /// old daemon silently drops the unknown kind, which is fine — it never
+    /// gates stdin either.
+    func claimSession(id: Int) {
+        control.send(.claim(id: id, req: nil))
+    }
+
     // MARK: - Remote hook and update management (PROTOCOL.md §5)
 
     /// Asks the daemon for every agent's hook install state. The reply (or a
@@ -168,6 +182,11 @@ final class ComputerConnection {
             if let host, !host.isEmpty { hostName = host }
         case .sessions(let list):
             peerSessions = list
+            // Prune holders of removed sessions. Safe against ordering: a
+            // create's `takeover` precedes the `sessions` broadcast listing
+            // it, so a fresh entry is never dropped here.
+            let ids = Set(list.map(\.id))
+            holders = holders.filter { ids.contains($0.key) }
             applyDirectory()
         case .agents(let list):
             peerAgents = list
@@ -186,6 +205,8 @@ final class ComputerConnection {
             }
             applyDirectory()
             events.send(.exit(id: id, code: code))
+        case .takeover(let id, let holder):
+            holders[id] = holder
         case .err(let msg, let req):
             events.send(.error(msg: msg, req: req))
         case .hooksStatus(let list, let req):
@@ -193,7 +214,7 @@ final class ComputerConnection {
         case .updateStatus(let info, let req):
             if let info { events.send(.updateStatus(info: info, req: req)) }
         case .create, .close, .dismissAgent, .ready, .requestReplay,
-             .hookInstall, .hookUninstall, .updateInstall:
+             .hookInstall, .hookUninstall, .updateInstall, .claim:
             break // client→host only; ignore if mirrored back
         }
     }
@@ -219,6 +240,7 @@ final class ComputerConnection {
             peerAgents.removeAll(keepingCapacity: true)
             sessions = []
             agents = []
+            holders = [:]
             if wasOnline {
                 events.send(.offline(removedTerminalCount: removedCount))
             }

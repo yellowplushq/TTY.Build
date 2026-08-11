@@ -50,8 +50,10 @@ public final class Daemon: @unchecked Sendable {
 
     public let home: TTYBuildHome
     private let sessions: SessionManager
+    private let arbiter = AttachArbiter()
     private let relay: RelayHostClient
     private let agents: AgentMonitor
+    private let attach: AttachServer
     private var controlServer: ControlServer?
     /// Held from identity load/registration until the control socket listens.
     /// An offline CLI that lost the initial socket race blocks on this lock,
@@ -100,7 +102,10 @@ public final class Daemon: @unchecked Sendable {
             try home.save(sessionCounter: id)
         }
         sessions = SessionManager(options: sessionOptions)
-        relay = RelayHostClient(identity: identity, sessions: sessions, home: home)
+        relay = RelayHostClient(
+            identity: identity, sessions: sessions, arbiter: arbiter, home: home
+        )
+        attach = AttachServer(sessions: sessions, arbiter: arbiter)
         // The monitor re-resolves ownership on its own 2 s sweep, so it needs
         // no session-event subscription (RelayHostClient owns the single
         // SessionManager event consumer).
@@ -269,6 +274,9 @@ public final class Daemon: @unchecked Sendable {
             return .ok([
                 "agents": .array(agents.list().map(Self.encode(agent:)))
             ])
+
+        case "attach":
+            return attach.response(for: request)
 
         case "status":
             let state = relay.state

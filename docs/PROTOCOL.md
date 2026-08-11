@@ -479,6 +479,22 @@ After `ready` promotes the tag, the control channel accepts:
 - `create {cwd,cols,rows,req?}` / `created {id,req?}`
 - `close {id}`, `title {id,title}`, `exit {id,code}`
 - `err {msg,req?}`
+- `claim {id,req?}` — client to host: take exclusive interactive hold of a
+  session (docs/EXCLUSIVE_ATTACH_DESIGN.md). The holder becomes the sender's
+  authenticated principal — never a payload-supplied identity. Claims are
+  unconditional and last-writer-wins; the state answer is the broadcast
+  `takeover`, and failures answer `err {req}`. Only the holder's `stdin` and
+  `resize` are applied by the daemon; frames from any other source are
+  dropped.
+- `takeover {id,holder:{kind,principal?,name?}}` — host to client: a
+  session's holder changed. `kind` is `attach|client|none` (`attach` is a
+  local terminal on the Mac; unknown kinds must be treated as "someone
+  else"). `principal` identifies client holders (and attach holders as
+  `attach:<conn>` for the local stream); `name` is a best-effort display
+  label. Broadcast on every change and replayed for EVERY listed session
+  after `sessions` on each client hello — a session with no `takeover` ever
+  observed belongs to a pre-holder daemon and stays fully interactive.
+  The initial holder of a session is its creator.
 
 Remote hook and desktop-update management (the iPhone computer detail page)
 adds five request/reply kinds. Every request carries a client-chosen `req`
@@ -651,8 +667,29 @@ remain the durable fallback if a transient rich update is lost.
 ## 7. Desktop local control
 
 `~/.tty.build/ttybuild.sock` carries newline-delimited JSON requests for `ls`, `new`,
-`kill`, `pair`, `cancelPair`, `status`, `agent-event`, and `agents`. Responses
-use `{"ok":true,...}` or `{"ok":false,"err":"..."}`.
+`kill`, `pair`, `cancelPair`, `status`, `agent-event`, `agents`, and `attach`.
+Responses use `{"ok":true,...}` or `{"ok":false,"err":"..."}`.
+
+### 7.1 Attach upgrade
+
+`{"cmd":"attach","id":N}` (or `{"cmd":"attach","new":true,"cwd"?,"cols"?,
+"rows"?}` to create-and-attach) answers
+`{"ok":true,"id":N,"title":"…","alive":bool,"conn":C}` and then upgrades the
+connection: it stops being NDJSON and both sides speak length-prefixed
+plaintext frames (`u32 LE length || frame`, §5 codec, 1 MiB frame cap) until
+the socket closes. The stream carries `stdin`/`stdout`/`resize`/`replay`
+plus ctl `claim`/`requestReplay` (client to daemon) and
+`takeover`/`title`/`exit`/`err` (daemon to client), with the same
+resize-before-replay ordering as the relay path. No E2EE: the socket is the
+same-user 0600 control socket.
+
+Attaching claims the session (holder `attach:<conn>`, labelled with the
+attaching terminal app resolved from the socket peer pid); each attach
+connection is its own holder, exclusive against other terminals too. Socket
+close releases the hold to `none`. A `claim` on the stream re-takes the hold
+and answers with a fresh `takeover` + `resize` + `replay`. The shipped
+`ttybuild-attach` client (embedded in the menu bar app; "Open in Terminal")
+is the canonical consumer.
 
 `agent-event` is sent by the `ttybuild-hook` reporter (installed into coding
 agents' hook settings by `ttybuild hooks install` or the menu bar app):

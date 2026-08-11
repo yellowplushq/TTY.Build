@@ -249,6 +249,17 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Opens the user's default terminal attached to the session with
+    /// exclusive hold (docs/EXCLUSIVE_ATTACH_DESIGN.md §6).
+    func openSessionInTerminal(_ id: Int) {
+        lastError = nil
+        do {
+            try TerminalOpener.openInTerminal(sessionId: id)
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     // MARK: Reverse pairing (enrollment stamp)
 
     /// The install script and paired downloads leave the enrollment code as

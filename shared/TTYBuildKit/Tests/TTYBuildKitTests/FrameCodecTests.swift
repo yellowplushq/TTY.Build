@@ -161,6 +161,13 @@ final class FrameCodecTests: XCTestCase {
             ), req: nil),
             .updateInstall(req: 11),
             .updateInstall(req: nil),
+            .claim(id: 3, req: 0xF00D),
+            .claim(id: 3, req: nil),
+            .takeover(id: 3, holder: HolderInfo(kind: .attach, name: "iTerm2")),
+            .takeover(id: 3, holder: HolderInfo(
+                kind: .client, principal: clientPrincipal, name: "iPhone"
+            )),
+            .takeover(id: 3, holder: HolderInfo(kind: .none)),
         ]
         for message in messages {
             let frame = try Frame.control(message)
@@ -272,6 +279,41 @@ final class FrameCodecTests: XCTestCase {
 
     func testUnknownControlKindThrows() {
         XCTAssertThrowsError(try ControlMessage(jsonData: Data(#"{"t":"nope"}"#.utf8)))
+    }
+
+    func testClaimAndTakeoverWireShapes() throws {
+        let claim = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: ControlMessage.claim(id: 8, req: 12).jsonData()
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(claim["t"] as? String, "claim")
+        XCTAssertEqual(claim["id"] as? Int, 8)
+        XCTAssertEqual(claim["req"] as? Int, 12)
+        XCTAssertEqual(claim.count, 3)
+
+        let takeover = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: ControlMessage.takeover(
+                    id: 8, holder: HolderInfo(kind: .attach, name: "iTerm2")
+                ).jsonData()
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(takeover["t"] as? String, "takeover")
+        XCTAssertEqual(takeover["id"] as? Int, 8)
+        let holder = try XCTUnwrap(takeover["holder"] as? [String: Any])
+        XCTAssertEqual(holder["kind"] as? String, "attach")
+        XCTAssertEqual(holder["name"] as? String, "iTerm2")
+        XCTAssertNil(holder["principal"], "nil principal must be omitted")
+    }
+
+    func testUnknownHolderKindDecodesAsAttach() throws {
+        let json = Data(#"{"t":"takeover","id":1,"holder":{"kind":"hologram","name":"X"}}"#.utf8)
+        guard case let .takeover(_, holder) = try ControlMessage(jsonData: json) else {
+            return XCTFail("expected takeover message")
+        }
+        XCTAssertEqual(holder.kind, .attach)
+        XCTAssertEqual(holder.name, "X")
     }
 
     func testHooksAndUpdateWireShapes() throws {

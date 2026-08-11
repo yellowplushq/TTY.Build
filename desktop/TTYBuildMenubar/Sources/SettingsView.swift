@@ -9,6 +9,7 @@ struct SettingsView: View {
     enum Page: CaseIterable, Hashable {
         case permissions
         case agents
+        case commandLine
         case updates
         case about
 
@@ -16,6 +17,7 @@ struct SettingsView: View {
             switch self {
             case .permissions: "Permissions"
             case .agents: "Coding Agents"
+            case .commandLine: "Command Line"
             case .updates: "Updates"
             case .about: "About"
             }
@@ -25,6 +27,7 @@ struct SettingsView: View {
             switch self {
             case .permissions: "lock.shield"
             case .agents: "sparkles"
+            case .commandLine: "terminal"
             case .updates: "arrow.down.circle"
             case .about: "info.circle"
             }
@@ -54,6 +57,8 @@ struct SettingsView: View {
                 PermissionsPage(permissions: permissions)
             case .agents:
                 AgentsPage(agentHooks: agentHooks)
+            case .commandLine:
+                CommandLinePage()
             case .updates:
                 UpdatesPage(updaterModel: updaterModel)
             case .about:
@@ -74,10 +79,80 @@ struct SettingsView: View {
             // Dev affordance: land on a specific page for snapshots.
             switch ProcessInfo.processInfo.environment["TTYBUILD_SETTINGS_PAGE"] {
             case "agents": selection = .agents
+            case "commandLine": selection = .commandLine
             case "updates": selection = .updates
             case "about": selection = .about
             case "permissions": selection = .permissions
             default: break
+            }
+        }
+    }
+
+    // MARK: - Command line
+
+    private struct CommandLinePage: View {
+        @State private var installedAt: URL?
+        @State private var lastError: String?
+
+        var body: some View {
+            Form {
+                Section {
+                    Text(
+                        """
+                        `ttybuild-attach <id>` attaches any terminal to a \
+                        TTY.Build session with exclusive hold — the same \
+                        takeover the menu's "Open in Terminal" performs. \
+                        Installing links the command onto your PATH.
+                        """
+                    )
+                    .foregroundStyle(TTYBuildTheme.secondaryContent)
+                }
+
+                Section {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(TerminalOpener.installedCommandName)
+                                .font(TTYBuildTheme.emphasizedText)
+                            Text(statusLine)
+                                .font(.caption)
+                                .foregroundStyle(TTYBuildTheme.secondaryContent)
+                        }
+                        Spacer()
+                        Button(installedAt == nil ? "Install" : "Reinstall") {
+                            install()
+                        }
+                    }
+                } footer: {
+                    if let lastError {
+                        Text(lastError)
+                            .font(.caption)
+                            .foregroundStyle(TTYBuildTheme.critical)
+                    } else if let installedAt,
+                              installedAt.path.hasPrefix(
+                                  FileManager.default.homeDirectoryForCurrentUser.path
+                              )
+                    {
+                        Text("Make sure \(installedAt.deletingLastPathComponent().path) is on your PATH.")
+                            .font(.caption)
+                            .foregroundStyle(TTYBuildTheme.secondaryContent)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .onAppear { installedAt = TerminalOpener.installedCommandLocation() }
+        }
+
+        private var statusLine: String {
+            installedAt.map { "Installed at \($0.path)" } ?? "Not installed"
+        }
+
+        private func install() {
+            lastError = nil
+            do {
+                installedAt = try TerminalOpener.installCommandLineTool()
+            } catch {
+                lastError = error.localizedDescription
+                installedAt = TerminalOpener.installedCommandLocation()
             }
         }
     }

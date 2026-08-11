@@ -3,13 +3,18 @@ import Foundation
 
 /// Newline-delimited JSON request on the daemon's unix control socket
 /// (PROTOCOL.md §7): `{"cmd":"ls"|"kill"|"pair"|"cancelPair"|"status"|"new"|
-/// "agent-event"|"agents", "id":N?}`. `reset` extends `pair` for
+/// "agent-event"|"agents"|"attach", "id":N?}`. `reset` extends `pair` for
 /// `ttybuild pair --reset`; the `agent`… fields extend `agent-event` for the
-/// ttybuild-hook reporter.
+/// ttybuild-hook reporter; `new`/`cwd`/`cols`/`rows` extend `attach` for
+/// create-and-attach (docs/EXCLUSIVE_ATTACH_DESIGN.md §4).
 public struct ControlRequest: Decodable, Sendable {
     public var cmd: String
     public var id: Int?
     public var reset: Bool?
+    // attach
+    public var new: Bool?
+    public var cols: Int?
+    public var rows: Int?
     /// Hook reporters are one-way. Avoid writing an acknowledgement after
     /// their bounded client has already closed the socket.
     public var noReply: Bool?
@@ -52,11 +57,16 @@ public enum ControlValue: Sendable {
 public enum ControlResponse: Sendable {
     case ok([String: ControlValue])
     case error(String)
+    /// Reply with the ok form of `fields`, then hand the connection over to
+    /// `serve`, which runs on the connection's thread until the streaming
+    /// session ends (EXCLUSIVE_ATTACH_DESIGN.md §4). The server stops parsing
+    /// NDJSON on the fd and closes it when `serve` returns.
+    case upgrade(fields: [String: ControlValue], serve: @Sendable (Int32) -> Void)
 
     func encoded() -> Data {
         var object: [String: Any]
         switch self {
-        case .ok(let fields):
+        case .ok(let fields), .upgrade(let fields, _):
             object = fields.mapValues(\.jsonObject)
             object["ok"] = true
         case .error(let message):
@@ -186,6 +196,18 @@ public final class ControlServer: @unchecked Sendable {
                 guard !line.isEmpty else { continue }
                 if let request = try? JSONDecoder().decode(ControlRequest.self, from: line) {
                     let response = handler(request)
+                    if case let .upgrade(_, serve) = response {
+                        guard writeAll(fd: fd, data: response.encoded()) else { return }
+                        // Streaming mode: no NDJSON timeouts; the handler owns
+                        // the fd until it returns (then the thread closes it).
+                        var off = timeval(tv_sec: 0, tv_usec: 0)
+                        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &off,
+                                   socklen_t(MemoryLayout<timeval>.size))
+                        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &off,
+                                   socklen_t(MemoryLayout<timeval>.size))
+                        serve(fd)
+                        return
+                    }
                     if request.noReply == true { continue }
                     guard writeAll(fd: fd, data: response.encoded()) else { return }
                 } else {
