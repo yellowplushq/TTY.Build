@@ -219,7 +219,9 @@ final class ComputerConnection {
         }
     }
 
-    private func handle(metadata: RelayMetadata) {
+    /// Internal (not private) so unit tests can drive the directory state
+    /// with crafted metadata, mirroring `handle(frame:)`.
+    func handle(metadata: RelayMetadata) {
         guard case .terminalDirectory(let directory) = metadata else { return }
         if let directoryRevision, directory.revision <= directoryRevision { return }
 

@@ -445,7 +445,7 @@ final class HomeViewController: UIViewController {
                 dimmed: false
             )
         }
-        let dead = !terminal.info.alive || terminal.closing
+        let dead = !terminal.info.alive
         return HomeRowContent(
             indicator: dead ? .dead : .none,
             primary: terminal.info.title,
