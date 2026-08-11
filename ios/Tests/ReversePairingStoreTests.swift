@@ -68,7 +68,26 @@ final class ReversePairingStoreTests: XCTestCase {
 
         _ = try await store.ensureToken(serviceURL: serviceURL)
         let after = await store.pendingClaims(serviceURL: serviceURL)
-        XCTAssertEqual(after.map(\.claimID), [repeating("c")])
+        XCTAssertEqual(after?.map(\.claimID), [repeating("c")])
+    }
+
+    func testPendingClaimsFetchFailureIsNilNotEmpty() async throws {
+        // A transient network failure must be distinguishable from "no
+        // claims": publishing [] on error would hide a claim a push just
+        // announced (and could retire a live confirmation card).
+        let memory = MemoryState()
+        let api = MockAPI(token: try makeToken(code: "01234567"))
+        api.claimsError = URLError(.notConnectedToInternet)
+        let store = makeStore(memory: memory, api: api)
+        _ = try await store.ensureToken(serviceURL: serviceURL)
+
+        let failed = await store.pendingClaims(serviceURL: serviceURL)
+        XCTAssertNil(failed)
+
+        api.claimsError = nil
+        api.claims = [makeClaim(id: repeating("c"))]
+        let recovered = await store.pendingClaims(serviceURL: serviceURL)
+        XCTAssertEqual(recovered?.map(\.claimID), [repeating("c")])
     }
 
     func testConfirmAndRejectForwardTheClaimID() async throws {
@@ -139,6 +158,7 @@ final class ReversePairingStoreTests: XCTestCase {
         var identityRequests = 0
         var recreations = 0
         var claims: [ReversePairingClaim] = []
+        var claimsError: Error?
         var confirmed: [String] = []
         var rejected: [String] = []
         var reusedKeys: [Data?] = []
@@ -171,7 +191,8 @@ final class ReversePairingStoreTests: XCTestCase {
         func reversePairingClaims(
             as client: ClientIdentity
         ) async throws -> [ReversePairingClaim] {
-            claims
+            if let claimsError { throw claimsError }
+            return claims
         }
 
         func confirmReversePairingClaim(claimID: String, as client: ClientIdentity) async throws {

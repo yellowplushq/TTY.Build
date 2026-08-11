@@ -57,9 +57,23 @@ final class ReversePairingStore {
     private let stateWriter: StateWriter
     private var registrationTask: Task<ReversePairingToken, Error>?
 
+    /// Session for pairing traffic: a claim fetch triggered by a
+    /// notification tap or cold start often races the radio waking up, so
+    /// wait briefly for connectivity instead of failing instantly — bounded,
+    /// because the UI retries on its own cadence.
+    static let pairingURLSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = 10
+        configuration.timeoutIntervalForResource = 20
+        return URLSession(configuration: configuration)
+    }()
+
     init(
         pairingStore: PairingStore,
-        apiFactory: @escaping APIFactory = { TTYBuildServiceAPI(serviceURL: $0) },
+        apiFactory: @escaping APIFactory = {
+            TTYBuildServiceAPI(serviceURL: $0, session: ReversePairingStore.pairingURLSession)
+        },
         stateReader: @escaping StateReader = { try ReversePairingStore.readKeychainState() },
         stateWriter: @escaping StateWriter = { try ReversePairingStore.writeKeychainState($0) }
     ) {
@@ -137,14 +151,16 @@ final class ReversePairingStore {
     }
 
     /// Completed computer claims waiting for the user's decision. Empty when
-    /// the installation has no identity or token yet, or on any failure —
-    /// the next launch or foreground retries.
-    func pendingClaims(serviceURL: URL) async -> [ReversePairingClaim] {
+    /// the installation has no identity or token yet (nothing can be
+    /// pending); nil when the fetch failed — callers must not treat a
+    /// failure as "no claims", or a transient cold-start network error
+    /// silently hides a claim the push just announced.
+    func pendingClaims(serviceURL: URL) async -> [ReversePairingClaim]? {
         guard let state = try? loadState(), state.serviceURL == serviceURL,
               let identity = try? await identityProvider(serviceURL)
         else { return [] }
         let api = apiFactory(serviceURL)
-        return (try? await api.reversePairingClaims(as: identity)) ?? []
+        return try? await api.reversePairingClaims(as: identity)
     }
 
     /// Decrypts the claim envelope with the durable token key. Pure local

@@ -109,14 +109,74 @@ final class AppServices {
         return "curl -fsSL https://tty.build/\(token.code.digits) | bash"
     }
 
+    /// Fetch generation: concurrent fetches (launch + foreground + push tap
+    /// + polling) race, and only the newest one may publish — otherwise a
+    /// slow stale response overwrites a fresher list.
+    private var claimsFetchGeneration: UInt64 = 0
+    /// Claims the user already confirmed or rejected in this process. A
+    /// fetch racing the server-side delete could otherwise resurrect the
+    /// card the user just dismissed.
+    private var locallyResolvedClaimIDs: Set<String> = []
+    private var claimPollingTask: Task<Void, Never>?
+    private var expectedClaimTask: Task<Void, Never>?
+
+    /// Fetches pending claims and publishes on success; a failed fetch
+    /// publishes nothing (never masks a known claim with an error), and
+    /// returns nil so callers with a reason to insist can retry.
+    @discardableResult
+    private func fetchAndPublishClaims() async -> [ReversePairingClaim]? {
+        claimsFetchGeneration &+= 1
+        let generation = claimsFetchGeneration
+        guard let claims = await reversePairing.pendingClaims(
+            serviceURL: Self.pairingServiceURL
+        ) else { return nil }
+        let visible = claims.filter { !locallyResolvedClaimIDs.contains($0.claimID) }
+        guard generation == claimsFetchGeneration else { return visible }
+        pendingReverseClaims.send(visible)
+        return visible
+    }
+
     func refreshPendingReverseClaims() {
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            let claims = await reversePairing.pendingClaims(
-                serviceURL: Self.pairingServiceURL
-            )
-            pendingReverseClaims.send(claims)
+            await self?.fetchAndPublishClaims()
         }
+    }
+
+    /// Refresh driven by a pairing-claim push (delivery or tap): the push
+    /// proves a claim exists server-side, so a failed or empty fetch retries
+    /// with backoff instead of giving up — a cold-started radio should cost
+    /// a beat, not a full background/foreground cycle.
+    func refreshPendingReverseClaimsExpectingClaim() {
+        expectedClaimTask?.cancel()
+        expectedClaimTask = Task { @MainActor [weak self] in
+            for delay in [0.0, 1.0, 2.0, 4.0, 8.0] {
+                if delay > 0 {
+                    try? await Task.sleep(for: .seconds(delay))
+                }
+                guard let self, !Task.isCancelled else { return }
+                if let claims = await self.fetchAndPublishClaims(), !claims.isEmpty {
+                    return
+                }
+            }
+        }
+    }
+
+    /// While the connect-computer screen is visible the desktop's claim is
+    /// expected any second — the user is literally watching for it — so poll
+    /// aggressively instead of waiting for the push round-trip.
+    func beginReversePairingClaimPolling() {
+        guard claimPollingTask == nil else { return }
+        claimPollingTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                await self?.fetchAndPublishClaims()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    func endReversePairingClaimPolling() {
+        claimPollingTask?.cancel()
+        claimPollingTask = nil
     }
 
     /// Confirms one claim: decrypt, commit the binding locally, then create
@@ -151,18 +211,25 @@ final class AppServices {
         }
         installSharedCredential()
         scheduleStatusRefresh(immediate: true)
+        locallyResolvedClaimIDs.insert(claim.claimID)
         pendingReverseClaims.send(
             pendingReverseClaims.value.filter { $0.claimID != claim.claimID }
         )
     }
 
-    func rejectReverseClaim(_ claim: ReversePairingClaim) async throws {
-        try await reversePairing.rejectClaim(
-            claimID: claim.claimID, serviceURL: Self.pairingServiceURL
-        )
+    /// Rejection resolves locally first — the card must never re-present
+    /// because the server-side delete is slow or unreachable (an undeleted
+    /// claim just expires). The delete itself is fire-and-forget.
+    func rejectReverseClaim(_ claim: ReversePairingClaim) {
+        locallyResolvedClaimIDs.insert(claim.claimID)
         pendingReverseClaims.send(
             pendingReverseClaims.value.filter { $0.claimID != claim.claimID }
         )
+        Task { @MainActor [reversePairing] in
+            try? await reversePairing.rejectClaim(
+                claimID: claim.claimID, serviceURL: Self.pairingServiceURL
+            )
+        }
     }
 
     // MARK: - Pairing-claim notifications

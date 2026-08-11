@@ -48,8 +48,28 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any]
     ) async -> UIBackgroundFetchResult {
-        services.refreshPendingReverseClaims()
+        refreshClaims(pairingClaim: Self.isPairingClaimPush(userInfo))
         return .newData
+    }
+
+    /// A pairing-claim push proves a claim exists server-side, so its
+    /// refresh insists (retry with backoff) — the fetch it triggers often
+    /// races a cold-started radio, and a single silent failure was how a
+    /// tapped notification could open the app to no card. Other push kinds
+    /// keep the single best-effort refresh.
+    private func refreshClaims(pairingClaim: Bool) {
+        if pairingClaim {
+            services.refreshPendingReverseClaimsExpectingClaim()
+        } else {
+            services.refreshPendingReverseClaims()
+        }
+    }
+
+    /// Parsed outside any actor hop: `userInfo` is not Sendable, so only
+    /// this Bool crosses into the main-actor refresh.
+    nonisolated static func isPairingClaimPush(_ userInfo: [AnyHashable: Any]) -> Bool {
+        (userInfo["ttybuild"] as? [AnyHashable: Any])?["kind"] as? String
+            == "reverse-pairing-claim"
     }
 }
 
@@ -62,8 +82,11 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler:
             @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        let pairingClaim = Self.isPairingClaimPush(
+            notification.request.content.userInfo
+        )
         Task { @MainActor in
-            self.services.refreshPendingReverseClaims()
+            self.refreshClaims(pairingClaim: pairingClaim)
         }
         completionHandler([.banner, .sound])
     }
@@ -73,8 +96,11 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        let pairingClaim = Self.isPairingClaimPush(
+            response.notification.request.content.userInfo
+        )
         Task { @MainActor in
-            self.services.refreshPendingReverseClaims()
+            self.refreshClaims(pairingClaim: pairingClaim)
         }
         completionHandler()
     }

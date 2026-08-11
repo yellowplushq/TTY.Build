@@ -1184,6 +1184,13 @@ final class MainViewController: UIViewController {
         }
         controller.installCommandProvider = { await services.installCommand() }
         controller.onAppearForPairing = { services.enablePairingNotifications() }
+        controller.onVisibilityChanged = { visible in
+            if visible {
+                services.beginReversePairingClaimPolling()
+            } else {
+                services.endReversePairingClaimPolling()
+            }
+        }
         controller.modalPresentationStyle = .fullScreen
         present(controller, animated: true)
     }
@@ -1197,6 +1204,17 @@ final class MainViewController: UIViewController {
     /// One card at a time; the count of further claims shows on the card and
     /// the next one presents as soon as this one resolves.
     private func presentReversePairingCardIfNeeded(claims: [ReversePairingClaim]) {
+        // A presented card whose claim vanished from a successful refresh is
+        // stale (expired, or handled elsewhere): retire it instead of leaving
+        // a sheet whose Connect can only fail. Failed fetches never publish,
+        // so an offline moment cannot retire a live card.
+        if let card = reversePairingCard,
+           !card.isWorking,
+           !claims.contains(where: { $0.claimID == card.claimID })
+        {
+            card.dismiss(animated: true)
+            return // onDismissed presents any newer claim
+        }
         guard reversePairingCard == nil, let claim = claims.first else { return }
         if let presented = presentedViewController {
             // The manual code-entry screen just became obsolete — the claim
@@ -1243,12 +1261,12 @@ final class MainViewController: UIViewController {
             }
         }
         card.onReject = { [weak card] claim in
-            // Dismiss immediately; the server-side delete is fired behind it
-            // and an unreachable service just lets the claim expire instead.
+            // Resolve locally BEFORE dismissing: onDismissed re-reads the
+            // pending list, and a claim still present there would re-present
+            // the card the user just rejected. The server-side delete runs
+            // behind; an unreachable service just lets the claim expire.
+            services.rejectReverseClaim(claim)
             card?.dismiss(animated: true)
-            Task { @MainActor in
-                try? await services.rejectReverseClaim(claim)
-            }
         }
         card.onDismissed = { [weak self] in
             self?.reversePairingCard = nil
