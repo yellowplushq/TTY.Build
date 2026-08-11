@@ -138,7 +138,9 @@ public final class TTYLiveActivityController {
     public func synchronize(with snapshot: TTYStatusSnapshot) async throws {
         StatusSharedStore.saveSnapshot(snapshot)
         // The activity lives while anything is active: a running TTY or a
-        // running/waiting/recently-done agent (the Worker uses the same rule).
+        // running/waiting/done agent (the Worker uses the same rule). A done
+        // agent counts until the user dismisses it — completions stay
+        // presented until acted on, never timed out.
         let totalActive =
             snapshot.totalRunning + snapshot.agentsRunning
             + snapshot.agentsWaiting + snapshot.agentsDone

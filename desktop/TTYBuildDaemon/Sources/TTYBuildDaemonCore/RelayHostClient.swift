@@ -457,17 +457,14 @@ public final class RelayHostClient: @unchecked Sendable {
         }
     }
 
-    /// A finished agent keeps counting toward the server-visible aggregate
-    /// for ten minutes: long enough that the Live Activity and widgets can
-    /// present the completion, short enough that a forgotten completion does
-    /// not occupy them forever. The user can always end it sooner with the
-    /// dismiss action, which removes the record entirely.
-    static let doneActivityLifetime: TimeInterval = 600
     static let runningActivityUpdateFloor: TimeInterval = 10
 
-    static func agentCounts(
-        of list: [AgentInfo], now: Date = .now
-    ) -> RelayMetadata.AgentCounts {
+    /// A finished agent keeps counting toward the server-visible aggregate
+    /// (Live Activity, widgets) until its record goes away — there is no
+    /// time-based clearance. The record is removed by the user's dismiss
+    /// action, superseded by the agent's next event, or garbage-collected
+    /// with the rest of the registry (process exit, monitor TTLs).
+    static func agentCounts(of list: [AgentInfo]) -> RelayMetadata.AgentCounts {
         var running = 0, waiting = 0, done = 0
         for agent in list {
             switch agent.state {
@@ -475,10 +472,7 @@ public final class RelayHostClient: @unchecked Sendable {
             // Error parks the agent on the user just like waiting; the
             // server-visible aggregate does not distinguish them.
             case .waiting, .error: waiting += 1
-            case .done:
-                if now.timeIntervalSince1970 - agent.updatedAt < doneActivityLifetime {
-                    done += 1
-                }
+            case .done: done += 1
             }
         }
         let cap = RelayMetadata.AgentCounts.maxCount

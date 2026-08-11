@@ -98,8 +98,7 @@ final class AgentActivityTests: XCTestCase {
         )
     }
 
-    func testAgentCountsIncludeOnlyRecentFinishedAgents() {
-        let now = Date(timeIntervalSince1970: 1_000)
+    func testAgentCountsKeepFinishedAgentsRegardlessOfAge() {
         let list = [
             info(id: "a", state: .running),
             info(id: "b", state: .waiting),
@@ -108,10 +107,10 @@ final class AgentActivityTests: XCTestCase {
             info(id: "e", state: .done, updatedAt: 300),
         ]
         XCTAssertEqual(
-            RelayHostClient.agentCounts(of: list, now: now),
-            RelayMetadata.AgentCounts(running: 1, waiting: 2, done: 1)
+            RelayHostClient.agentCounts(of: list),
+            RelayMetadata.AgentCounts(running: 1, waiting: 2, done: 2)
         )
-        XCTAssertEqual(RelayHostClient.agentCounts(of: [], now: now), .zero)
+        XCTAssertEqual(RelayHostClient.agentCounts(of: []), .zero)
     }
 
     func testOnlyRunningStateEdgesBypassTheRefreshFloor() {
