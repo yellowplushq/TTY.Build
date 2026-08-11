@@ -10,6 +10,7 @@ struct TTYBuildCLI: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ttybuild",
         abstract: "TTY.Build — terminal sessions you can take over from anywhere.",
+        version: TTYBuildVersion.current,
         subcommands: [
             Serve.self, Attach.self, Ls.self, New.self, Kill.self, Pair.self,
             Status.self, Agents.self, Hooks.self,

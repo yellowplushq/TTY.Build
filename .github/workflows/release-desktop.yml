@@ -93,11 +93,21 @@ jobs:
           codesign --force --options runtime --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" \
             "$sparkle_contents/Updater.app"
           codesign --force --options runtime --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" "$sparkle"
-          # The agent-hook reporter is copied in by the menubar build's
-          # post-build script with a development signature; notarization
-          # requires every Mach-O to carry Developer ID + secure timestamp.
-          codesign --force --options runtime --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" \
+          # The agent-hook reporter and the embedded ttybuild CLI are copied
+          # in by the menubar build's post-build script with a development
+          # signature; notarization requires every Mach-O to carry
+          # Developer ID + secure timestamp. The explicit identifiers match
+          # the standalone CLI archive exactly: TCC grants follow the signing
+          # identity, and the app-embedded and curl-installed copies must be
+          # the same subject.
+          codesign --force --options runtime --timestamp \
+            --identifier "build.tty.cli.ttybuild-hook" \
+            --sign "$TTYBUILD_SIGNING_IDENTITY" \
             "$app/Contents/MacOS/ttybuild-hook"
+          codesign --force --options runtime --timestamp \
+            --identifier "build.tty.cli.ttybuild" \
+            --sign "$TTYBUILD_SIGNING_IDENTITY" \
+            "$app/Contents/Helpers/ttybuild"
           codesign --force --options runtime --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
           signing_details="$(codesign -dv --verbose=4 "$app" 2>&1)"
@@ -110,6 +120,7 @@ jobs:
             "$sparkle_contents/Autoupdate" \
             "$sparkle_contents/Updater.app" \
             "$app/Contents/MacOS/ttybuild-hook" \
+            "$app/Contents/Helpers/ttybuild" \
             "$sparkle"; do
             component_details="$(codesign -dv --verbose=4 "$component" 2>&1)"
             grep -q 'TeamIdentifier=QDJ93ZUQ9B' <<< "$component_details"
@@ -201,6 +212,66 @@ jobs:
           cd "$TTYBUILD_DESKTOP_OUTPUT_DIR"
           shasum -a 256 TTYBuild-macOS.zip > TTYBuild-macOS.zip.sha256
 
+      # The CLI archive is built after the Sparkle feed so generate_appcast
+      # only ever scans the app's DMG; the zip carries bare (unstapleable)
+      # binaries whose notarization is still recorded server-side.
+      - name: Build universal CLI
+        run: ./scripts/build-cli-release.sh
+
+      - name: Sign and package CLI archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$TTYBUILD_DESKTOP_OUTPUT_DIR"
+          for binary in ttybuild ttybuild-hook; do
+            # Explicit stable identifiers: macOS TCC grants follow the code
+            # signing identity, so they must not drift between releases.
+            codesign --force --options runtime --timestamp \
+              --identifier "build.tty.cli.$binary" \
+              --sign "$TTYBUILD_SIGNING_IDENTITY" "$binary"
+            details="$(codesign -dv --verbose=4 "$binary" 2>&1)"
+            grep -q 'TeamIdentifier=QDJ93ZUQ9B' <<< "$details"
+            grep -q 'flags=.*runtime' <<< "$details"
+            grep -q '^Timestamp=' <<< "$details"
+          done
+          rm -rf cli-staging ttybuild-cli-macOS.zip
+          mkdir cli-staging
+          cp ttybuild ttybuild-hook cli-staging/
+          ditto -c -k cli-staging ttybuild-cli-macOS.zip
+          rm -rf cli-staging
+          shasum -a 256 ttybuild-cli-macOS.zip > ttybuild-cli-macOS.zip.sha256
+
+      - name: Notarize CLI archive
+        shell: bash
+        env:
+          NOTARY_KEY_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/AuthKey_cli_${NOTARY_KEY_ID}.p8"
+          archive="$TTYBUILD_DESKTOP_OUTPUT_DIR/ttybuild-cli-macOS.zip"
+          result="$RUNNER_TEMP/ttybuild-cli-notary-result.json"
+          printf '%s' "$NOTARY_KEY_BASE64" | base64 --decode > "$key"
+          chmod 600 "$key"
+          xcrun notarytool submit "$archive" \
+            --key "$key" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --wait \
+            --output-format json > "$result"
+          cat "$result"
+          notary_status="$(plutil -extract status raw "$result")"
+          submission_id="$(plutil -extract id raw "$result")"
+          if [[ "$notary_status" != "Accepted" ]]; then
+            xcrun notarytool log "$submission_id" \
+              --key "$key" \
+              --key-id "$NOTARY_KEY_ID" \
+              --issuer "$NOTARY_ISSUER_ID" || true
+            echo "Apple notarization failed with status: $notary_status" >&2
+            exit 1
+          fi
+
       - name: Publish GitHub release
         shell: bash
         run: |
@@ -209,16 +280,21 @@ jobs:
           checksum="$TTYBUILD_DESKTOP_OUTPUT_DIR/TTYBuild-macOS.dmg.sha256"
           zip="$TTYBUILD_DESKTOP_OUTPUT_DIR/TTYBuild-macOS.zip"
           zip_checksum="$TTYBUILD_DESKTOP_OUTPUT_DIR/TTYBuild-macOS.zip.sha256"
+          cli_zip="$TTYBUILD_DESKTOP_OUTPUT_DIR/ttybuild-cli-macOS.zip"
+          cli_checksum="$TTYBUILD_DESKTOP_OUTPUT_DIR/ttybuild-cli-macOS.zip.sha256"
           appcast="$TTYBUILD_DESKTOP_OUTPUT_DIR/appcast.xml"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" \
-              "$dmg" "$checksum" "$zip" "$zip_checksum" "$appcast" --clobber
+              "$dmg" "$checksum" "$zip" "$zip_checksum" \
+              "$cli_zip" "$cli_checksum" "$appcast" --clobber
           else
             gh release create "$GITHUB_REF_NAME" \
               "$dmg" \
               "$checksum" \
               "$zip" \
               "$zip_checksum" \
+              "$cli_zip" \
+              "$cli_checksum" \
               "$appcast" \
               --verify-tag \
               --title "TTY.Build $TTYBUILD_DESKTOP_VERSION" \

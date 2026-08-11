@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   APPCAST_ASSET,
+  CLI_ZIP_ASSET,
   handleDesktopDownload,
   handleWebsiteAsset,
   MACOS_ASSET,
@@ -49,6 +50,8 @@ test("the zip download paths redirect to the latest release archive and checksum
   for (const [path, asset] of [
     ["/download/macos.zip", MACOS_ZIP_ASSET],
     ["/download/macos.zip.sha256", `${MACOS_ZIP_ASSET}.sha256`],
+    ["/download/cli.zip", CLI_ZIP_ASSET],
+    ["/download/cli.zip.sha256", `${CLI_ZIP_ASSET}.sha256`],
   ]) {
     const req = request(path);
     const response = handleDesktopDownload(

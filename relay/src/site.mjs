@@ -5,11 +5,16 @@ const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const UPSTREAM_ZIP_CACHE_SECONDS = 5 * 60;
 const MACOS_ASSET = "TTYBuild-macOS.dmg";
 const MACOS_ZIP_ASSET = "TTYBuild-macOS.zip";
+const CLI_ZIP_ASSET = "ttybuild-cli-macOS.zip";
 const APPCAST_ASSET = "appcast.xml";
 const DESKTOP_ASSETS = new Map([
   ["/download/macos", MACOS_ASSET],
   ["/download/macos.zip", MACOS_ZIP_ASSET],
   ["/download/macos.zip.sha256", `${MACOS_ZIP_ASSET}.sha256`],
+  // The signed universal ttybuild CLI, published next to the app in the
+  // same release (install.sh --cli).
+  ["/download/cli.zip", CLI_ZIP_ASSET],
+  ["/download/cli.zip.sha256", `${CLI_ZIP_ASSET}.sha256`],
   ["/appcast.xml", APPCAST_ASSET],
 ]);
 
@@ -182,4 +187,4 @@ export async function handleWebsiteAsset(request, env) {
   });
 }
 
-export { APPCAST_ASSET, MACOS_ASSET, MACOS_ZIP_ASSET };
+export { APPCAST_ASSET, CLI_ZIP_ASSET, MACOS_ASSET, MACOS_ZIP_ASSET };

@@ -40,7 +40,19 @@ release assets:
 - `TTYBuild-macOS.dmg.sha256`
 - `TTYBuild-macOS.zip`
 - `TTYBuild-macOS.zip.sha256`
+- `ttybuild-cli-macOS.zip`
+- `ttybuild-cli-macOS.zip.sha256`
 - `appcast.xml`
+
+The CLI archive carries the universal `ttybuild` and `ttybuild-hook`
+binaries, built by `scripts/build-cli-release.sh`, stamped with the release
+version (`ttybuild --version`), Developer ID signed with the stable
+identifiers `build.tty.cli.ttybuild` / `build.tty.cli.ttybuild-hook`, and
+notarized. The same identifiers are applied to the copies embedded in the
+app bundle — macOS TCC grants follow the signing identity, and the
+app-embedded and curl-installed CLI must be the same subject. The website's
+`/download/cli.zip` and `/download/cli.zip.sha256` routes redirect to these
+assets on the latest release.
 
 The zip is packaged after the signed update feed is generated so Sparkle only
 ever sees the DMG; the app inside the zip carries the stapled notarization
@@ -70,12 +82,22 @@ download still pairs after relocating. Debug builds and
 ## Curl installation
 
 The website serves `relay/public/install.sh` at `/install.sh` and at the
-short alias `/i`, so users can install or reinstall the desktop app with one
+short alias `/i`, so users can install or reinstall TTY.Build with one
 command:
 
 ```bash
 curl -fsSL https://tty.build/i | bash
 ```
+
+The script first asks what to install (via `/dev/tty`, so the prompt works
+under `curl | bash`): the **app** (recommended; the default with no
+terminal to answer) or the **ttybuild CLI** — for headless Macs, or for
+giving agents access to TTY.Build. `--app` / `--cli` and
+`TTYBUILD_INSTALL=app|cli` skip the prompt. The CLI path downloads
+`ttybuild-cli-macOS.zip` through the stable redirect, verifies its
+checksum, installs both binaries to `~/.tty.build/bin`, symlinks
+`ttybuild` into `/usr/local/bin` (or `~/.local/bin` without write access),
+and prints the `serve` / `pair` / `attach` next steps. It never uses sudo.
 
 The iPhone app's pairing screen embeds its enrollment code into the URL of
 the copied command (`curl -fsSL https://tty.build/12345678 | bash`) —
