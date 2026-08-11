@@ -186,8 +186,16 @@ public enum AgentHookMapper {
                 report.action = stdin.action
             }
             report.message = stdin.message
-        case "busy", "notify", "stop":
+        case "busy", "stop":
             report.message = stdin.message
+        case "notify":
+            report.message = stdin.message
+            // grok/kimi are Claude forks with the same two Notification
+            // triggers; classify so noise notifications cannot flip a
+            // working agent to waiting.
+            report.notifyKind = HookNotificationClassifier.classify(
+                message: stdin.message
+            )
         default:
             // session-start, ask, and session-end carry no text.
             break
@@ -196,20 +204,29 @@ public enum AgentHookMapper {
     }
 
     /// Copilot `--event notification`: only permission prompts and
-    /// elicitation dialogs mean "waiting for the user"; everything else
-    /// (welcome toasts, update notes, …) is dropped.
+    /// elicitation dialogs mean "waiting for the user". The gate reads the
+    /// structured `type` field — a raw substring search over the whole
+    /// payload would pass any notification whose free text merely mentions a
+    /// gated type. Payloads without a `type` fall back to message
+    /// classification; everything else (welcome toasts, update notes, …) is
+    /// dropped.
     static func copilotNotification(
         stdinData: Data, fallbackSessionId: String
     ) -> HookReport? {
-        let raw = String(decoding: stdinData, as: UTF8.self)
         let object = (try? JSONSerialization.jsonObject(with: stdinData)) as? [String: Any]
-        let type = object?["type"] as? String ?? ""
-        guard copilotNotifyGates.contains(where: { raw.contains($0) || type.contains($0) })
-        else { return nil }
         let stdin = ClaudeFlatStdin(object: object)
+        let notifyKind: String
+        if let type = object?["type"] as? String, !type.isEmpty {
+            guard copilotNotifyGates.contains(type) else { return nil }
+            notifyKind = HookNotificationClassifier.permission
+        } else {
+            notifyKind = HookNotificationClassifier.classify(message: stdin.message)
+            guard notifyKind != HookNotificationClassifier.other else { return nil }
+        }
         return HookReport(
             event: "notify", agentSessionId: stdin.sessionId ?? fallbackSessionId,
-            sessionName: stdin.sessionName, cwd: stdin.cwd, message: stdin.message
+            sessionName: stdin.sessionName, cwd: stdin.cwd, message: stdin.message,
+            notifyKind: notifyKind
         )
     }
 
@@ -225,8 +242,13 @@ public enum AgentHookMapper {
         case "tool":
             report.action = stdin.action
             report.message = stdin.message
-        case "busy", "ask", "notify", "stop":
+        case "busy", "ask", "stop":
             report.message = stdin.message
+        case "notify":
+            report.message = stdin.message
+            // Our generated plugins only emit notify for deliberate input
+            // requests, never for ambient host notifications.
+            report.notifyKind = HookNotificationClassifier.permission
         default:
             break // session-start and session-end carry no text
         }

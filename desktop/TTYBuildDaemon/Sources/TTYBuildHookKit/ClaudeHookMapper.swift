@@ -49,6 +49,17 @@ public enum ClaudeHookMapper {
             report.message = (object["message"] as? String).map {
                 sanitizeHookText($0, cap: HookFieldCaps.message)
             }
+            // Prefer the structured type when the host provides one; fall
+            // back to classifying the human-readable message.
+            if let type = object["notification_type"] as? String,
+               !type.isEmpty
+            {
+                report.notifyKind = Self.notifyKind(fromType: type)
+            } else {
+                report.notifyKind = HookNotificationClassifier.classify(
+                    message: report.message
+                )
+            }
         case "PreCompact":
             report.event = "compact"
         case "Stop":
@@ -83,5 +94,18 @@ public enum ClaudeHookMapper {
             return nil
         }
         return report
+    }
+
+    /// Newer Claude builds carry `notification_type` on Notification stdin;
+    /// map the documented values and classify the message text for the rest.
+    static func notifyKind(fromType type: String) -> String {
+        switch type.lowercased() {
+        case "permission_request", "permission_prompt", "permission":
+            HookNotificationClassifier.permission
+        case "idle", "idle_prompt", "waiting_for_input":
+            HookNotificationClassifier.idle
+        default:
+            HookNotificationClassifier.other
+        }
     }
 }

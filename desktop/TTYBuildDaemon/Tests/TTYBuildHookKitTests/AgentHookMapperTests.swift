@@ -278,6 +278,7 @@ final class AgentHookMapperTests: XCTestCase {
         XCTAssertEqual(report?.agentSessionId, "s-1")
         XCTAssertEqual(report?.cwd, "/tmp/project")
         XCTAssertEqual(report?.message, "Allow Bash?")
+        XCTAssertEqual(report?.notifyKind, "permission")
     }
 
     func testCopilotNotificationGatedOnElicitationDialog() {
@@ -286,20 +287,51 @@ final class AgentHookMapperTests: XCTestCase {
         ]))
         XCTAssertEqual(report?.event, "notify")
         XCTAssertEqual(report?.message, "Pick one")
+        XCTAssertEqual(report?.notifyKind, "permission")
     }
 
-    func testCopilotNotificationRawSubstringHit() {
-        // No `type` field, but the raw payload mentions the gate substring.
-        let report = map("copilot", "notification", flatBase([
+    func testCopilotNotificationRawSubstringNoLongerPasses() {
+        // A payload that only MENTIONS a gate substring in some other field
+        // is not a permission prompt: the structured `type` decides.
+        XCTAssertNil(map("copilot", "notification", flatBase([
             "kind": "tool_permission_prompt_v2",
+        ])))
+    }
+
+    func testCopilotNotificationTypelessPayloadClassifiedByMessage() {
+        let report = map("copilot", "notification", flatBase([
+            "message": "Copilot needs your permission to run Bash",
         ]))
         XCTAssertEqual(report?.event, "notify")
+        XCTAssertEqual(report?.notifyKind, "permission")
     }
 
     func testCopilotNotificationOtherTypeDropped() {
         XCTAssertNil(map("copilot", "notification", flatBase(["type": "welcome"])))
         XCTAssertNil(map("copilot", "notification", flatBase(["message": "hi"])))
         XCTAssertNil(map("copilot", "notification", nil))
+    }
+
+    func testGrokKimiNotifyClassified() {
+        for slug in ["grok", "kimi"] {
+            let permission = map(slug, "notify", flatBase([
+                "message": "Grok needs your permission to use Bash",
+            ]))
+            XCTAssertEqual(permission?.notifyKind, "permission", slug)
+
+            let idle = map(slug, "notify", flatBase([
+                "message": "Kimi is waiting for your input",
+            ]))
+            XCTAssertEqual(idle?.notifyKind, "idle", slug)
+
+            // Noise notifications survive as events but are marked `other`;
+            // the daemon then leaves the state untouched.
+            let noise = map(slug, "notify", flatBase([
+                "message": "A new version is available",
+            ]))
+            XCTAssertEqual(noise?.event, "notify", slug)
+            XCTAssertEqual(noise?.notifyKind, "other", slug)
+        }
     }
 
     // MARK: - Normalized family

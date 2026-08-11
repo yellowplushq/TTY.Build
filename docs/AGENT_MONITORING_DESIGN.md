@@ -148,11 +148,31 @@ the existing pairing / new-session guidance.
 - The iPhone has no ordinary notification or Notification Service Extension
   channel. Agent attention is expressed only through Live Activity and the
   Dynamic Island.
-- Finished attention events are held back (30s, `Tuning.doneAttentionDelay`) and
-  cancelled by any state edge in the window: Claude fires Stop whenever its
-  main loop parks — including mid-task waits on background subagents — so an
-  immediate "finished" alert is often premature. Waiting/error alerts stay
-  immediate, and the E2EE list snapshot still flips to done in real time.
+- Every edge out of `running` (waiting/error/done) first sits in a short
+  confirmation window (~1.75s, `Tuning.stateConfirmationWindow`) before it
+  becomes visible anywhere — list snapshot, Live Activity, and attention
+  alike. Agents park and resume their main loop mid-task (tool-loop stop
+  storms, subagent handoffs); an edge whose reverse event arrives inside the
+  window publishes nothing, so rows never flap running→done→running. The
+  state machine itself (`machineState`) still moves on every event; only
+  publication is held.
+- Finished attention events are additionally held back (30s,
+  `Tuning.doneAttentionDelay`) and cancelled by any state edge in the window:
+  Claude fires Stop whenever its main loop parks — including mid-task waits
+  on background subagents — so an immediate "finished" alert is often
+  premature. Waiting/error alerts fire as soon as their confirmation window
+  commits.
+- Notification hooks are classified at the mapper (`notifyKind`:
+  permission/idle/other). Only permission prompts and the idle reminder flip
+  an agent to waiting; other notifications (update toasts, plugin notes) are
+  dropped, because hosts fire notification hooks for plenty of things that
+  are not input requests.
+- Reports carry a machine-wide monotonic `seq`; the daemon drops a report
+  older than one already applied for the session, so racing hook processes
+  cannot rewind the state machine. The reporter also identifies the agent
+  ancestor itself (`agentPid`, argv-based, sees through node/bun/python
+  wrappers) and derives its fallback session id from that pid instead of the
+  per-invocation `getppid()`.
 - Widgets, complications, and the Live Activity extend the existing count
   model to per-state aggregates (e.g. `2 running · 1 waiting · 3 ttys`).
   "Waiting for you" is the one state that can justify color under the

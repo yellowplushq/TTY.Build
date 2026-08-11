@@ -9,8 +9,11 @@ import Foundation
 /// reads as outdated).
 ///
 /// Mapping: on_session_start → session-start, pre_llm_call → busy,
-/// transform_llm_output → stop (message = response_text), on_session_end →
-/// nothing (Hermes fires it per turn; the daemon pid sweep owns teardown).
+/// transform_llm_output → busy (message = response_text), on_session_end →
+/// stop. Hermes fires transform_llm_output after EVERY LLM call — a tool
+/// loop makes many per turn — so it must never read as "finished";
+/// on_session_end fires once per turn and is the real turn end. The daemon
+/// pid sweep still owns record teardown.
 extension HookInstaller {
     enum Hermes {
         static let marker = "# ttybuild-managed-hook"
@@ -98,14 +101,18 @@ extension HookInstaller {
 
 
             def transform_llm_output(response_text=None, **_):
+                # Fires after every LLM call, tool loops included: this is
+                # progress ("busy" + freshest text), never a turn end.
                 message = response_text.strip() if isinstance(response_text, str) else ""
-                _report("stop", {"message": message} if message else None)
+                _report("busy", {"message": message} if message else None)
                 return None
 
 
             def on_session_end(**_kwargs):
-                # Hermes fires on_session_end once per turn; the daemon pid sweep
-                # owns real session teardown, so this is deliberately a no-op.
+                # Hermes fires on_session_end once per turn: this is the real
+                # turn end. The daemon pid sweep owns record teardown, so a
+                # final on_session_end at process exit is harmless.
+                _report("stop")
                 return None
 
 

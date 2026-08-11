@@ -107,6 +107,38 @@ final class ClaudeHookMapperTests: XCTestCase {
         XCTAssertEqual(map(object)?.message?.count, 300)
     }
 
+    func testNotifyKindClassifiedFromMessage() {
+        var object = base("Notification")
+        object["message"] = "Claude needs your permission to use Bash"
+        XCTAssertEqual(map(object)?.notifyKind, "permission")
+
+        object["message"] = "Claude is waiting for your input"
+        XCTAssertEqual(map(object)?.notifyKind, "idle")
+
+        object["message"] = "A new plugin update is available"
+        XCTAssertEqual(map(object)?.notifyKind, "other")
+
+        // No message at all: nothing to classify, and nothing worth a state flip.
+        XCTAssertEqual(map(base("Notification"))?.notifyKind, "other")
+    }
+
+    func testNotifyKindPrefersStructuredType() {
+        var object = base("Notification")
+        object["notification_type"] = "permission_request"
+        object["message"] = "Totally routine housekeeping note"
+        XCTAssertEqual(map(object)?.notifyKind, "permission")
+
+        object["notification_type"] = "idle"
+        XCTAssertEqual(map(object)?.notifyKind, "idle")
+
+        object["notification_type"] = "auto_update"
+        object["message"] = "Claude needs your permission to use Bash"
+        XCTAssertEqual(
+            map(object)?.notifyKind, "other",
+            "an explicit non-input type wins over permission-looking text"
+        )
+    }
+
     func testStopWithoutTranscriptDegradesToNoError() {
         let report = map(base("Stop"))
         XCTAssertEqual(report?.event, "stop")

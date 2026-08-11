@@ -157,6 +157,7 @@ final class HookInstallerPluginTests: XCTestCase {
         XCTAssertEqual(try state(.opencode), .notInstalled)
         XCTAssertEqual(try state(.omp), .notInstalled)
         XCTAssertEqual(try state(.pi), .notInstalled)
+        XCTAssertEqual(try state(.hermes), .notInstalled)
     }
 
     func testRefreshManagedGeneratedPluginsUpdatesOnlyOwnedFiles() throws {
@@ -166,12 +167,16 @@ final class HookInstallerPluginTests: XCTestCase {
         try HookInstaller.install(
             for: .pi, reporterPath: "/old/ttybuild-hook", home: home
         )
+        try HookInstaller.install(
+            for: .hermes, reporterPath: "/old/ttybuild-hook", home: home
+        )
         let refreshed = try HookInstaller.refreshManagedGeneratedPluginInstallations(
             reporterPath: reporter, home: home
         )
-        XCTAssertEqual(Set(refreshed), Set([.opencode, .pi]))
+        XCTAssertEqual(Set(refreshed), Set([.opencode, .pi, .hermes]))
         XCTAssertEqual(try state(.opencode), .installed)
         XCTAssertEqual(try state(.pi), .installed)
+        XCTAssertEqual(try state(.hermes), .installed)
         XCTAssertEqual(try state(.omp), .notInstalled)
     }
 
@@ -200,6 +205,11 @@ final class HookInstallerPluginTests: XCTestCase {
             text.contains("report(\"session-end\")"),
             "omp subagent shutdown must not end the top-level record"
         )
+        // In-process subagents share the module: only the last agent_end
+        // (depth back to 0) may report the turn as stopped.
+        XCTAssertTrue(text.contains("agentDepth = Math.max(0, agentDepth - 1)"))
+        XCTAssertTrue(text.contains("if (agentDepth > 0) return"))
+        XCTAssertTrue(text.contains("if (!sessionReported)"))
     }
 
     func testPiContent() throws {
@@ -231,6 +241,11 @@ final class HookInstallerPluginTests: XCTestCase {
         XCTAssertTrue(module.contains("def register(ctx):"))
         XCTAssertTrue(module.contains("transform_llm_output"))
         XCTAssertTrue(module.contains("return None"))
+        // transform_llm_output fires per LLM call (tool loops included): it
+        // reports progress, and only on_session_end reports the turn end.
+        XCTAssertTrue(module.contains(#"_report("busy", {"message": message} if message else None)"#))
+        XCTAssertFalse(module.contains(#"_report("stop", {"message""#))
+        XCTAssertTrue(module.contains(#"_report("stop")"#))
         let yaml = try String(contentsOf: hermesYaml, encoding: .utf8)
         XCTAssertTrue(yaml.contains("name: ttybuild-presence"))
         XCTAssertTrue(yaml.contains("version: \"1.0.0\""))

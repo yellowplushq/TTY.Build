@@ -24,13 +24,20 @@ public struct HookReport: Equatable, Sendable {
     public var transcriptPath: String?
     /// `stop` only: the turn ended on an agent-side failure (API error).
     public var agentError: Bool?
+    /// `notify` only: what the notification payload actually means —
+    /// `permission` (approval prompt), `idle` (unattended-input reminder), or
+    /// `other`. The daemon only treats the first two as "waiting for the
+    /// user"; hosts fire notification hooks for plenty of things that are not
+    /// input requests, and those must not flip a working agent to waiting.
+    public var notifyKind: String?
 
     public init(
         event: String, agentSessionId: String, sessionName: String? = nil,
         cwd: String? = nil,
         prompt: String? = nil, message: String? = nil, action: String? = nil,
         transcriptPath: String? = nil,
-        agentError: Bool? = nil
+        agentError: Bool? = nil,
+        notifyKind: String? = nil
     ) {
         self.event = event
         self.agentSessionId = agentSessionId
@@ -41,6 +48,35 @@ public struct HookReport: Equatable, Sendable {
         self.action = action
         self.transcriptPath = transcriptPath
         self.agentError = agentError
+        self.notifyKind = notifyKind
+    }
+}
+
+/// Classifies a notification hook payload into the daemon's `notifyKind`
+/// vocabulary. Claude Code documents exactly two Notification triggers —
+/// permission requests and the 60 s idle reminder — and the Claude-fork CLIs
+/// (grok, kimi) inherit the same phrasing, so matching is on wording
+/// fragments that survive rebranding (no agent name).
+public enum HookNotificationClassifier {
+    public static let permission = "permission"
+    public static let idle = "idle"
+    public static let other = "other"
+
+    public static func classify(message: String?) -> String {
+        guard let message, !message.isEmpty else { return other }
+        let lowered = message.lowercased()
+        if lowered.contains("permission") || lowered.contains("approval")
+            || lowered.contains("needs your input")
+        {
+            return permission
+        }
+        if lowered.contains("waiting for your input")
+            || lowered.contains("waiting for input")
+            || lowered.contains("is waiting")
+        {
+            return idle
+        }
+        return other
     }
 }
 

@@ -47,6 +47,36 @@ final class HookWireAndLineageTests: XCTestCase {
         XCTAssertNil(wireLineage[1]["tty"])
     }
 
+    func testRequestLineCarriesSeqAgentPidAndNotifyKind() throws {
+        let report = HookReport(
+            event: "notify", agentSessionId: "s-1", message: "Permission needed",
+            notifyKind: "permission"
+        )
+        let line = try XCTUnwrap(HookWire.requestLine(
+            agent: "claude", report: report, lineage: [],
+            seq: 123_456_789, agentPid: 4242
+        ))
+        let object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: line) as? [String: Any]
+        )
+        XCTAssertEqual((object["seq"] as? NSNumber)?.uint64Value, 123_456_789)
+        XCTAssertEqual(object["agentPid"] as? Int, 4242)
+        XCTAssertEqual(object["notifyKind"] as? String, "permission")
+
+        // Old-style calls carry none of the new fields.
+        let bare = try XCTUnwrap(HookWire.requestLine(
+            agent: "claude",
+            report: HookReport(event: "busy", agentSessionId: "s-1"),
+            lineage: []
+        ))
+        let bareObject = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: bare) as? [String: Any]
+        )
+        XCTAssertNil(bareObject["seq"])
+        XCTAssertNil(bareObject["agentPid"])
+        XCTAssertNil(bareObject["notifyKind"])
+    }
+
     func testRequestLineCarriesAgentError() throws {
         let report = HookReport(
             event: "stop", agentSessionId: "s-1", message: "API Error", agentError: true
