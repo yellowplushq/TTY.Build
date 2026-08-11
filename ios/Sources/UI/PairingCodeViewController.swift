@@ -13,6 +13,10 @@ final class PairingCodeViewController: UIViewController {
     /// Fired once when the screen appears — the presenting page uses it to
     /// request notification permission for pairing-claim alerts.
     var onAppearForPairing: (() -> Void)?
+    /// Fired with true/false as the screen becomes visible/hidden. The
+    /// presenter runs the fast reverse-pairing claim poll only while the
+    /// user is actually watching this screen for the desktop to connect.
+    var onVisibilityChanged: ((Bool) -> Void)?
 
     private var installCommandTask: Task<Void, Never>?
 
@@ -61,6 +65,16 @@ final class PairingCodeViewController: UIViewController {
                 downloadGuide.setCopyEnabled(true)
             }
         }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        onVisibilityChanged?(true)
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        onVisibilityChanged?(false)
     }
 
     deinit {

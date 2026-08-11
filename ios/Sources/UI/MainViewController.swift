@@ -1184,6 +1184,13 @@ final class MainViewController: UIViewController {
         }
         controller.installCommandProvider = { await services.installCommand() }
         controller.onAppearForPairing = { services.enablePairingNotifications() }
+        controller.onVisibilityChanged = { visible in
+            if visible {
+                services.beginReversePairingClaimPolling()
+            } else {
+                services.endReversePairingClaimPolling()
+            }
+        }
         controller.modalPresentationStyle = .fullScreen
         present(controller, animated: true)
     }
@@ -1197,21 +1204,44 @@ final class MainViewController: UIViewController {
     /// One card at a time; the count of further claims shows on the card and
     /// the next one presents as soon as this one resolves.
     private func presentReversePairingCardIfNeeded(claims: [ReversePairingClaim]) {
+        // A presented card whose claim vanished from a successful refresh is
+        // stale (expired, or handled elsewhere): retire it instead of leaving
+        // a sheet whose Connect can only fail. Failed fetches never publish,
+        // so an offline moment cannot retire a live card.
+        if let card = reversePairingCard,
+           !card.isWorking,
+           !claims.contains(where: { $0.claimID == card.claimID })
+        {
+            card.dismiss(animated: true)
+            return // onDismissed presents any newer claim
+        }
         guard reversePairingCard == nil, let claim = claims.first else { return }
-        if let presented = presentedViewController {
-            // The manual code-entry screen just became obsolete — the claim
-            // it was waiting for arrived. Replace it with the confirmation.
-            if presented is PairingCodeViewController {
-                presented.dismiss(animated: true) { [weak self] in
-                    guard let self else { return }
-                    presentReversePairingCardIfNeeded(
-                        claims: self.services.pendingReverseClaims.value
-                    )
-                }
-                return
+        // Present from whatever currently owns the screen. The card must be
+        // able to appear over ANY page or modal — settings, update sheets,
+        // and especially the connect-computer screen settings presents — so
+        // walk to the top of the modal chain instead of waiting for the
+        // root to be unobstructed.
+        var presenter: UIViewController = self
+        while let presented = presenter.presentedViewController {
+            presenter = presented
+        }
+        // The connect-computer screen just became obsolete — the claim it
+        // was waiting for arrived. Replace it with the confirmation,
+        // whichever surface presented it.
+        if presenter is PairingCodeViewController {
+            presenter.dismiss(animated: true) { [weak self] in
+                guard let self else { return }
+                presentReversePairingCardIfNeeded(
+                    claims: self.services.pendingReverseClaims.value
+                )
             }
-            // Another modal (settings, updates…) owns the screen. Retry
-            // shortly instead of dropping the presentation.
+            return
+        }
+        // Alerts and mid-transition controllers cannot safely present a
+        // sheet. Retry shortly instead of dropping the presentation.
+        if presenter is UIAlertController || presenter.isBeingPresented
+            || presenter.isBeingDismissed
+        {
             reversePairingCardRetryTask?.cancel()
             reversePairingCardRetryTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(2))
@@ -1243,12 +1273,12 @@ final class MainViewController: UIViewController {
             }
         }
         card.onReject = { [weak card] claim in
-            // Dismiss immediately; the server-side delete is fired behind it
-            // and an unreachable service just lets the claim expire instead.
+            // Resolve locally BEFORE dismissing: onDismissed re-reads the
+            // pending list, and a claim still present there would re-present
+            // the card the user just rejected. The server-side delete runs
+            // behind; an unreachable service just lets the claim expire.
+            services.rejectReverseClaim(claim)
             card?.dismiss(animated: true)
-            Task { @MainActor in
-                try? await services.rejectReverseClaim(claim)
-            }
         }
         card.onDismissed = { [weak self] in
             self?.reversePairingCard = nil
@@ -1258,7 +1288,7 @@ final class MainViewController: UIViewController {
             )
         }
         reversePairingCard = card
-        present(card, animated: true)
+        presenter.present(card, animated: true)
     }
 
     // MARK: - Settings

@@ -263,6 +263,13 @@ final class SettingsViewController: UITableViewController {
         }
         controller.installCommandProvider = { await services.installCommand() }
         controller.onAppearForPairing = { services.enablePairingNotifications() }
+        controller.onVisibilityChanged = { visible in
+            if visible {
+                services.beginReversePairingClaimPolling()
+            } else {
+                services.endReversePairingClaimPolling()
+            }
+        }
         controller.modalPresentationStyle = .fullScreen
         present(controller, animated: true)
     }

@@ -18,6 +18,17 @@ final class ReversePairingConfirmViewController: UIViewController {
     var onReject: ((ReversePairingClaim) -> Void)?
     var onDismissed: (() -> Void)?
 
+    /// Which claim this card shows; the presenter uses it to retire the card
+    /// when a refresh reveals the claim no longer exists server-side.
+    let claimID: String
+
+    /// True while a confirmation is in flight; the presenter must not retire
+    /// the card out from under its own network work.
+    var isWorking: Bool {
+        if case .working = phase { return true }
+        return false
+    }
+
     private let titleLabel = UILabel()
     private let messageLabel = UILabel()
     private let spinner = UIActivityIndicatorView(style: .medium)
@@ -28,6 +39,7 @@ final class ReversePairingConfirmViewController: UIViewController {
 
     init(claim: ReversePairingClaim, remaining: Int = 0) {
         phase = .deciding(claim: claim, remaining: remaining)
+        claimID = claim.claimID
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .pageSheet
         isModalInPresentation = false
