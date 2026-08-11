@@ -72,7 +72,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: build.tty.menubar
         PRODUCT_NAME: TTYBuild
-        MARKETING_VERSION: "1.5.0"
+        MARKETING_VERSION: "1.34.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         CODE_SIGN_STYLE: Manual
