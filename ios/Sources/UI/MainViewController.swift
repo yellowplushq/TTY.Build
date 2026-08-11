@@ -16,20 +16,22 @@ private enum TerminalKeyboardPagingHintMemory {
 }
 
 enum TerminalFocusPolicy {
-    /// Paging preserves the keyboard as-is: a page change refocuses only when
-    /// the keyboard was up on the page being left, so a dismissed keyboard
-    /// stays dismissed across swipes.
+    /// The keyboard follows its own state, never the navigation: a page change
+    /// refocuses only when the keyboard was up on the page being left, so a
+    /// dismissed keyboard stays dismissed across swipes, first visits, and
+    /// background round-trips. `restoreFocus` is the sole deliberate opening —
+    /// an own-created terminal, or a foreground return whose suspension took
+    /// an open keyboard down with it.
     static func shouldFocus(
         applicationActive: Bool,
         restoreFocus: Bool,
         pageChanged: Bool,
-        hasBeenFocused: Bool,
         isFirstResponder: Bool,
         keyboardVisible: Bool
     ) -> Bool {
         applicationActive
             && !isFirstResponder
-            && (restoreFocus || !hasBeenFocused || (pageChanged && keyboardVisible))
+            && (restoreFocus || (pageChanged && keyboardVisible))
     }
 }
 
@@ -57,7 +59,6 @@ final class MainViewController: UIViewController {
         let host: TerminalHost
         let container = UIView()
         let overlay = TerminalStatusOverlay()
-        var hasBeenFocused = false
         /// True once the emulator holds a replay base plus every stdout byte
         /// since. Pooled hidden pages are kept fed, so paging back to an
         /// intact stream needs no replay; eviction, background sleep,
@@ -134,6 +135,19 @@ final class MainViewController: UIViewController {
     /// keyboard frame notifications; paging reads it to preserve the
     /// keyboard's open/dismissed state across page changes.
     private var isKeyboardVisible = false
+
+    /// `isKeyboardVisible` captured at the moment the app resigns active,
+    /// BEFORE suspension force-resigns the terminal (which zeroes the live
+    /// flag). Foreground restoration reopens the keyboard only when this was
+    /// set — a keyboard closed before backgrounding stays closed.
+    private var keyboardWasVisibleAtSuspend = false
+
+    /// One-shot deliberate keyboard opening for a terminal this device just
+    /// created. Kept as an ID (not a flag) because the `created` echo can
+    /// precede the page build, and a pan can defer presentation; the intent
+    /// must survive until that terminal's page actually presents, and die if
+    /// the user navigates elsewhere first.
+    private var pendingFocusID: TerminalID?
 
     private var panGesture: UIPanGestureRecognizer!
     /// In-flight pan: target index we are dragging toward.
@@ -349,9 +363,10 @@ final class MainViewController: UIViewController {
             .store(in: &cancellables)
 
         // A terminal this device just created: switch to its page (from Home
-        // too — creating is explicit navigation).
+        // too — creating is explicit navigation) and open the keyboard, the
+        // one navigation that deliberately summons it.
         manager.ownCreations
-            .sink { [weak self] id in self?.showTerminal(id) }
+            .sink { [weak self] id in self?.showTerminal(id, focus: true) }
             .store(in: &cancellables)
 
         // An optimistic create resolved: its page is keyed on the provisional
@@ -360,7 +375,10 @@ final class MainViewController: UIViewController {
         // mutates; setVisiblePage is idempotent about the not-yet-built page.)
         manager.rekeys
             .sink { [weak self] from, to in
-                guard let self, visiblePage == .terminal(from) else { return }
+                guard let self else { return }
+                // An unconsumed create-focus follows its terminal's new name.
+                if pendingFocusID == from { pendingFocusID = to }
+                guard visiblePage == .terminal(from) else { return }
                 showTerminal(to)
             }
             .store(in: &cancellables)
@@ -650,6 +668,11 @@ final class MainViewController: UIViewController {
     ) {
         let previousPage = presentedPage
         visiblePage = page
+        // Presenting anything other than the pending-focus terminal is the
+        // user navigating away from an unresolved create: drop the intent.
+        if let pending = pendingFocusID, page != .terminal(pending) {
+            pendingFocusID = nil
+        }
         homeView.isHidden = page != .home
         homeView.frame = pagesContainer.bounds
         for (pageId, terminalPage) in pages {
@@ -672,17 +695,17 @@ final class MainViewController: UIViewController {
             )
             toolbar.setModifierState(terminalPage.host.modifierState)
             terminalKeyboard.setModifierState(terminalPage.host.modifierState)
+            let pendingFocus = pendingFocusID == id
+            pendingFocusID = nil
             if TerminalFocusPolicy.shouldFocus(
                 applicationActive: isApplicationActive,
-                restoreFocus: restoreFocus,
+                restoreFocus: restoreFocus || pendingFocus,
                 pageChanged: previousPage != page,
-                hasBeenFocused: terminalPage.hasBeenFocused,
                 isFirstResponder: terminalPage.host.view.isFirstResponder,
                 keyboardVisible: isKeyboardVisible
             ) {
                 terminalPage.host.view.becomeFirstResponder()
             }
-            terminalPage.hasBeenFocused = true
             // Unhiding does not fire didMoveToWindow, so nothing else
             // repaints output that arrived while the view was hidden.
             if isApplicationActive {
@@ -717,6 +740,10 @@ final class MainViewController: UIViewController {
 
     private func suspendTerminalPresentation() {
         guard isApplicationActive else { return }
+        // Capture before setActive(false) resigns the terminal — the resign's
+        // keyboardWillHide clears `isKeyboardVisible`, destroying the very
+        // state restoration needs.
+        keyboardWasVisibleAtSuspend = isKeyboardVisible
         isApplicationActive = false
         for page in pages.values {
             page.host.setActive(false)
@@ -732,9 +759,9 @@ final class MainViewController: UIViewController {
         isApplicationActive = true
         manager.kickAll()
         // Reattach the foreground renderer before its data channel, force a
-        // replay to cover everything produced while asleep, and restore input
-        // ownership to the terminal the user can actually see.
-        setVisiblePage(visiblePage, restoreFocus: visibleId != nil)
+        // replay to cover everything produced while asleep, and reopen the
+        // keyboard only if suspension closed it (never if the user had).
+        setVisiblePage(visiblePage, restoreFocus: keyboardWasVisibleAtSuspend)
     }
 
     // MARK: - Page navigation
@@ -759,8 +786,11 @@ final class MainViewController: UIViewController {
         manager.closeTerminal(id)
     }
 
-    /// Instant switch (tab strip tap, own-create echo).
-    private func showTerminal(_ id: TerminalID) {
+    /// Instant switch (tab strip tap, own-create echo). `focus: true` is the
+    /// own-create path's deliberate keyboard opening; plain navigation leaves
+    /// the keyboard following `TerminalFocusPolicy`.
+    private func showTerminal(_ id: TerminalID, focus: Bool = false) {
+        if focus { pendingFocusID = id }
         manager.activate(id)
         if isPanning {
             // A pan/slide owns the page frames; the deferred apply() will

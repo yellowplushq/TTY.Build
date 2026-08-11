@@ -8,7 +8,6 @@ final class TerminalLifecycleTests: XCTestCase {
             applicationActive: true,
             restoreFocus: false,
             pageChanged: true,
-            hasBeenFocused: true,
             isFirstResponder: false,
             keyboardVisible: true
         ))
@@ -19,18 +18,6 @@ final class TerminalLifecycleTests: XCTestCase {
             applicationActive: true,
             restoreFocus: false,
             pageChanged: true,
-            hasBeenFocused: true,
-            isFirstResponder: false,
-            keyboardVisible: false
-        ))
-    }
-
-    func testNeverFocusedPageTakesFocusEvenWithDismissedKeyboard() {
-        XCTAssertTrue(TerminalFocusPolicy.shouldFocus(
-            applicationActive: true,
-            restoreFocus: false,
-            pageChanged: true,
-            hasBeenFocused: false,
             isFirstResponder: false,
             keyboardVisible: false
         ))
@@ -41,18 +28,37 @@ final class TerminalLifecycleTests: XCTestCase {
             applicationActive: true,
             restoreFocus: false,
             pageChanged: false,
-            hasBeenFocused: true,
             isFirstResponder: false,
             keyboardVisible: false
         ))
     }
 
-    func testForegroundRestorationRefocusesVisibleTerminal() {
+    /// Foreground return with the keyboard up at suspension, or an own-created
+    /// terminal presenting: the two deliberate keyboard openings.
+    func testRestoreFocusReopensKeyboardEvenWhenDismissed() {
         XCTAssertTrue(TerminalFocusPolicy.shouldFocus(
             applicationActive: true,
             restoreFocus: true,
             pageChanged: false,
-            hasBeenFocused: true,
+            isFirstResponder: false,
+            keyboardVisible: false
+        ))
+        XCTAssertTrue(TerminalFocusPolicy.shouldFocus(
+            applicationActive: true,
+            restoreFocus: true,
+            pageChanged: true,
+            isFirstResponder: false,
+            keyboardVisible: false
+        ))
+    }
+
+    /// Without restoreFocus, no navigation may summon a dismissed keyboard —
+    /// including the first visit to a page (the old `hasBeenFocused` leak).
+    func testPlainNavigationNeverSummonsDismissedKeyboard() {
+        XCTAssertFalse(TerminalFocusPolicy.shouldFocus(
+            applicationActive: true,
+            restoreFocus: false,
+            pageChanged: true,
             isFirstResponder: false,
             keyboardVisible: false
         ))
@@ -63,7 +69,6 @@ final class TerminalLifecycleTests: XCTestCase {
             applicationActive: false,
             restoreFocus: true,
             pageChanged: true,
-            hasBeenFocused: false,
             isFirstResponder: false,
             keyboardVisible: true
         ))
