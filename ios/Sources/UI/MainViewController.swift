@@ -762,6 +762,9 @@ final class MainViewController: UIViewController {
         // replay to cover everything produced while asleep, and reopen the
         // keyboard only if suspension closed it (never if the user had).
         setVisiblePage(visiblePage, restoreFocus: keyboardWasVisibleAtSuspend)
+        // Re-resolve overlays now that we are active again: a session left
+        // unheld while backgrounded should be grabbed on return.
+        updateOverlays(phases: manager.phases, holders: manager.holders)
     }
 
     // MARK: - Page navigation
@@ -936,6 +939,14 @@ final class MainViewController: UIViewController {
                 mode = .takenOver(name: name)
             } else if holderState == .unheld {
                 mode = .unheld
+                // An unheld session is grabbed automatically for the
+                // terminal the user is looking at (every surface does
+                // this; the arbiter's last-writer-wins settles races).
+                // The overlay's tap stays as the manual fallback when the
+                // claim is lost or dropped by an offline host.
+                if id == visibleId, isApplicationActive {
+                    autoClaim(id)
+                }
             } else {
                 switch phases[id] {
                 case .connecting: mode = .connecting
@@ -948,6 +959,20 @@ final class MainViewController: UIViewController {
             }
             page.overlay.setMode(mode)
         }
+    }
+
+    /// Last auto-claim, to keep the repeated `updateOverlays` passes that
+    /// precede the daemon's answering `takeover` from spamming claims.
+    private var lastAutoClaim: (id: TerminalID, at: Date)?
+
+    private func autoClaim(_ id: TerminalID) {
+        if let last = lastAutoClaim, last.id == id,
+           Date().timeIntervalSince(last.at) < 2
+        {
+            return
+        }
+        lastAutoClaim = (id, Date())
+        manager.claimTerminal(id)
     }
 
     // MARK: - Create

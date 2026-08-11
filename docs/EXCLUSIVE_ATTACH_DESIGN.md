@@ -77,7 +77,16 @@ Rules:
    is gone for good). A phone that drops off the network keeps its stale
    holder: it blocks nobody (rule 1), and auto-release would invite
    reclaim ping-pong.
-5. Ownership is not persisted. Sessions die with the daemon process, so
+5. **Unheld sessions are grabbed, not offered.** Every surface that sees
+   `none` for a session it is presenting claims it immediately — the
+   attach client on the `takeover` broadcast, the phone for the visible
+   foreground terminal. Simultaneous grabs settle by rule 1 (the loser
+   flips to the "in use" placeholder), and the daemon still accepts input
+   from nobody while the holder is `none`, so the auto-claim changes who
+   types first, never what the daemon enforces. The phone's "Not attached
+   — tap to attach" overlay remains as the manual fallback when a claim
+   is lost to a race or dropped by an offline host.
+6. Ownership is not persisted. Sessions die with the daemon process, so
    holder state is rebuilt from rule 2 alone.
 
 The holder gates *interaction*, not *visibility*. `stdout`/`replay`
@@ -175,6 +184,9 @@ stdin/SIGWINCH, render stdout/replay bytes verbatim. States:
   instantly reclaim), clear screen, show the placeholder with the holder's
   name. Local keys are interpreted, not forwarded: `⏎` or `t` claims back,
   `q` / `Ctrl-C` exits cleanly.
+- **Unheld** (received `takeover` naming nobody): claim immediately
+  (§2 rule 5) — the previous holder is gone, so race for the session
+  rather than park on a placeholder; a lost race lands in Preempted.
 - **Claiming**: send ctl `claim`, then current window size as `resize`; the
   daemon answers `takeover` + `resize` + `replay` and the client repaints.
 - **Session exit**: print the exit status, restore the tty, exit.
