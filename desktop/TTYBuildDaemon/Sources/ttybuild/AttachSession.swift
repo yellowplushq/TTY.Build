@@ -168,7 +168,7 @@ final class AttachSession {
     }
 
     private func apply(holder: HolderInfo) {
-        enum Transition { case toHolding, toPlaceholder, none }
+        enum Transition { case toHolding, toPlaceholder, toReclaim, none }
         let transition: Transition = lock.withLock {
             let wasHolding: Bool
             if case .holding = mode { wasHolding = true } else { wasHolding = false }
@@ -178,9 +178,9 @@ final class AttachSession {
             }
             if holder.kind == .none {
                 mode = .unheld
-            } else {
-                mode = .preempted(byName: holder.name ?? Self.fallbackName(holder))
+                return .toReclaim
             }
+            mode = .preempted(byName: holder.name ?? Self.fallbackName(holder))
             return .toPlaceholder
         }
         switch transition {
@@ -190,6 +190,19 @@ final class AttachSession {
         case .toPlaceholder:
             TerminalIO.discardPendingInput()
             drawPlaceholder()
+        case .toReclaim:
+            // Nobody holds the session (the holder detached or died): race
+            // to claim it rather than parking on a "Not attached"
+            // placeholder — every surface does this, and the arbiter's
+            // last-writer-wins settles simultaneous claims. The screen
+            // stays as-is until the answering takeover + replay repaint
+            // it; input typed meanwhile belongs to the previous holder's
+            // view of the world, so drop it.
+            TerminalIO.discardPendingInput()
+            try? stream.send(
+                Frame.control(.claim(id: handshake.sessionId, req: nil))
+            )
+            sendCurrentSize()
         case .none:
             break
         }
