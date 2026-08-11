@@ -1216,20 +1216,32 @@ final class MainViewController: UIViewController {
             return // onDismissed presents any newer claim
         }
         guard reversePairingCard == nil, let claim = claims.first else { return }
-        if let presented = presentedViewController {
-            // The manual code-entry screen just became obsolete — the claim
-            // it was waiting for arrived. Replace it with the confirmation.
-            if presented is PairingCodeViewController {
-                presented.dismiss(animated: true) { [weak self] in
-                    guard let self else { return }
-                    presentReversePairingCardIfNeeded(
-                        claims: self.services.pendingReverseClaims.value
-                    )
-                }
-                return
+        // Present from whatever currently owns the screen. The card must be
+        // able to appear over ANY page or modal — settings, update sheets,
+        // and especially the connect-computer screen settings presents — so
+        // walk to the top of the modal chain instead of waiting for the
+        // root to be unobstructed.
+        var presenter: UIViewController = self
+        while let presented = presenter.presentedViewController {
+            presenter = presented
+        }
+        // The connect-computer screen just became obsolete — the claim it
+        // was waiting for arrived. Replace it with the confirmation,
+        // whichever surface presented it.
+        if presenter is PairingCodeViewController {
+            presenter.dismiss(animated: true) { [weak self] in
+                guard let self else { return }
+                presentReversePairingCardIfNeeded(
+                    claims: self.services.pendingReverseClaims.value
+                )
             }
-            // Another modal (settings, updates…) owns the screen. Retry
-            // shortly instead of dropping the presentation.
+            return
+        }
+        // Alerts and mid-transition controllers cannot safely present a
+        // sheet. Retry shortly instead of dropping the presentation.
+        if presenter is UIAlertController || presenter.isBeingPresented
+            || presenter.isBeingDismissed
+        {
             reversePairingCardRetryTask?.cancel()
             reversePairingCardRetryTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(2))
@@ -1276,7 +1288,7 @@ final class MainViewController: UIViewController {
             )
         }
         reversePairingCard = card
-        present(card, animated: true)
+        presenter.present(card, animated: true)
     }
 
     // MARK: - Settings
