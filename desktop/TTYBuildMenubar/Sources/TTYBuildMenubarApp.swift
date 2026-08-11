@@ -47,6 +47,9 @@ final class TTYBuildAppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItemController: StatusItemController?
     private var debugSettingsWindow: NSWindow?
+    /// MRU signal for "Open in Terminal": remembers the terminal app the
+    /// user last activated so takeover lands in *their* terminal.
+    private let terminalUsage = TerminalUsageTracker()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Self-install: launched from Downloads, the Desktop, or a DMG, the
@@ -56,6 +59,7 @@ final class TTYBuildAppDelegate: NSObject, NSApplicationDelegate {
         if AppRelocator.relocateIfNeeded() { return }
 
         refreshManagedAgentHooks()
+        terminalUsage.start()
         model.updater = updater
         statusItemController = StatusItemController(
             model: model,

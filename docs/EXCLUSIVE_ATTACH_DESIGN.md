@@ -23,8 +23,15 @@ any moment a session has at most one *holder*.
   attaches full-screen to that session, tmux-attach style. Attaching claims
   the session.
 - The menu bar's session list gets an "Open in Terminal" row action that
-  launches the user's default terminal running the attach command — the
-  command line is the mechanism, the menu item is the convenience.
+  launches the user's *own* terminal running the attach command — the
+  command line is the mechanism, the menu item is the convenience. The
+  terminal is chosen by MRU: the app tracks which known terminal
+  (Terminal.app, iTerm2, Ghostty, kitty, Alacritty, WezTerm, …) the user
+  last activated, seeding from running processes (a running third-party
+  terminal outranks Terminal.app). Launching never uses AppleScript or
+  keystroke injection: Terminal.app/iTerm2 execute the `.command` file
+  directly, the others take it via `open -na <app> --args` CLI arguments,
+  and apps with neither channel (Warp) fall back to Terminal.app.
 - When a terminal on the Mac holds the session, the iPhone terminal shows a
   full-screen placeholder ("In use in iTerm2 — tap to take over"). Tapping
   claims it back.
