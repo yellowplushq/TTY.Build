@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Foundation
 import TTYBuildDaemonCore
 
@@ -84,12 +85,39 @@ enum KnownTerminal: String, CaseIterable {
         }
     }
 
+    /// Whether we can type the command into a fresh window of a running
+    /// instance (⌘N + keystrokes via System Events). The escape hatch for
+    /// single-instance apps where `open -n` would spawn a second app
+    /// instance (Ghostty) and for apps with no CLI channel at all (Warp).
+    /// Requires the Accessibility permission the app already asks for.
+    var supportsKeystrokeWindow: Bool {
+        switch self {
+        case .ghostty, .warp, .warpPreview: true
+        default: false
+        }
+    }
+
+    /// The "run it" keystroke. Warp ignores key code 36 and needs a raw
+    /// carriage return (VibeTunnel's finding).
+    var keystrokeReturnSnippet: String {
+        switch self {
+        case .warp, .warpPreview: "keystroke (ASCII character 13)"
+        default: "key code 36"
+        }
+    }
+
     var canRunScript: Bool {
         opensCommandFiles || executeArguments(script: "") != nil
+            || supportsKeystrokeWindow
     }
 
     var installedURL: URL? {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    }
+
+    var isRunning: Bool {
+        NSWorkspace.shared.runningApplications
+            .contains { $0.bundleIdentifier == bundleIdentifier }
     }
 }
 
@@ -250,10 +278,21 @@ enum TerminalOpener {
             return
         }
 
+        // A running single-instance terminal (Ghostty): `open -n` would
+        // spawn a second app instance, so type the command into a fresh
+        // window of the existing one when Accessibility allows it.
+        if terminal.supportsKeystrokeWindow, terminal.isRunning,
+           AXIsProcessTrusted()
+        {
+            launchViaKeystrokes(script: script, in: terminal)
+            return
+        }
+
         if let args = terminal.executeArguments(script: script.path),
            let app = terminal.installedURL
         {
-            // `open -na <app> --args …`: a fresh window running the script,
+            // `open -na <app> --args …`: a fresh (first or, for a running
+            // single-instance app, second) instance running the script —
             // no AppleScript and no Accessibility permission involved.
             configuration.createsNewApplicationInstance = true
             configuration.arguments = args
@@ -263,14 +302,53 @@ enum TerminalOpener {
             return
         }
 
-        // No permission-free way to run a command in this terminal (Warp,
-        // unknown): fall back to Terminal.app, which is always present.
+        // Keystroke-only terminals (Warp) from cold start, when permitted.
+        if terminal.supportsKeystrokeWindow, AXIsProcessTrusted() {
+            launchViaKeystrokes(script: script, in: terminal)
+            return
+        }
+
+        // No permitted way to run a command in this terminal: fall back to
+        // Terminal.app, which is always present.
         if let fallback = KnownTerminal.terminal.installedURL {
             NSWorkspace.shared.open(
                 [script], withApplicationAt: fallback, configuration: configuration
             ) { _, _ in }
         } else {
             NSWorkspace.shared.open(script)
+        }
+    }
+
+    /// Opens a new window in the (possibly cold-started) terminal and types
+    /// `exec <script>` into it — the VibeTunnel launch pattern, minus its
+    /// clipboard use: the command is typed directly so the user's pasteboard
+    /// is never clobbered. Runs osascript off the main thread; the child
+    /// process inherits this app's Automation/Accessibility identity.
+    private static func launchViaKeystrokes(script: URL, in terminal: KnownTerminal) {
+        let wasRunning = terminal.isRunning
+        // Cold starts need the app to finish launching before ⌘N lands;
+        // warm instances just need activation to settle.
+        let activateDelay = wasRunning ? 0.4 : 2.5
+        let command = "clear; exec \(shellQuoted(script.path))"
+        let escaped = command
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let appleScript = """
+        tell application id "\(terminal.bundleIdentifier)" to activate
+        delay \(activateDelay)
+        tell application "System Events"
+            keystroke "n" using {command down}
+            delay 0.5
+            keystroke "\(escaped)"
+            \(terminal.keystrokeReturnSnippet)
+        end tell
+        """
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", appleScript]
+            try? process.run()
+            process.waitUntilExit()
         }
     }
 

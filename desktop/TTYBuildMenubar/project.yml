@@ -48,6 +48,11 @@ targets:
         CFBundleDisplayName: TTY.Build
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # "Open in Terminal" types the attach command into a running
+        # single-instance terminal (Ghostty/Warp) via System Events.
+        NSAppleEventsUsageDescription: >-
+          TTY.Build opens takeover sessions in your terminal by typing the
+          attach command into a new window.
         LSUIElement: true
         LSMinimumSystemVersion: "14.0"
         SUAutomaticallyUpdate: true
