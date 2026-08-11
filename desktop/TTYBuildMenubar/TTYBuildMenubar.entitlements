@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- "Open in Terminal" drives terminal apps over Apple Events (Ghostty's
+	     scripting dictionary; System Events keystrokes for Warp). A hardened
+	     runtime process without this entitlement is denied outright (-1743)
+	     before any Automation consent prompt can appear. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+</dict>
+</plist>

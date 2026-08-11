@@ -108,12 +108,19 @@ jobs:
             --identifier "build.tty.cli.ttybuild" \
             --sign "$TTYBUILD_SIGNING_IDENTITY" \
             "$app/Contents/Helpers/ttybuild"
-          codesign --force --options runtime --timestamp --sign "$TTYBUILD_SIGNING_IDENTITY" "$app"
+          # The explicit entitlements keep Apple Events sendable under the
+          # hardened runtime ("Open in Terminal" scripting Ghostty); a bare
+          # re-sign would strip what Xcode embedded.
+          codesign --force --options runtime --timestamp \
+            --entitlements desktop/TTYBuildMenubar/TTYBuildMenubar.entitlements \
+            --sign "$TTYBUILD_SIGNING_IDENTITY" "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
           signing_details="$(codesign -dv --verbose=4 "$app" 2>&1)"
           printf '%s\n' "$signing_details"
           grep -q 'TeamIdentifier=QDJ93ZUQ9B' <<< "$signing_details"
           grep -q 'flags=.*runtime' <<< "$signing_details"
+          codesign -d --entitlements - "$app" 2>&1 \
+            | grep -q 'com.apple.security.automation.apple-events'
           for component in \
             "$sparkle_contents/XPCServices/Installer.xpc" \
             "$sparkle_contents/XPCServices/Downloader.xpc" \
