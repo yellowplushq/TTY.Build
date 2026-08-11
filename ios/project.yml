@@ -38,7 +38,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "6.0"
         CURRENT_PROJECT_VERSION: "26"
-        MARKETING_VERSION: "1.2.0"
+        MARKETING_VERSION: "1.3.0"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QDJ93ZUQ9B
         APS_ENVIRONMENT: development
@@ -122,7 +122,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "6.0"
         CURRENT_PROJECT_VERSION: "26"
-        MARKETING_VERSION: "1.2.0"
+        MARKETING_VERSION: "1.3.0"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QDJ93ZUQ9B
         APS_ENVIRONMENT: development
@@ -181,7 +181,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "4"
         SWIFT_VERSION: "6.0"
         CURRENT_PROJECT_VERSION: "26"
-        MARKETING_VERSION: "1.2.0"
+        MARKETING_VERSION: "1.3.0"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QDJ93ZUQ9B
         SKIP_INSTALL: true
@@ -225,7 +225,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "4"
         SWIFT_VERSION: "6.0"
         CURRENT_PROJECT_VERSION: "26"
-        MARKETING_VERSION: "1.2.0"
+        MARKETING_VERSION: "1.3.0"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QDJ93ZUQ9B
         APS_ENVIRONMENT: development
