@@ -25,21 +25,27 @@ targets:
         product: ttybuild-hook
         link: false
       - package: TTYBuildDaemon
-        product: ttybuild-attach
+        product: ttybuild
         link: false
       - package: Sparkle
     postBuildScripts:
-      - name: Embed ttybuild-hook reporter and ttybuild-attach client
+      - name: Embed ttybuild-hook reporter and the ttybuild CLI
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
-          for helper in ttybuild-hook ttybuild-attach; do
-            cp "$BUILT_PRODUCTS_DIR/$helper" \
-              "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/$helper"
-            codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" \
-              --options runtime \
-              "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/$helper"
-          done
+          cp "$BUILT_PRODUCTS_DIR/ttybuild-hook" \
+            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/ttybuild-hook"
+          codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" \
+            --options runtime \
+            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/ttybuild-hook"
+          # The CLI lives in Contents/Helpers: APFS is case-insensitive, so
+          # MacOS/ttybuild would collide with the app executable TTYBuild.
+          mkdir -p "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers"
+          cp "$BUILT_PRODUCTS_DIR/ttybuild" \
+            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/ttybuild"
+          codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" \
+            --options runtime \
+            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/ttybuild"
     scheme:
       testTargets: []
     info:

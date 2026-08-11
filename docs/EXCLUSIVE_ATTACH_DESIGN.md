@@ -1,7 +1,7 @@
 # Exclusive attach and local takeover — design
 
 Status: **implemented** (daemon arbiter + gating, control-socket attach
-upgrade, `ttybuild-attach`, menu bar "Open in Terminal" + PATH install, and
+upgrade, `ttybuild attach`, menu bar "Open in Terminal" + PATH install, and
 the iPhone placeholder). One deliberate deviation from §5: the iPhone keeps
 a preempted session's data channel open (the pooled emulator stays fed, so
 reclaiming needs no replay); detaching to save bandwidth remains an option
@@ -19,9 +19,8 @@ surface. This feature adds a local attach client that runs **inside the
 user's normal terminal**, and makes interactive attachment **exclusive**: at
 any moment a session has at most one *holder*.
 
-- In any terminal, `ttybuild-attach <id>` (final command name TBD, §9)
-  attaches full-screen to that session, tmux-attach style. Attaching claims
-  the session.
+- In any terminal, `ttybuild attach <id>` attaches full-screen to that
+  session, tmux-attach style. Attaching claims the session.
 - The menu bar's session list gets an "Open in Terminal" row action that
   launches the user's *own* terminal running the attach command — the
   command line is the mechanism, the menu item is the convenience. The
@@ -69,7 +68,7 @@ Rules:
 2. **Initial holder = creator.** A session created via the `create` ctl
    frame starts held by the requesting client's principal (from the
    authenticated 0x02 source envelope). A session created by
-   `ttybuild-attach --new` starts held by that attach connection.
+   `ttybuild attach --new` starts held by that attach connection.
 3. **Only the holder's `stdin` and `resize` are applied.** The daemon drops
    both from any other source. This is the enforcement point; placeholders
    are cosmetic on top of it.
@@ -184,23 +183,27 @@ stdin/SIGWINCH, render stdout/replay bytes verbatim. States:
 On successful claim the client also emits an OSC 0 title so the user's
 terminal tab shows the session title.
 
-## 7. Packaging and the CLI constraint
+## 7. Packaging: the public `ttybuild` CLI
 
-The debug `ttybuild` CLI stays internal-only (AGENTS.md invariant). The
-attach client ships as a **separate, attach-only binary** embedded in the
-menu bar app bundle:
+The `ttybuild` CLI is a released user-facing product (AGENTS.md amended):
+one full-featured binary — `serve` (foreground daemon), `attach`, session
+management, pairing, hooks. Users can run CLI-only (no app), app-only, or
+both installed.
 
-- New SwiftPM target in `desktop/TTYBuildDaemon` (working name
-  `ttybuild-attach`) linking only the socket client + tty handling — none of
-  serve/pair/reset.
-- The menu bar app gains "Install command line tool" (VS Code/VibeTunnel
-  pattern): symlink from the app bundle into `/usr/local/bin` (or
-  `~/.local/bin` fallback without admin rights).
-- "Open in Terminal" launches the default terminal via `NSWorkspace` with
-  the embedded binary's absolute path, so it works before the symlink is
-  installed.
-- AGENTS.md's CLI sentence gets amended to distinguish the internal debug
-  CLI from the shipped attach helper.
+- The menu bar app embeds `ttybuild` and installs it to
+  `~/.tty.build/bin/ttybuild`; "Install command line tool" symlinks it into
+  `/usr/local/bin` (or `~/.local/bin` fallback without admin rights).
+- "Open in Terminal" launchers run `ttybuild attach <id>`.
+- **Single-daemon rule:** one computer runs one TTY.Build daemon. The
+  control-socket server probes an existing socket before binding: a live
+  daemon answering means the other frontend owns this Mac — `ttybuild
+  serve` prints an explanatory error, and the app shows an alert ("ttybuild
+  CLI is already running — stop it, then retry") with Retry/Quit. No
+  LaunchAgent, no automatic handoff: whichever daemon started first keeps
+  the socket until the user stops it.
+- CLI-only mode: `ttybuild serve` in a terminal (tmux/nohup for
+  persistence). TCC responsibility rolls up to the hosting terminal app, so
+  sessions inherit the terminal's existing permission grants.
 
 ## 8. Edge cases
 
@@ -221,9 +224,6 @@ menu bar app bundle:
 
 ## 9. Open questions (deferred)
 
-- User-visible command name (`ttybuild-attach` is the working name; the
-  installed symlink could be shorter, e.g. `ttyb` or `tb`). Decide at
-  packaging time.
 - Client display names for `takeover.name` on the phone side: the daemon
   resolves terminal app names for attach holders, but has no device name
   for phone holders; v1 uses "iPhone"/"Apple Watch" generics. A

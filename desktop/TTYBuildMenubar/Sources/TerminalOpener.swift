@@ -185,8 +185,8 @@ final class TerminalUsageTracker {
 /// "Open in Terminal" and the PATH install for the shipped attach client
 /// (docs/EXCLUSIVE_ATTACH_DESIGN.md §§6–7).
 ///
-/// The bundled `ttybuild-attach` is first installed to
-/// `~/.tty.build/bin/ttybuild-attach` (stable across app relocation, same
+/// The bundled `ttybuild` CLI is first installed to
+/// `~/.tty.build/bin/ttybuild` (stable across app relocation, same
 /// pattern as the hook reporter). Opening a session writes a per-session
 /// `.command` launcher and hands it to the user's terminal of choice:
 /// most recently used first, then a running terminal, then Terminal.app.
@@ -199,20 +199,22 @@ enum TerminalOpener {
         var errorDescription: String? {
             switch self {
             case .missingBundledClient:
-                "The ttybuild-attach helper is missing from this build."
+                "The ttybuild CLI is missing from this build."
             case .symlinkFailed(let detail):
                 "Could not install the command line tool: \(detail)"
             }
         }
     }
 
-    static let installedCommandName = "ttybuild-attach"
+    static let installedCommandName = "ttybuild"
 
-    /// The attach client embedded in the app bundle by the build.
+    /// The `ttybuild` CLI embedded in the app bundle by the build. It lives
+    /// in Contents/Helpers because case-insensitive APFS would collide
+    /// MacOS/ttybuild with the app executable TTYBuild.
     private static var bundledClient: URL? {
         guard let executable = Bundle.main.executableURL else { return nil }
-        let url = executable.deletingLastPathComponent()
-            .appendingPathComponent("ttybuild-attach")
+        let url = executable.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Helpers/ttybuild")
         return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
     }
 
@@ -223,7 +225,7 @@ enum TerminalOpener {
         guard let bundled = bundledClient else {
             throw OpenerError.missingBundledClient
         }
-        let destination = home.attachClientURL
+        let destination = home.cliURL
         try HookInstaller.installReporterBinary(from: bundled, to: destination)
         return destination
     }
@@ -258,7 +260,7 @@ enum TerminalOpener {
         let script = """
         #!/bin/zsh
         clear
-        exec \(shellQuoted(client.path)) \(sessionId)
+        exec \(shellQuoted(client.path)) attach \(sessionId)
         """
         let launcher = directory.appendingPathComponent("tty-\(sessionId).command")
         try Data(script.utf8).write(to: launcher, options: .atomic)
@@ -354,7 +356,7 @@ enum TerminalOpener {
 
     // MARK: - PATH install (Settings)
 
-    /// Candidate directories for the `ttybuild-attach` symlink, best first.
+    /// Candidate directories for the `ttybuild` symlink, best first.
     private static var pathCandidates: [URL] {
         [
             URL(fileURLWithPath: "/usr/local/bin", isDirectory: true),
@@ -365,7 +367,7 @@ enum TerminalOpener {
 
     /// Where the command is currently reachable, if anywhere.
     static func installedCommandLocation() -> URL? {
-        let target = TTYBuildHome().attachClientURL.path
+        let target = TTYBuildHome().cliURL.path
         for directory in pathCandidates {
             let link = directory.appendingPathComponent(installedCommandName)
             if let destination = try? FileManager.default

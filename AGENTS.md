@@ -79,13 +79,14 @@ Do not assume that enabling the `APP_GROUPS` capability proves assignment.
   and service tests.
 - `shared/TTYBuildKit/`: v2 frame codec, pairing invitation, E2EE, and shared
   service API types.
-- `desktop/TTYBuildDaemon/`: macOS daemon and `ttybuild` command-line client. The
-  `ttybuild` CLI is for internal debugging only — never ship it in external
-  releases; the menu bar app is the only released desktop frontend. The
-  attach-only `ttybuild-attach` client (docs/EXCLUSIVE_ATTACH_DESIGN.md) is
-  the one deliberate exception: it is embedded in the menu bar app bundle
-  for "Open in Terminal" and the PATH install, and must never grow
-  serve/pair/reset surface.
+- `desktop/TTYBuildDaemon/`: macOS daemon and the public `ttybuild` CLI. The
+  CLI is a released user-facing product: full daemon (`serve`), session
+  management, pairing, hooks, and exclusive attach. It is embedded in the
+  menu bar app bundle ("Open in Terminal", Settings → Command Line PATH
+  install) and also works standalone (CLI-only mode, no app). One computer
+  runs exactly one TTY.Build daemon: the app when it is running, else a
+  foreground `ttybuild serve`; whichever starts second must refuse the live
+  control socket, never steal it.
 - `desktop/TTYBuildMenubar/`: macOS menu bar UI.
 - `ios/`: iPhone app, iPhone widgets, Live Activity/Dynamic Island, Watch app,
   Watch widgets, shared status code, entitlements, and XcodeGen project source.

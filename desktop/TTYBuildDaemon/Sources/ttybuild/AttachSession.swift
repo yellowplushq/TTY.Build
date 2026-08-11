@@ -47,7 +47,7 @@ final class AttachSession {
     func run() -> Int32 {
         guard let originalTermios = TerminalIO.enterRawMode() else {
             FileHandle.standardError.write(
-                Data("ttybuild-attach: stdin is not a tty\n".utf8)
+                Data("ttybuild attach: stdin is not a tty\n".utf8)
             )
             return 1
         }

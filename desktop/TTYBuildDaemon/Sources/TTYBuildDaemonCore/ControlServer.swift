@@ -85,10 +85,15 @@ public enum ControlResponse: Sendable {
 public final class ControlServer: @unchecked Sendable {
     public enum ServerError: Error, CustomStringConvertible {
         case socketFailed(String)
+        /// A live daemon already answers on the socket: one TTY.Build per
+        /// computer (the menu bar app or `ttybuild serve`, never both).
+        case socketBusy
 
         public var description: String {
             switch self {
             case .socketFailed(let detail): "control socket: \(detail)"
+            case .socketBusy:
+                "another TTY.Build daemon is already running on this computer"
             }
         }
     }
@@ -106,8 +111,19 @@ public final class ControlServer: @unchecked Sendable {
         self.path = path
         self.handler = handler
 
-        // A previous daemon instance may have left the socket file behind.
-        unlink(path)
+        // A previous daemon instance may have left the socket file behind —
+        // but a *live* daemon answering on it means another TTY.Build owns
+        // this computer (the app or `ttybuild serve`). Refuse instead of
+        // silently stealing its socket while both keep fighting over the
+        // relay host identity (single-daemon rule).
+        if FileManager.default.fileExists(atPath: path) {
+            if let reply = try? ControlClient.roundTrip(
+                socketPath: path, request: ["cmd": "status"]
+            ), reply["ok"] as? Bool == true {
+                throw ServerError.socketBusy
+            }
+            unlink(path)
+        }
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {

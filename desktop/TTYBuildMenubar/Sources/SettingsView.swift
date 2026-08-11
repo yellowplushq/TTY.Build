@@ -99,10 +99,12 @@ struct SettingsView: View {
                 Section {
                     Text(
                         """
-                        `ttybuild-attach <id>` attaches any terminal to a \
-                        TTY.Build session with exclusive hold — the same \
-                        takeover the menu's "Open in Terminal" performs. \
-                        Installing links the command onto your PATH.
+                        `ttybuild` is the full TTY.Build command line: \
+                        `ttybuild attach <id>` takes over a session in any \
+                        terminal (the same takeover the menu's "Open in \
+                        Terminal" performs), and `ttybuild ls / new / pair` \
+                        manage sessions and pairing. Installing links the \
+                        command onto your PATH.
                         """
                     )
                     .foregroundStyle(TTYBuildTheme.secondaryContent)

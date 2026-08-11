@@ -166,9 +166,34 @@ final class AppModel: ObservableObject {
                 serviceRunning = false
                 isStartingService = false
                 relayState = .unavailable
-                lastError = "Could not start TTY.Build: \(error.localizedDescription)"
                 startupTask = nil
+                if case ControlServer.ServerError.socketBusy = error {
+                    lastError = "ttybuild CLI is running this computer's daemon."
+                    presentDaemonBusyAlert()
+                } else {
+                    lastError = "Could not start TTY.Build: \(error.localizedDescription)"
+                }
             }
+        }
+    }
+
+    /// Single-daemon rule (docs/EXCLUSIVE_ATTACH_DESIGN.md): a live
+    /// `ttybuild serve` owns the socket and the relay host identity, and the
+    /// app never steals them. The user resolves the conflict.
+    private func presentDaemonBusyAlert() {
+        let alert = NSAlert()
+        alert.messageText = "ttybuild CLI is already running"
+        alert.informativeText = """
+        One computer runs one TTY.Build, and this Mac's daemon is currently \
+        `ttybuild serve`. Stop it (Ctrl-C in its terminal), then retry.
+        """
+        alert.addButton(withTitle: "Retry")
+        alert.addButton(withTitle: "Quit TTY.Build")
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn {
+            startService()
+        } else {
+            NSApplication.shared.terminate(nil)
         }
     }
 

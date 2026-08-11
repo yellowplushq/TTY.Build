@@ -8,16 +8,13 @@ let package = Package(
     ],
     products: [
         .library(name: "TTYBuildDaemonCore", targets: ["TTYBuildDaemonCore"]),
-        // Internal debugging only — not part of external releases.
+        // The public TTY.Build CLI: full daemon (serve), session management,
+        // pairing, hooks, and exclusive attach. Embedded in the menu bar app
+        // bundle and installable standalone (CLI-only mode).
         .executable(name: "ttybuild", targets: ["ttybuild"]),
         // Coding-agent hook reporter, installed to ~/.tty.build/bin by
         // `ttybuild hooks install` / the menu bar app.
         .executable(name: "ttybuild-hook", targets: ["ttybuild-hook"]),
-        // Shipped attach-only client (docs/EXCLUSIVE_ATTACH_DESIGN.md §7):
-        // embedded in the menu bar app bundle and symlinked onto PATH by
-        // "Install command line tool". Attach/claim/detach only — none of
-        // the debug CLI's serve/pair/reset surface.
-        .executable(name: "ttybuild-attach", targets: ["ttybuild-attach"]),
     ],
     dependencies: [
         .package(path: "../../shared/TTYBuildKit"),
@@ -53,13 +50,6 @@ let package = Package(
         .executableTarget(
             name: "ttybuild-hook",
             dependencies: ["TTYBuildHookKit"]
-        ),
-        .executableTarget(
-            name: "ttybuild-attach",
-            dependencies: [
-                "TTYBuildDaemonCore",
-                .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ]
         ),
         .testTarget(
             name: "TTYBuildDaemonCoreTests",
