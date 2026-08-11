@@ -16,9 +16,10 @@ struct Terminal: Equatable {
     let id: TerminalID
     var info: SessionInfo
     var computerName: String
-    /// A `close` is in flight; the tab is frozen until the daemon's next
-    /// session list confirms removal.
-    var closing = false
+    /// An optimistic tab for an in-flight `create`: its provisional negative
+    /// sid (real daemon sids are a persisted positive counter) is rekeyed in
+    /// place by the `created` echo; an error or timeout removes the tab.
+    var isPlaceholder: Bool { id.sid < 0 }
 }
 
 /// The hub: owns every `ComputerConnection` (one per bound computer), merges
@@ -26,10 +27,14 @@ struct Terminal: Equatable {
 /// data channels.
 ///
 /// Ordering is maintained client-side (the daemon only knows sets):
-/// - a terminal this device created is inserted right after the active tab
-///   and switched to (correlated via the `req` echo in `created`);
+/// - a terminal this device creates appears instantly as an optimistic
+///   placeholder inserted right after the active tab and switched to; the
+///   `created` echo (correlated via `req`) rekeys it in place to the
+///   daemon-assigned session id;
 /// - terminals created elsewhere (other devices / CLI) are appended at the
-///   end and do NOT steal focus.
+///   end and do NOT steal focus;
+/// - a close removes the tab immediately; the daemon's next session lists
+///   confirm it (a still-listed closed terminal is suppressed and re-closed).
 ///
 /// Channels connect lazily on first activation. The most recently activated
 /// terminals keep their data sockets (see `maxLiveChannels`); anything beyond
@@ -81,9 +86,13 @@ final class TerminalManager {
     let errors = PassthroughSubject<String, Never>()
     /// Transient, non-blocking app-level feedback.
     let notices = PassthroughSubject<String, Never>()
-    /// A terminal created by *this* device just became active (the `created`
-    /// echo matched one of our reqs) — the UI should switch to its page.
+    /// A terminal created by *this* device just became active (its optimistic
+    /// placeholder tab was inserted) — the UI should switch to its page.
     let ownCreations = PassthroughSubject<TerminalID, Never>()
+    /// An optimistic placeholder tab is about to be rekeyed to its
+    /// daemon-assigned id (sent BEFORE the tab list mutates): UI keyed on the
+    /// provisional id should follow to `to`.
+    let rekeys = PassthroughSubject<(from: TerminalID, to: TerminalID), Never>()
 
     /// Data-plane pool size: the most recently activated terminals keep their
     /// session sockets open so paging back to them is instant (no dial +
@@ -102,10 +111,16 @@ final class TerminalManager {
     var clientPrincipal: String? { clientID }
     private var channels: [TerminalID: TerminalChannel] = [:]
     private var subscriptions: [String: Set<AnyCancellable>] = [:]
-    /// req → computerID of our in-flight creates.
-    private var pendingCreates: [UInt32: String] = [:]
-    /// `created` said these are ours but `sessions` hasn't listed them yet.
-    private var placeAsOwnWhenSeen: Set<TerminalID> = []
+    /// req → optimistic placeholder tab of our in-flight creates.
+    /// Internal (not private) so unit tests can echo `created` with a real req.
+    private(set) var pendingCreates: [UInt32: TerminalID] = [:]
+    /// Optimistically removed tabs whose `close` the daemon hasn't confirmed
+    /// yet: suppressed from placement and re-closed while still listed. The
+    /// value records whether a session list has ever contained the id —
+    /// absence only confirms the close after a listing (a cancelled create's
+    /// session may not have reached the directory yet, and sids are never
+    /// reused, so an unlisted entry can wait indefinitely).
+    private var pendingCloses: [TerminalID: Bool] = [:]
     /// New ids held back during `placementGrace` (see above).
     private var heldAppends: [TerminalID: SessionInfo] = [:]
     /// Latest per-computer agent snapshot, captured from the EMISSIONS (never
@@ -202,7 +217,8 @@ final class TerminalManager {
         }
     }
 
-    private func attach(_ connection: ComputerConnection) {
+    /// Internal (not private) so unit tests can attach a crafted connection.
+    func attach(_ connection: ComputerConnection) {
         computers.append(connection)
         var cancellables: Set<AnyCancellable> = []
         connection.$sessions
@@ -251,12 +267,12 @@ final class TerminalManager {
         holders = holders.filter { $0.key.computerID != connection.id }
         let removed = terminals.filter { $0.id.computerID == connection.id }.map(\.id)
         for id in removed { dropTerminal(id) }
-        pendingCreates = pendingCreates.filter { $0.value != connection.id }
+        pendingCreates = pendingCreates.filter { $0.value.computerID != connection.id }
         // Drop pending placements too, else a scheduled held-append flush (or a
         // late `created`) would append a ghost tab for an unbound computer that
         // can never open a channel or be closed.
         heldAppends = heldAppends.filter { $0.key.computerID != connection.id }
-        placeAsOwnWhenSeen = placeAsOwnWhenSeen.filter { $0.computerID != connection.id }
+        pendingCloses = pendingCloses.filter { $0.key.computerID != connection.id }
         agentSources.removeValue(forKey: connection.id)
         rebuildAgentRows()
     }
@@ -307,10 +323,13 @@ final class TerminalManager {
     // MARK: - Activation + connection pool
 
     func activate(_ id: TerminalID) {
-        guard terminals.contains(where: { $0.id == id }) else { return }
+        guard let terminal = terminal(id) else { return }
         if activeID != id {
             activeID = id
         }
+        // A placeholder has no daemon-side session yet — no channel to open
+        // (its page shows the connecting overlay until the create resolves).
+        guard !terminal.isPlaceholder else { return }
         ensureChannel(id)
     }
 
@@ -376,10 +395,12 @@ final class TerminalManager {
         for channel in channels.values { channel.kick() }
     }
 
-    // MARK: - Create
+    // MARK: - Create (optimistic: placeholder tab until the `created` echo)
 
     /// Creates a terminal on `computerID`. If the active terminal lives on the
-    /// same computer the new one inherits its live cwd; otherwise home.
+    /// same computer the new one inherits its live cwd; otherwise home. The
+    /// tab appears immediately as a placeholder; the daemon's `created` echo
+    /// rekeys it in place to the real session id.
     func createTerminal(on computerID: String, cols: Int, rows: Int) {
         guard let connection = computer(id: computerID) else { return }
         let cwd: String? = {
@@ -389,22 +410,56 @@ final class TerminalManager {
             return active.info.cwd.isEmpty ? nil : active.info.cwd
         }()
         let req = UInt32.random(in: .min ... .max)
-        pendingCreates[req] = computerID
+        // A provisional sid no daemon ever allocates (real sids are a persisted
+        // positive counter), unique per req.
+        let placeholderID = TerminalID(computerID: computerID, sid: -1 - Int(req))
+        pendingCreates[req] = placeholderID
+        let info = SessionInfo(
+            id: placeholderID.sid,
+            title: "New Terminal",
+            cwd: cwd ?? "",
+            rows: rows,
+            cols: cols,
+            createdAt: Date().timeIntervalSince1970,
+            alive: true
+        )
+        terminals.insert(
+            Terminal(id: placeholderID, info: info, computerName: connection.displayName),
+            at: insertionIndexAfterActive()
+        )
+        activate(placeholderID)
+        ownCreations.send(placeholderID)
         connection.createSession(cwd: cwd, cols: cols, rows: rows, req: req)
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(10))
-            self?.pendingCreates.removeValue(forKey: req)
+            self?.expireCreate(req: req)
         }
     }
 
-    // MARK: - Close (async: frozen until the daemon confirms)
+    /// The daemon answered neither `created` nor an error: retire the
+    /// optimistic tab. Should the create have succeeded with only the echo
+    /// lost, the next `sessions` list re-adds the terminal as a foreign one.
+    private func expireCreate(req: UInt32) {
+        guard let placeholderID = pendingCreates.removeValue(forKey: req),
+              terminal(placeholderID) != nil
+        else { return }
+        dropTerminal(placeholderID)
+        errors.send("The computer didn't respond to the new-terminal request.")
+    }
+
+    // MARK: - Close (optimistic: removed now, confirmed against next lists)
 
     func closeTerminal(_ id: TerminalID) {
-        guard let index = terminals.firstIndex(where: { $0.id == id }),
-              !terminals[index].closing
-        else { return }
-        terminals[index].closing = true
+        guard let terminal = terminal(id) else { return }
+        if terminal.isPlaceholder {
+            // The create is still in flight; once its `created` echo lands on
+            // a missing placeholder, the fresh session is closed right away.
+            dropTerminal(id)
+            return
+        }
+        pendingCloses[id] = true
         computer(id: id.computerID)?.closeSession(id: id.sid)
+        dropTerminal(id)
     }
 
     /// Tab-close selection rule: prefer the preceding tab, using the next tab
@@ -460,9 +515,7 @@ final class TerminalManager {
     // MARK: - Terminal I/O passthrough
 
     func sendStdin(_ id: TerminalID, data: Data) {
-        guard activeID == id, terminal(id)?.closing != true,
-              holderState(id) == .interactive
-        else { return }
+        guard activeID == id, holderState(id) == .interactive else { return }
         channels[id]?.sendStdin(data)
     }
 
@@ -483,15 +536,8 @@ final class TerminalManager {
         switch event {
         case .created(let sid, let req):
             let id = TerminalID(computerID: connection.id, sid: sid)
-            let isOurs = req.map { pendingCreates.removeValue(forKey: $0) != nil } ?? false
-            if isOurs {
-                if let info = heldAppends.removeValue(forKey: id) {
-                    insertOwn(id: id, info: info, computerName: connection.displayName)
-                } else if terminals.contains(where: { $0.id == id }) {
-                    moveAfterActiveAndActivate(id)
-                } else {
-                    placeAsOwnWhenSeen.insert(id)
-                }
+            if let placeholderID = req.flatMap({ pendingCreates.removeValue(forKey: $0) }) {
+                resolveOwnCreate(placeholderID: placeholderID, id: id, connection: connection)
             } else if let info = heldAppends.removeValue(forKey: id) {
                 append(id: id, info: info, computerName: connection.displayName)
             }
@@ -502,9 +548,15 @@ final class TerminalManager {
             guard let req, pendingCreates.removeValue(forKey: req) != nil else { break }
             errors.send(msg)
         case .offline(let removedTerminalCount):
-            pendingCreates = pendingCreates.filter { $0.value != connection.id }
+            // In-flight creates died with the host: retire their optimistic
+            // tabs (never listed, so the empty-list reconcile keeps them).
+            for terminal in terminals
+            where terminal.id.computerID == connection.id && terminal.isPlaceholder {
+                dropTerminal(terminal.id)
+            }
+            pendingCreates = pendingCreates.filter { $0.value.computerID != connection.id }
             heldAppends = heldAppends.filter { $0.key.computerID != connection.id }
-            placeAsOwnWhenSeen = placeAsOwnWhenSeen.filter { $0.computerID != connection.id }
+            pendingCloses = pendingCloses.filter { $0.key.computerID != connection.id }
             guard removedTerminalCount > 0 else { break }
             let suffix = removedTerminalCount == 1 ? "terminal was" : "terminals were"
             notices.send("\(connection.displayName) went offline. \(removedTerminalCount) \(suffix) hidden.")
@@ -522,19 +574,30 @@ final class TerminalManager {
             (TerminalID(computerID: cid, sid: $0.id), $0)
         })
 
-        // Update / remove existing tabs of this computer.
-        for terminal in terminals where terminal.id.computerID == cid {
+        // Optimistically closed terminals: the close ctl can be lost while
+        // the host is away (the relay drops it, possibly with our control
+        // link never dropping). A still-listed one means the daemon hasn't
+        // seen the close — re-issue it on each fresh list until it takes.
+        // Absence confirms the close, but only once a list has contained the
+        // id: a cancelled create's session may still be in flight toward the
+        // directory, and its transient absence must not count.
+        for (id, seenListed) in pendingCloses where id.computerID == cid {
+            if listed[id] != nil {
+                connection.closeSession(id: id.sid)
+                pendingCloses[id] = true
+            } else if seenListed {
+                pendingCloses.removeValue(forKey: id)
+            }
+        }
+
+        // Update / remove existing tabs of this computer. Placeholder tabs
+        // are never listed; they resolve via `created` / error / timeout.
+        for terminal in terminals
+        where terminal.id.computerID == cid && !terminal.isPlaceholder {
             if let info = listed[terminal.id] {
                 update(terminal.id) { tab in
                     tab.info = info
                     tab.computerName = connection.displayName
-                }
-                // The close ctl can be lost while the host is away (the relay
-                // drops it, possibly with our control link never dropping). A
-                // still-listed closing tab means the daemon hasn't seen the
-                // close — re-issue it on each fresh list until it takes.
-                if terminal.closing {
-                    connection.closeSession(id: terminal.id.sid)
                 }
             } else {
                 dropTerminal(terminal.id)
@@ -546,16 +609,16 @@ final class TerminalManager {
 
         // Place new ids.
         let known = Set(terminals.map(\.id))
-        let ourCreateInFlight = pendingCreates.values.contains(cid)
+        let ourCreateInFlight = pendingCreates.values.contains { $0.computerID == cid }
         for info in list {
             let id = TerminalID(computerID: cid, sid: info.id)
-            guard !known.contains(id), heldAppends[id] == nil else { continue }
-            if placeAsOwnWhenSeen.remove(id) != nil {
-                insertOwn(id: id, info: info, computerName: connection.displayName)
-            } else if ourCreateInFlight {
+            guard !known.contains(id), heldAppends[id] == nil,
+                  pendingCloses[id] == nil
+            else { continue }
+            if ourCreateInFlight {
                 // Might be our own create whose `created` echo is still in
                 // flight; hold it briefly so it doesn't first appear at the
-                // end and then jump.
+                // end and then jump into the placeholder's slot.
                 heldAppends[id] = info
                 scheduleHeldFlush(id: id, computerName: connection.displayName)
             } else {
@@ -583,24 +646,45 @@ final class TerminalManager {
         terminals.append(Terminal(id: id, info: info, computerName: computerName))
     }
 
-    /// Our own terminal: insert right after the active tab and switch to it.
-    private func insertOwn(id: TerminalID, info: SessionInfo, computerName: String) {
-        guard !terminals.contains(where: { $0.id == id }) else {
-            moveAfterActiveAndActivate(id)
+    /// Lands the daemon's `created` echo on this device's optimistic tab: the
+    /// placeholder is rekeyed in place to the real session id, keeping its
+    /// position and — if it was active — its focus and page. A placeholder the
+    /// user already closed means the fresh session is unwanted: close it.
+    private func resolveOwnCreate(
+        placeholderID: TerminalID,
+        id: TerminalID,
+        connection: ComputerConnection
+    ) {
+        var info = heldAppends.removeValue(forKey: id)
+        guard terminals.contains(where: { $0.id == placeholderID }) else {
+            if terminals.contains(where: { $0.id == id }) {
+                closeTerminal(id)
+            } else {
+                pendingCloses[id] = false
+                connection.closeSession(id: id.sid)
+            }
             return
         }
-        let terminal = Terminal(id: id, info: info, computerName: computerName)
-        terminals.insert(terminal, at: insertionIndexAfterActive())
-        activate(id)
-        ownCreations.send(id)
-    }
-
-    private func moveAfterActiveAndActivate(_ id: TerminalID) {
-        guard let from = terminals.firstIndex(where: { $0.id == id }) else { return }
-        let terminal = terminals.remove(at: from)
-        terminals.insert(terminal, at: insertionIndexAfterActive())
-        activate(id)
-        ownCreations.send(id)
+        // The `sessions` list can outrun the echo past the placement grace
+        // and append the session as a foreign tab — fold it into the
+        // placeholder's slot.
+        if let appended = terminals.firstIndex(where: { $0.id == id }) {
+            info = terminals[appended].info
+            terminals.remove(at: appended)
+        }
+        guard let index = terminals.firstIndex(where: { $0.id == placeholderID }) else { return }
+        // Tell the UI before mutating: the page keyed on the provisional id
+        // is about to be rebuilt under the real one and navigation follows.
+        rekeys.send((from: placeholderID, to: id))
+        var resolved = info ?? terminals[index].info
+        resolved.id = id.sid
+        terminals[index] = Terminal(
+            id: id, info: resolved, computerName: connection.displayName
+        )
+        if activeID == placeholderID {
+            activeID = id
+            ensureChannel(id)
+        }
     }
 
     private func insertionIndexAfterActive() -> Int {
@@ -619,7 +703,6 @@ final class TerminalManager {
         channels[id]?.stop()
         channels.removeValue(forKey: id)
         phases.removeValue(forKey: id)
-        placeAsOwnWhenSeen.remove(id)
         heldAppends.removeValue(forKey: id)
         guard let index = terminals.firstIndex(where: { $0.id == id }) else { return }
         let replacementID = Self.replacementID(afterClosing: id, in: terminals)

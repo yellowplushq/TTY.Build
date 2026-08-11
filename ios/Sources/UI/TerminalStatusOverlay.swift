@@ -2,10 +2,9 @@ import UIKit
 
 /// Full-terminal freeze mask: dims the (stale) grid, swallows touches, and
 /// shows a spinner + status line. Used while a terminal's data channel is
-/// connecting / reconnecting after a network drop, while a close is in
-/// flight ("exiting" until the daemon's session list confirms removal), and
-/// as the full-screen exclusivity placeholder while another surface holds
-/// the session (docs/EXCLUSIVE_ATTACH_DESIGN.md §5) — tap to take over.
+/// connecting / reconnecting after a network drop, and as the full-screen
+/// exclusivity placeholder while another surface holds the session
+/// (docs/EXCLUSIVE_ATTACH_DESIGN.md §5) — tap to take over.
 final class TerminalStatusOverlay: UIView {
     enum Mode: Equatable {
         case hidden
@@ -13,8 +12,6 @@ final class TerminalStatusOverlay: UIView {
         case connecting
         /// Was live; the link dropped and is retrying with backoff.
         case reconnecting
-        /// `close` sent; waiting for the daemon to confirm.
-        case closing
         /// Another surface holds the session; tap claims it back.
         case takenOver(name: String?)
         /// A holder-aware daemon reports nobody holding; tap attaches.
@@ -124,8 +121,6 @@ final class TerminalStatusOverlay: UIView {
             show(text: "Connecting…")
         case .reconnecting:
             show(text: "Connection lost — reconnecting…")
-        case .closing:
-            show(text: "Closing terminal…")
         case .takenOver(let name):
             showPlaceholder(
                 title: "In use on \(name ?? "another device")",
@@ -161,7 +156,7 @@ final class TerminalStatusOverlay: UIView {
         switch mode {
         case .takenOver, .unheld:
             onClaim?()
-        case .hidden, .connecting, .reconnecting, .closing:
+        case .hidden, .connecting, .reconnecting:
             break
         }
     }

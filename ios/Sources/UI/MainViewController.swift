@@ -319,10 +319,7 @@ final class MainViewController: UIViewController {
             .sink { [weak self] phases in
                 guard let self else { return }
                 reconcileStreamIntegrity(phases: phases)
-                updateOverlays(
-                    terminals: manager.terminals, phases: phases,
-                    holders: manager.holders
-                )
+                updateOverlays(phases: phases, holders: manager.holders)
             }
             .store(in: &cancellables)
 
@@ -330,10 +327,7 @@ final class MainViewController: UIViewController {
             .sink { [weak self] holders in
                 guard let self else { return }
                 handleHolderTransitions(holders: holders)
-                updateOverlays(
-                    terminals: manager.terminals, phases: manager.phases,
-                    holders: holders
-                )
+                updateOverlays(phases: manager.phases, holders: holders)
             }
             .store(in: &cancellables)
 
@@ -358,6 +352,17 @@ final class MainViewController: UIViewController {
         // too — creating is explicit navigation).
         manager.ownCreations
             .sink { [weak self] id in self?.showTerminal(id) }
+            .store(in: &cancellables)
+
+        // An optimistic create resolved: its page is keyed on the provisional
+        // id and is about to be rebuilt under the real one — follow the rekey
+        // if that page is the one on screen. (Fired before the tab list
+        // mutates; setVisiblePage is idempotent about the not-yet-built page.)
+        manager.rekeys
+            .sink { [weak self] from, to in
+                guard let self, visiblePage == .terminal(from) else { return }
+                showTerminal(to)
+            }
             .store(in: &cancellables)
 
         manager.errors
@@ -611,9 +616,7 @@ final class MainViewController: UIViewController {
             }
         }
         setVisiblePage(visiblePage)
-        updateOverlays(
-            terminals: terminals, phases: manager.phases, holders: manager.holders
-        )
+        updateOverlays(phases: manager.phases, holders: manager.holders)
 
         let showComputer = computerCount > 1
         tabStrip.update(
@@ -622,7 +625,7 @@ final class MainViewController: UIViewController {
                 return .init(
                     id: $0.id,
                     title: showComputer ? "\($0.computerName) · \($0.info.title)" : $0.info.title,
-                    alive: $0.info.alive && !$0.closing,
+                    alive: $0.info.alive,
                     agent: agent?.agent,
                     agentState: agent?.state
                 )
@@ -736,12 +739,12 @@ final class MainViewController: UIViewController {
 
     // MARK: - Page navigation
 
-    /// Closing the visible tab commits its replacement immediately, before
-    /// the daemon asynchronously confirms removal. Besides feeling direct,
-    /// this prevents the removal emission from ever presenting Home between
-    /// the old and replacement terminal pages.
+    /// Closing is optimistic: commit the replacement page first, then let the
+    /// manager remove the tab immediately. Committing navigation before the
+    /// removal emission prevents Home from ever being presented between the
+    /// old and replacement terminal pages.
     private func closeTerminal(_ id: TerminalID) {
-        guard manager.terminal(id)?.closing == false else { return }
+        guard manager.terminal(id) != nil else { return }
         if visibleId == id {
             if let replacementID = TerminalManager.replacementID(
                 afterClosing: id,
@@ -889,7 +892,6 @@ final class MainViewController: UIViewController {
     }
 
     private func updateOverlays(
-        terminals: [Terminal],
         phases: [TerminalID: TerminalChannel.Phase],
         holders: [TerminalID: HolderInfo]
     ) {
@@ -898,9 +900,7 @@ final class MainViewController: UIViewController {
             let holderState = TerminalManager.holderState(
                 for: id, in: holders, clientID: manager.clientPrincipal
             )
-            if terminals.first(where: { $0.id == id })?.closing == true {
-                mode = .closing
-            } else if case .takenOver(let name) = holderState {
+            if case .takenOver(let name) = holderState {
                 // A non-holder doesn't care about its data channel's health;
                 // the placeholder outranks connecting/reconnecting.
                 mode = .takenOver(name: name)
