@@ -92,13 +92,15 @@ final class DaemonAgentControlTests: XCTestCase {
         )
         XCTAssertTrue(HookSocket.send(line, socketPath: home.socketPath))
 
+        // The daemon runs the production confirmation window (1.75 s), so a
+        // fresh running→waiting edge becomes visible only after it elapses.
         var list: [[String: Any]] = []
-        let deadline = Date().addingTimeInterval(1)
+        let deadline = Date().addingTimeInterval(4)
         repeat {
             let reply = try send(["cmd": "agents"])
             list = reply["agents"] as? [[String: Any]] ?? []
-            if !list.isEmpty { break }
-            Thread.sleep(forTimeInterval: 0.01)
+            if list.first?["state"] as? String == "waiting" { break }
+            Thread.sleep(forTimeInterval: 0.05)
         } while Date() < deadline
         XCTAssertEqual(list.count, 1)
         XCTAssertEqual(list[0]["id"] as? String, "wire-1")

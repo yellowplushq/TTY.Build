@@ -44,6 +44,42 @@ public struct HookReport: Equatable, Sendable {
     }
 }
 
+/// Classifies a notification hook payload. Hosts fire notification hooks for
+/// more than input requests; a mapper forwards `notify` only for the kinds
+/// that mean "waiting for the user" (`.permission`, `.idle`) and returns nil
+/// for `.other` — noise never reaches the daemon at all, mirroring how
+/// unknown events are dropped. Claude Code documents exactly two
+/// Notification triggers — permission requests and the 60 s idle reminder —
+/// and the Claude-fork CLIs (grok, kimi) inherit the same phrasing, so
+/// matching is on wording fragments that survive rebranding (no agent name).
+public enum HookNotificationClassifier {
+    public enum Kind {
+        case permission
+        case idle
+        case other
+
+        /// Whether this notification means the agent is waiting on the user.
+        public var isInputRequest: Bool { self != .other }
+    }
+
+    public static func classify(message: String?) -> Kind {
+        guard let message, !message.isEmpty else { return .other }
+        let lowered = message.lowercased()
+        if lowered.contains("permission") || lowered.contains("approval")
+            || lowered.contains("needs your input")
+        {
+            return .permission
+        }
+        if lowered.contains("waiting for your input")
+            || lowered.contains("waiting for input")
+            || lowered.contains("is waiting")
+        {
+            return .idle
+        }
+        return .other
+    }
+}
+
 /// Shared field caps, applied by every mapper; the daemon re-applies the same
 /// caps on ingest.
 enum HookFieldCaps {

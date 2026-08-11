@@ -29,6 +29,10 @@ final class AgentMonitorTests: XCTestCase {
         // which drive sweeps explicitly via `sweepNow()`.
         tuning.sweepInterval = 3600
         tuning.doneAttentionDelay = 0.1
+        // Most tests assert the state machine itself, with edges visible
+        // immediately; the confirmation window has its own tests below,
+        // which rebuild the monitor with a real window.
+        tuning.stateConfirmationWindow = 0
         // A neutral resolver keeps tests hermetic: the default one reads the
         // real ~/.codex state database, which would filter test sessions as
         // ephemeral threads on a machine with Codex installed.
@@ -58,7 +62,9 @@ final class AgentMonitorTests: XCTestCase {
         sessionName: String? = nil,
         prompt: String? = nil, message: String? = nil, action: String? = nil,
         transcriptPath: String? = nil,
-        agentError: Bool? = nil, lineage: [AgentLineageEntry]? = nil
+        agentError: Bool? = nil,
+        seq: UInt64? = nil, agentPid: Int32? = nil,
+        lineage: [AgentLineageEntry]? = nil
     ) -> AgentEvent {
         AgentEvent(
             agent: agent, event: event, agentSessionId: id,
@@ -66,6 +72,7 @@ final class AgentMonitorTests: XCTestCase {
             prompt: prompt, message: message, action: action,
             transcriptPath: transcriptPath,
             agentError: agentError,
+            seq: seq, agentPid: agentPid,
             lineage: lineage ?? [AgentLineageEntry(pid: livePid, name: "claude")]
         )
     }
@@ -536,6 +543,7 @@ final class AgentMonitorTests: XCTestCase {
         var tuning = AgentMonitor.Tuning()
         tuning.sweepInterval = 3600
         tuning.transcriptSampleInterval = 0
+        tuning.stateConfirmationWindow = 0
         let samplingMonitor = AgentMonitor(
             tuning: tuning,
             transcriptSampler: { _, _ in
@@ -747,6 +755,143 @@ private final class Received: @unchecked Sendable {
     private var lists: [[AgentInfo]] = []
     var all: [[AgentInfo]] { lock.withLock { lists } }
     func append(_ list: [AgentInfo]) { lock.withLock { lists.append(list) } }
+}
+
+// MARK: - Confirmation window, notify kinds, seq ordering, reported agent pid
+
+extension AgentMonitorTests {
+    /// Monitor with a short but real confirmation window; edges out of
+    /// running stay invisible until the window elapses uncontradicted.
+    private func makeWindowedMonitor(
+        window: TimeInterval, doneDelay: TimeInterval = 0.05
+    ) -> AgentMonitor {
+        var tuning = AgentMonitor.Tuning()
+        tuning.debounce = 0.01
+        tuning.sweepInterval = 3600
+        tuning.doneAttentionDelay = doneDelay
+        tuning.stateConfirmationWindow = window
+        return AgentMonitor(
+            tuning: tuning,
+            codexMetadataResolver: { _ in .init() },
+            matchTargets: { [] }
+        )
+    }
+
+    private func wait(_ interval: TimeInterval) {
+        let expectation = expectation(description: "interval elapsed")
+        DispatchQueue.global().asyncAfter(deadline: .now() + interval) {
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: interval + 2)
+    }
+
+    func testFalseStopInsideWindowNeverBecomesVisible() throws {
+        let windowed = makeWindowedMonitor(window: 0.3)
+        let updates = Updates()
+        windowed.onAttention = { updates.append($0, $1) }
+
+        windowed.ingest(event("prompt", prompt: "go"))
+        // Tool-loop park: stop immediately followed by more work.
+        windowed.ingest(event("stop", message: "intermediate output"))
+        XCTAssertEqual(windowed.list().first?.state, .running, "edge is held")
+        windowed.ingest(event("tool", action: "Bash: swift test"))
+
+        wait(0.6)
+        XCTAssertEqual(
+            windowed.list().first?.state, .running,
+            "a stop contradicted inside the window never becomes visible"
+        )
+        XCTAssertTrue(updates.all.isEmpty)
+    }
+
+    func testStopConfirmedAfterWindowCommitsDoneAndAttention() throws {
+        let windowed = makeWindowedMonitor(window: 0.15)
+        let updates = Updates()
+        windowed.onAttention = { updates.append($0, $1) }
+
+        windowed.ingest(event("prompt", prompt: "go"))
+        windowed.ingest(event("stop", message: "All done"))
+        XCTAssertEqual(windowed.list().first?.state, .running)
+
+        wait(0.5)
+        XCTAssertEqual(windowed.list().first?.state, .done)
+        XCTAssertEqual(updates.all.count, 1)
+        XCTAssertEqual(updates.all.first?.attention, .done)
+        XCTAssertEqual(updates.all.first?.info.message, "All done")
+    }
+
+    func testEdgeSupersededInsideWindowCommitsLatestState() throws {
+        let windowed = makeWindowedMonitor(window: 0.2)
+        let updates = Updates()
+        windowed.onAttention = { updates.append($0, $1) }
+
+        windowed.ingest(event("prompt", prompt: "go"))
+        windowed.ingest(event("stop"))
+        // The park was actually a question: ask arrives inside the window.
+        windowed.ingest(event("ask"))
+
+        wait(0.5)
+        XCTAssertEqual(windowed.list().first?.state, .waiting)
+        XCTAssertEqual(updates.all.count, 1)
+        XCTAssertEqual(updates.all.first?.attention, .waiting)
+    }
+
+    func testWaitingConfirmedAfterWindow() throws {
+        let windowed = makeWindowedMonitor(window: 0.15)
+        let updates = Updates()
+        windowed.onAttention = { updates.append($0, $1) }
+
+        windowed.ingest(event("prompt", prompt: "go"))
+        windowed.ingest(event("ask"))
+        XCTAssertEqual(
+            windowed.list().first?.state, .running,
+            "waiting is held for the window too"
+        )
+        wait(0.4)
+        XCTAssertEqual(windowed.list().first?.state, .waiting)
+        XCTAssertEqual(updates.all.count, 1)
+        XCTAssertEqual(updates.all.first?.attention, .waiting)
+    }
+
+    func testStaleSeqIsDropped() throws {
+        monitor.ingest(event("busy", seq: 100))
+        monitor.ingest(event("stop", seq: 300))
+        XCTAssertEqual(try only().state, .done)
+
+        // A racing tool report captured before the stop arrives late: it
+        // must not rewind done back to running.
+        monitor.ingest(event("tool", action: "Bash: late", seq: 200))
+        let info = try only()
+        XCTAssertEqual(info.state, .done)
+        XCTAssertNil(info.action)
+    }
+
+    func testSeqlessEventsKeepLegacyOrdering() throws {
+        // Reporters older than the seq field interleave with newer ones.
+        monitor.ingest(event("busy", seq: 100))
+        monitor.ingest(event("ask"))
+        XCTAssertEqual(try only().state, .waiting)
+    }
+
+    func testReportedAgentPidPreferredForLiveness() throws {
+        // A pid that is certainly dead by the time the sweep runs.
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        try probe.run()
+        probe.waitUntilExit()
+        let deadPid = probe.processIdentifier
+
+        // The lineage alone offers only a live shell (the old heuristic
+        // would find no agent pid and fall back to slow idle expiry); the
+        // reporter's explicit pid must win, so the sweep reaps immediately.
+        monitor.ingest(event(
+            "busy", agentPid: deadPid,
+            lineage: [AgentLineageEntry(pid: livePid, name: "zsh")]
+        ))
+        XCTAssertEqual(monitor.list().count, 1)
+        monitor.sweepNow()
+        XCTAssertTrue(monitor.list().isEmpty)
+    }
 }
 
 extension AgentMonitorTests {

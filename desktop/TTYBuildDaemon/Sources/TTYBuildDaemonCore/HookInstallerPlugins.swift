@@ -20,6 +20,7 @@ extension HookInstaller {
             (.opencode, OpenCode.path(home: home), OpenCode.marker),
             (.omp, PiFamily.path(home: home, agent: .omp), PiFamily.marker),
             (.pi, PiFamily.path(home: home, agent: .pi), PiFamily.marker),
+            (.hermes, Hermes.modulePath(home: home), Hermes.marker),
         ]
         let managed = candidates.compactMap { agent, path, marker -> HookedAgent? in
             guard let data = FileManager.default.contents(atPath: path),
@@ -251,6 +252,15 @@ extension HookInstaller {
             const REPORTER = "\(reporter)";
             const STREAM_INTERVAL_MS = 5000;
             let lastStreamAt = 0;
+            // Module scope is shared by every extension instance in this
+            // process. \(slug) loads extensions into in-process subagent
+            // sessions too, and they all report under one "\(slug)-<pid>"
+            // session id — so agent_start/agent_end nesting is tracked here:
+            // only the LAST agent_end (depth back to 0) is the turn end. A
+            // subagent finishing while its parent still runs must not report
+            // the top-level session as done.
+            let agentDepth = 0;
+            let sessionReported = false;
 
             function report(event: string, extra?: Record<string, unknown>): void {
               try {
@@ -301,8 +311,14 @@ extension HookInstaller {
             }
 
             export default function (\(slug): ExtensionAPI) {
-              report("session-start");
+              // A subagent session loading this extension mid-run must not
+              // reset the record (session-start clears prompt/message).
+              if (!sessionReported) {
+                sessionReported = true;
+                report("session-start");
+              }
               \(slug).on("agent_start", () => {
+                agentDepth += 1;
                 report("busy");
               });
               \(slug).on("message_update", (event: any) => {
@@ -314,6 +330,8 @@ extension HookInstaller {
                 }
               });
               \(slug).on("agent_end", (_event: unknown, ctx: unknown) => {
+                agentDepth = Math.max(0, agentDepth - 1);
+                if (agentDepth > 0) return; // a parent agent is still running
                 const message = lastAssistantText(ctx);
                 report("stop", message ? { message } : undefined);
               });

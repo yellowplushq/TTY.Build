@@ -17,7 +17,9 @@ final class ClaudeHookMapperTests: XCTestCase {
     func testEventMappingTable() {
         XCTAssertEqual(map(base("SessionStart"))?.event, "session-start")
         XCTAssertEqual(map(base("UserPromptSubmit"))?.event, "prompt")
-        XCTAssertEqual(map(base("Notification"))?.event, "notify")
+        var notification = base("Notification")
+        notification["message"] = "Claude needs your permission to use Bash"
+        XCTAssertEqual(map(notification)?.event, "notify")
         XCTAssertEqual(map(base("PreCompact"))?.event, "compact")
         XCTAssertEqual(map(base("Stop"))?.event, "stop")
         XCTAssertEqual(map(base("SessionEnd"))?.event, "session-end")
@@ -41,7 +43,10 @@ final class ClaudeHookMapperTests: XCTestCase {
     func testNotificationTitleIsNotMistakenForSessionName() {
         var object = base("Notification")
         object["title"] = "Agent needs attention"
-        XCTAssertNil(map(object)?.sessionName)
+        object["message"] = "Claude needs your permission to use Bash"
+        let report = map(object)
+        XCTAssertNotNil(report)
+        XCTAssertNil(report?.sessionName)
     }
 
     func testPromptCarriedAndCapped() {
@@ -103,8 +108,42 @@ final class ClaudeHookMapperTests: XCTestCase {
         object["message"] = "Claude needs your permission to use Bash"
         XCTAssertEqual(map(object)?.message, "Claude needs your permission to use Bash")
 
-        object["message"] = String(repeating: "m", count: 400)
+        object["message"] = "Claude needs your permission: " + String(repeating: "m", count: 400)
         XCTAssertEqual(map(object)?.message?.count, 300)
+    }
+
+    func testNoiseNotificationsDropped() {
+        // Only permission prompts and the idle reminder mean "waiting for
+        // the user"; everything else is dropped like an unknown event.
+        var object = base("Notification")
+        object["message"] = "Claude needs your permission to use Bash"
+        XCTAssertNotNil(map(object))
+
+        object["message"] = "Claude is waiting for your input"
+        XCTAssertNotNil(map(object))
+
+        object["message"] = "A new plugin update is available"
+        XCTAssertNil(map(object))
+
+        // No message at all: nothing to classify, nothing worth a state flip.
+        XCTAssertNil(map(base("Notification")))
+    }
+
+    func testNotifyStructuredTypeWinsOverMessageText() {
+        var object = base("Notification")
+        object["notification_type"] = "permission_request"
+        object["message"] = "Totally routine housekeeping note"
+        XCTAssertNotNil(map(object))
+
+        object["notification_type"] = "idle"
+        XCTAssertNotNil(map(object))
+
+        object["notification_type"] = "auto_update"
+        object["message"] = "Claude needs your permission to use Bash"
+        XCTAssertNil(
+            map(object),
+            "an explicit non-input type wins over permission-looking text"
+        )
     }
 
     func testStopWithoutTranscriptDegradesToNoError() {
@@ -206,7 +245,7 @@ final class ClaudeHookMapperTests: XCTestCase {
 
     func testControlCharactersStripped() {
         var object = base("Notification")
-        object["message"] = "line1\u{07}\u{1B}[31mline2\u{7F}"
+        object["message"] = "needs your permission\u{07}\u{1B}[31mline2\u{7F}"
         let message = try! XCTUnwrap(map(object)?.message)
         XCTAssertFalse(message.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F })
     }

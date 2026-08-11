@@ -36,6 +36,12 @@ public struct AgentEvent: Sendable {
     public var transcriptPath: String?
     /// `stop` only: the turn ended on an agent-side failure (API error).
     public var agentError: Bool?
+    /// Machine-wide monotonic capture time stamped by the reporter, used to
+    /// drop reports that arrive behind a newer one for the same session.
+    public var seq: UInt64?
+    /// The reporter's own identification of the agent ancestor process;
+    /// preferred over the daemon's first-non-shell lineage guess.
+    public var agentPid: Int32?
     public var lineage: [AgentLineageEntry]
 
     public init(
@@ -43,7 +49,9 @@ public struct AgentEvent: Sendable {
         sessionName: String? = nil, cwd: String? = nil,
         prompt: String? = nil, message: String? = nil, action: String? = nil,
         transcriptPath: String? = nil,
-        agentError: Bool? = nil, lineage: [AgentLineageEntry] = []
+        agentError: Bool? = nil,
+        seq: UInt64? = nil, agentPid: Int32? = nil,
+        lineage: [AgentLineageEntry] = []
     ) {
         self.agent = agent
         self.event = event
@@ -55,6 +63,8 @@ public struct AgentEvent: Sendable {
         self.action = action
         self.transcriptPath = transcriptPath
         self.agentError = agentError
+        self.seq = seq
+        self.agentPid = agentPid
         self.lineage = lineage
     }
 }
@@ -84,9 +94,16 @@ public final class AgentMonitor: @unchecked Sendable {
         /// its main loop parks — including mid-task waits on background
         /// subagents — so an immediate "finished" alert is often a lie; a park
         /// that resumes inside the window now alerts nothing. waiting/error
-        /// alerts stay immediate. Only attention is delayed — the E2EE list
-        /// snapshot still shows `done` in real time.
+        /// alerts stay immediate (after the confirmation window below).
         public var doneAttentionDelay: TimeInterval = 30
+        /// Edges out of `running` (waiting/error/done) are held back this long
+        /// before they become visible anywhere — list snapshot, Live
+        /// Activity, and attention alike. Agents park and resume their main
+        /// loop mid-task (tool-loop `stop` storms, subagent handoffs); an
+        /// edge whose reverse event arrives inside the window publishes
+        /// nothing, so the row never flaps running→done→running. Edges into
+        /// `running` and all non-running-origin edges publish immediately.
+        public var stateConfirmationWindow: TimeInterval = 1.75
 
         public init() {}
     }
@@ -105,7 +122,17 @@ public final class AgentMonitor: @unchecked Sendable {
     private final class Record {
         let id: String
         let agent: String
+        /// Published state: what the list snapshot and attention see. Trails
+        /// `machineState` by the confirmation window on edges out of
+        /// `running` (Tuning.stateConfirmationWindow).
         var state: AgentState = .running
+        /// State-machine truth, updated on every accepted event. Stickiness
+        /// rules (`.error`, `.done` vs notify) apply here.
+        var machineState: AgentState = .running
+        /// Open confirmation window for a held running→attention edge.
+        var pendingStateConfirm: DispatchWorkItem?
+        /// Highest reporter seq applied; older reports are dropped.
+        var lastSeq: UInt64?
         /// Name reported by the agent itself, retained if a managed terminal
         /// later closes and the still-running agent becomes standalone.
         var reportedSessionName: String?
@@ -213,14 +240,15 @@ public final class AgentMonitor: @unchecked Sendable {
     // MARK: - Public API
 
     public func ingest(_ event: AgentEvent) {
-        queue.sync {
+        queue.sync { () -> Void in
             let id = Self.sanitize(event.agentSessionId, cap: Self.idCap)
             let agent = Self.sanitize(event.agent, cap: 32)
             guard !id.isEmpty, !agent.isEmpty else { return }
 
             if event.event == "session-end" {
                 pendingDoneAttention.removeValue(forKey: id)?.cancel()
-                guard records.removeValue(forKey: id) != nil else { return }
+                guard let removed = records.removeValue(forKey: id) else { return }
+                removed.pendingStateConfirm?.cancel()
                 schedulePublishLocked()
                 return
             }
@@ -237,7 +265,8 @@ public final class AgentMonitor: @unchecked Sendable {
                 // record that slipped in while the database was unreadable.
                 if metadata.threadRecorded == false {
                     pendingDoneAttention.removeValue(forKey: id)?.cancel()
-                    if records.removeValue(forKey: id) != nil {
+                    if let removed = records.removeValue(forKey: id) {
+                        removed.pendingStateConfirm?.cancel()
                         schedulePublishLocked()
                     }
                     return
@@ -259,26 +288,85 @@ public final class AgentMonitor: @unchecked Sendable {
                 record = Record(id: id, agent: agent)
                 records[id] = record
             }
-            let oldState = record.state
+            // Hook processes race each other: a `stop` spawned before the
+            // next turn's `busy` can reach the socket after it. Reporter seq
+            // is machine-wide monotonic capture time; a report older than one
+            // already applied is stale and must not rewind the state machine.
+            if let seq = event.seq {
+                if let last = record.lastSeq, seq < last { return }
+                record.lastSeq = seq
+            }
             apply(enrichedEvent, to: record)
-            applyLineage(enrichedEvent.lineage, to: record)
+            applyLineage(
+                enrichedEvent.lineage,
+                reportedAgentPid: enrichedEvent.agentPid,
+                to: record
+            )
             _ = resolveOwnershipLocked(record, targets: matchTargets())
             record.updatedAt = Date()
-            if record.state != oldState {
-                // Any state edge supersedes held-back completion attention: the park
-                // resumed (running), or something more urgent replaced it.
-                pendingDoneAttention.removeValue(forKey: id)?.cancel()
-                if oldState == .running,
-                   let attention = Self.attention(record.state)
-                {
-                    if attention == .done {
-                        scheduleDoneAttentionLocked(id: id)
-                    } else {
-                        _onAttention?(record.info, attention)
-                    }
-                }
-            }
+            reconcileVisibleStateLocked(record, id: id)
             schedulePublishLocked()
+        }
+    }
+
+    /// Aligns the published state with the state machine. Edges out of
+    /// `running` open a confirmation window instead of publishing: agents
+    /// park and resume mid-task, and an edge whose reverse event lands inside
+    /// the window never becomes visible anywhere. All other edges commit
+    /// immediately.
+    private func reconcileVisibleStateLocked(_ record: Record, id: String) {
+        if record.machineState == record.state {
+            // The machine returned to the visible state (or never left):
+            // whatever edge was pending has been contradicted.
+            record.pendingStateConfirm?.cancel()
+            record.pendingStateConfirm = nil
+            return
+        }
+        let holdable = record.state == .running && tuning.stateConfirmationWindow > 0
+        if holdable {
+            // A window opened by an earlier edge keeps its deadline; the
+            // commit reads `machineState` at fire time, so a superseding
+            // edge (done → waiting) needs no restart, and a stop storm
+            // cannot defer confirmation forever.
+            guard record.pendingStateConfirm == nil else { return }
+            var scheduled: DispatchWorkItem?
+            let item = DispatchWorkItem { [weak self] in
+                guard let self, let record = records[id],
+                      record.pendingStateConfirm === scheduled
+                else { return }
+                record.pendingStateConfirm = nil
+                commitVisibleStateLocked(record, id: id)
+                schedulePublishLocked()
+            }
+            scheduled = item
+            record.pendingStateConfirm = item
+            queue.asyncAfter(
+                deadline: .now() + tuning.stateConfirmationWindow, execute: item
+            )
+            return
+        }
+        commitVisibleStateLocked(record, id: id)
+    }
+
+    /// Publishes the machine state and fires attention for edges out of
+    /// `running`. `done` attention stays behind its own longer hold-back.
+    private func commitVisibleStateLocked(_ record: Record, id: String) {
+        record.pendingStateConfirm?.cancel()
+        record.pendingStateConfirm = nil
+        let oldState = record.state
+        let newState = record.machineState
+        guard newState != oldState else { return }
+        record.state = newState
+        record.updatedAt = Date()
+        // Any visible state edge supersedes held-back completion attention:
+        // the park resumed (running), or something more urgent replaced it.
+        pendingDoneAttention.removeValue(forKey: id)?.cancel()
+        if oldState == .running, let attention = Self.attention(newState) {
+            if attention == .done {
+                scheduleDoneAttentionLocked(id: id)
+            } else {
+                _onAttention?(record.info, attention)
+            }
         }
     }
 
@@ -319,7 +407,8 @@ public final class AgentMonitor: @unchecked Sendable {
     public func dismiss(id: String) {
         queue.sync {
             pendingDoneAttention.removeValue(forKey: id)?.cancel()
-            guard records.removeValue(forKey: id) != nil else { return }
+            guard let removed = records.removeValue(forKey: id) else { return }
+            removed.pendingStateConfirm?.cancel()
             schedulePublishLocked()
         }
     }
@@ -354,15 +443,15 @@ public final class AgentMonitor: @unchecked Sendable {
         // session start, or another stop may move the agent out of it — a
         // mid-error `notify` (e.g. the idle notification) must not mask the
         // failure.
-        let sticky = record.state == .error
+        let sticky = record.machineState == .error
         switch event.event {
         case "session-start":
-            record.state = .running
+            record.machineState = .running
             record.prompt = nil
             record.action = nil
             record.message = nil
         case "prompt":
-            record.state = .running
+            record.machineState = .running
             let providedPrompt = event.prompt.map {
                 Self.sanitize($0, cap: Self.promptCap)
             }
@@ -385,7 +474,7 @@ public final class AgentMonitor: @unchecked Sendable {
             // to running (clearing error stickiness). Agents with a live
             // message source (for example OpenCode/Pi stream events) can also
             // refresh the row through this event.
-            record.state = .running
+            record.machineState = .running
             if let message = event.message {
                 let cleaned = Self.sanitize(message, cap: Self.messageCap)
                 if !cleaned.isEmpty {
@@ -394,7 +483,7 @@ public final class AgentMonitor: @unchecked Sendable {
                 }
             }
         case "tool":
-            if !sticky { record.state = .running }
+            if !sticky { record.machineState = .running }
             // A tool without a meaningful command/path/query must not replace
             // the last agent message with a bare implementation label.
             record.action = nil
@@ -409,26 +498,29 @@ public final class AgentMonitor: @unchecked Sendable {
                 }
             }
         case "ask":
-            if !sticky { record.state = .waiting }
+            if !sticky { record.machineState = .waiting }
             let provided = event.message.map { Self.sanitize($0, cap: Self.messageCap) }
             record.message = provided?.isEmpty == false ? provided : "Waiting for your answer"
         case "notify":
+            // Noise notifications never get here: the mappers forward notify
+            // only for payloads that mean "waiting for the user" (permission
+            // prompts, the idle reminder — HookNotificationClassifier).
             // `.done` is sticky against notify too: Claude fires its idle
             // Notification hook ("waiting for your input") when the REPL
             // sits unattended after a Stop, and that must not resurrect a
             // finished agent into waiting — the push would read "needs your
             // input" right on the heels of "finished". A genuine ask always
             // happens mid-turn, after a turn start reset the state.
-            guard record.state != .done else { break }
-            if !sticky { record.state = .waiting }
+            guard record.machineState != .done else { break }
+            if !sticky { record.machineState = .waiting }
             if let message = event.message {
                 record.message = Self.sanitize(message, cap: Self.messageCap)
             }
         case "compact":
-            if !sticky { record.state = .running }
+            if !sticky { record.machineState = .running }
             record.action = "Compacting context"
         case "stop":
-            record.state = event.agentError == true ? .error : .done
+            record.machineState = event.agentError == true ? .error : .done
             record.action = nil
             // A stop without text (some agents' stop path has no message
             // source) must not wipe the message we already have.
@@ -453,14 +545,26 @@ public final class AgentMonitor: @unchecked Sendable {
         return sanitize(normalized, cap: sessionNameCap)
     }
 
-    private func applyLineage(_ lineage: [AgentLineageEntry], to record: Record) {
-        guard !lineage.isEmpty else { return } // keep the previous lineage
+    private func applyLineage(
+        _ lineage: [AgentLineageEntry], reportedAgentPid: pid_t?, to record: Record
+    ) {
+        guard !lineage.isEmpty else { // keep the previous lineage
+            if let pid = reportedAgentPid, pid > 0 { record.agentPid = pid }
+            return
+        }
         let entries = Array(lineage.prefix(Self.lineageCap))
         record.lineagePids = entries.map(\.pid).filter { $0 > 0 }
         record.tty = entries.compactMap(\.tty).first
-        record.agentPid = entries.first {
-            $0.pid > 0 && !Self.isShell(processName: $0.name)
-        }?.pid
+        // The reporter identifies the agent ancestor by argv, which sees
+        // through runtime wrappers (node/bun/python) the first-non-shell
+        // guess would misattribute; the guess remains for older reporters.
+        if let pid = reportedAgentPid, pid > 0 {
+            record.agentPid = pid
+        } else {
+            record.agentPid = entries.first {
+                $0.pid > 0 && !Self.isShell(processName: $0.name)
+            }?.pid
+        }
         record.term = entries.compactMap {
             Self.terminalDisplayName(processName: $0.name)
         }.first
@@ -502,16 +606,19 @@ public final class AgentMonitor: @unchecked Sendable {
         for (id, record) in records {
             if let pid = record.agentPid, pid > 0 {
                 if kill(pid, 0) != 0 && errno == ESRCH {
+                    record.pendingStateConfirm?.cancel()
                     records.removeValue(forKey: id)
                     changed = true
                     continue
                 }
             } else if now.timeIntervalSince(record.updatedAt) > tuning.idleExpiry {
+                record.pendingStateConfirm?.cancel()
                 records.removeValue(forKey: id)
                 changed = true
                 continue
             }
             if now.timeIntervalSince(record.firstSeenAt) > tuning.absoluteTTL {
+                record.pendingStateConfirm?.cancel()
                 records.removeValue(forKey: id)
                 changed = true
                 continue

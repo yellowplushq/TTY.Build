@@ -29,6 +29,11 @@ public struct ControlRequest: Decodable, Sendable {
     public var action: String?
     public var transcriptPath: String?
     public var agentError: Bool?
+    /// Machine-wide monotonic capture time from the reporter; orders racing
+    /// same-session reports. Absent from reporters older than the field.
+    public var seq: UInt64?
+    /// The reporter's own identification of the agent ancestor process.
+    public var agentPid: Int32?
     public var lineage: [AgentLineageEntry]?
 }
 

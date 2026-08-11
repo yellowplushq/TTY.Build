@@ -266,6 +266,7 @@ public final class Daemon: @unchecked Sendable {
                 prompt: request.prompt, message: request.message,
                 action: request.action, transcriptPath: request.transcriptPath,
                 agentError: request.agentError,
+                seq: request.seq, agentPid: request.agentPid,
                 lineage: request.lineage ?? []
             ))
             return .ok([:])

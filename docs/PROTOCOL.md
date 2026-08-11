@@ -696,9 +696,19 @@ agents' hook settings by `ttybuild hooks install` or the menu bar app):
 `{"cmd":"agent-event","noReply":true,"agent":"claude","event":"session-start|prompt|ask|tool|
 busy|notify|compact|stop|session-end","agentSessionId":"...","sessionName"?,
 "cwd"?,"prompt"?,"message"?,"action"?,"agentError"?,
-"lineage":[{"pid","name","tty"?}]}`. The daemon's AgentMonitor applies the
-state machine, matches `lineage`/`tty` against daemon-owned PTYs, and broadcasts
-the encrypted `agents` ctl snapshot. `noReply=true` makes reporter delivery
+"seq"?,"agentPid"?,"lineage":[{"pid","name","tty"?}]}`. A `notify` on the
+wire always means "waiting for the user": the mappers classify notification
+payloads (permission prompt / idle reminder / other) and drop the noise
+before it is ever sent. `seq` is the reporter's machine-wide monotonic
+capture time; the daemon drops a report older than one already applied for
+the same session (racing hook processes can reach the socket out of event
+order). `agentPid` is the reporter's own argv-based identification of the
+agent ancestor, preferred over the daemon's first-non-shell lineage guess.
+Both are optional: events from older reporters keep their legacy semantics.
+The daemon's AgentMonitor applies the state machine, matches `lineage`/`tty`
+against daemon-owned PTYs, and broadcasts the encrypted `agents` ctl
+snapshot. Edges out of `running` become visible only after a ~1.75 s
+confirmation window that any reverse event cancels (AgentMonitor.Tuning). `noReply=true` makes reporter delivery
 strictly one-way: stdin and socket operations are bounded and the daemon does
 not write an acknowledgement after the reporter exits. For managed sessions, the daemon's live
 terminal title is authoritative for `sessionName`; otherwise an agent adapter
