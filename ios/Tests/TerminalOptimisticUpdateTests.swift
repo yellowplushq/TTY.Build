@@ -112,6 +112,62 @@ final class TerminalOptimisticUpdateTests: XCTestCase {
         XCTAssertEqual(manager.terminals.map(\.info.title), ["zsh", "vim"])
     }
 
+    func testStaleListAfterRekeyKeepsFreshTabAndFocus() throws {
+        let manager = makeManager()
+        let connection = try makeConnection()
+        manager.attach(connection)
+        try publish(connection, revision: 1, sessions: [session(id: 1)])
+
+        manager.createTerminal(on: computerID, cols: 120, rows: 40)
+        let req = try XCTUnwrap(manager.pendingCreates.keys.first)
+        connection.handle(frame: try Frame.control(.created(id: 7, req: req)))
+        let realID = TerminalID(computerID: computerID, sid: 7)
+        XCTAssertEqual(manager.activeID, realID)
+
+        // The relay directory lags the `created` echo: a list emitted in the
+        // gap doesn't carry the fresh sid yet. The rekeyed tab must survive
+        // (dropping it would return focus to the previous tab and later
+        // re-append the terminal unfocused at the end).
+        try publish(connection, revision: 2, sessions: [session(id: 1)])
+        XCTAssertEqual(manager.terminals.map(\.id.sid), [1, 7])
+        XCTAssertEqual(manager.activeID, realID)
+
+        // The directory catches up: refreshed in place, focus untouched.
+        try publish(
+            connection, revision: 3,
+            sessions: [session(id: 1), session(id: 7, title: "vim")]
+        )
+        XCTAssertEqual(manager.terminals.map(\.id.sid), [1, 7])
+        XCTAssertEqual(manager.terminals.map(\.info.title), ["zsh", "vim"])
+        XCTAssertEqual(manager.activeID, realID)
+
+        // Once listed, absence is a real close again.
+        try publish(connection, revision: 4, sessions: [session(id: 1)])
+        XCTAssertEqual(manager.terminals.map(\.id.sid), [1])
+    }
+
+    func testClosingRekeyedTabBeforeFirstListingAwaitsConfirmation() throws {
+        let manager = makeManager()
+        let connection = try makeConnection()
+        manager.attach(connection)
+        try publish(connection, revision: 1, sessions: [])
+
+        manager.createTerminal(on: computerID, cols: 120, rows: 40)
+        let req = try XCTUnwrap(manager.pendingCreates.keys.first)
+        connection.handle(frame: try Frame.control(.created(id: 5, req: req)))
+
+        // Closed before any list carried the sid: a stale list without it
+        // must not count as confirmation, and the eventual listing must stay
+        // suppressed (and be re-closed) instead of resurrecting a tab.
+        manager.closeTerminal(TerminalID(computerID: computerID, sid: 5))
+        XCTAssertEqual(manager.terminals, [])
+        try publish(connection, revision: 2, sessions: [])
+        try publish(connection, revision: 3, sessions: [session(id: 5)])
+        XCTAssertEqual(manager.terminals, [])
+        try publish(connection, revision: 4, sessions: [])
+        XCTAssertEqual(manager.terminals, [])
+    }
+
     func testCloseRemovesTabImmediatelyAndSuppressesRelisting() throws {
         let manager = makeManager()
         let connection = try makeConnection()
