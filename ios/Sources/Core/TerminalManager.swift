@@ -121,6 +121,13 @@ final class TerminalManager {
     /// session may not have reached the directory yet, and sids are never
     /// reused, so an unlisted entry can wait indefinitely).
     private var pendingCloses: [TerminalID: Bool] = [:]
+    /// Rekeyed creates no session list has contained yet: the `created` echo
+    /// proves the session exists, but the relay directory can lag behind it,
+    /// so a list missing the id is stale — not a close. Dropping the fresh
+    /// tab on it would yank focus back to the previous tab and later
+    /// re-append the terminal unfocused. Absence counts only after the first
+    /// list that includes the id.
+    private var unlistedCreates: Set<TerminalID> = []
     /// New ids held back during `placementGrace` (see above).
     private var heldAppends: [TerminalID: SessionInfo] = [:]
     /// Latest per-computer agent snapshot, captured from the EMISSIONS (never
@@ -273,6 +280,7 @@ final class TerminalManager {
         // can never open a channel or be closed.
         heldAppends = heldAppends.filter { $0.key.computerID != connection.id }
         pendingCloses = pendingCloses.filter { $0.key.computerID != connection.id }
+        unlistedCreates = unlistedCreates.filter { $0.computerID != connection.id }
         agentSources.removeValue(forKey: connection.id)
         rebuildAgentRows()
     }
@@ -457,7 +465,10 @@ final class TerminalManager {
             dropTerminal(id)
             return
         }
-        pendingCloses[id] = true
+        // A tab the directory never listed (rekeyed create ahead of the
+        // directory) starts unconfirmed: absence from the next lists is
+        // still lag, not the close taking effect.
+        pendingCloses[id] = unlistedCreates.remove(id) == nil
         computer(id: id.computerID)?.closeSession(id: id.sid)
         dropTerminal(id)
     }
@@ -548,13 +559,16 @@ final class TerminalManager {
             guard let req, pendingCreates.removeValue(forKey: req) != nil else { break }
             errors.send(msg)
         case .offline(let removedTerminalCount):
-            // In-flight creates died with the host: retire their optimistic
-            // tabs (never listed, so the empty-list reconcile keeps them).
+            // In-flight and never-listed creates died with the host: retire
+            // their tabs (neither is listed, so the empty-list reconcile
+            // keeps them).
             for terminal in terminals
-            where terminal.id.computerID == connection.id && terminal.isPlaceholder {
+            where terminal.id.computerID == connection.id
+                && (terminal.isPlaceholder || unlistedCreates.contains(terminal.id)) {
                 dropTerminal(terminal.id)
             }
             pendingCreates = pendingCreates.filter { $0.value.computerID != connection.id }
+            unlistedCreates = unlistedCreates.filter { $0.computerID != connection.id }
             heldAppends = heldAppends.filter { $0.key.computerID != connection.id }
             pendingCloses = pendingCloses.filter { $0.key.computerID != connection.id }
             guard removedTerminalCount > 0 else { break }
@@ -595,11 +609,12 @@ final class TerminalManager {
         for terminal in terminals
         where terminal.id.computerID == cid && !terminal.isPlaceholder {
             if let info = listed[terminal.id] {
+                unlistedCreates.remove(terminal.id)
                 update(terminal.id) { tab in
                     tab.info = info
                     tab.computerName = connection.displayName
                 }
-            } else {
+            } else if !unlistedCreates.contains(terminal.id) {
                 dropTerminal(terminal.id)
             }
         }
@@ -673,6 +688,12 @@ final class TerminalManager {
             terminals.remove(at: appended)
         }
         guard let index = terminals.firstIndex(where: { $0.id == placeholderID }) else { return }
+        // A non-nil `info` came out of a session list (held append or the
+        // folded foreign tab); nil means the echo outran the directory and
+        // stale lists must not treat the fresh id's absence as a close.
+        if info == nil {
+            unlistedCreates.insert(id)
+        }
         // Tell the UI before mutating: the page keyed on the provisional id
         // is about to be rebuilt under the real one and navigation follows.
         rekeys.send((from: placeholderID, to: id))
