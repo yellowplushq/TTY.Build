@@ -688,8 +688,8 @@ attaching terminal app resolved from the socket peer pid); each attach
 connection is its own holder, exclusive against other terminals too. Socket
 close releases the hold to `none`. A `claim` on the stream re-takes the hold
 and answers with a fresh `takeover` + `resize` + `replay`. The shipped
-`ttybuild-attach` client (embedded in the menu bar app; "Open in Terminal")
-is the canonical consumer.
+`ttybuild attach` command (the public CLI, embedded in the menu bar app;
+"Open in Terminal") is the canonical consumer.
 
 `agent-event` is sent by the `ttybuild-hook` reporter (installed into coding
 agents' hook settings by `ttybuild hooks install` or the menu bar app):

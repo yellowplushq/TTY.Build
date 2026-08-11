@@ -9,10 +9,11 @@ import TTYBuildKit
 struct TTYBuildCLI: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ttybuild",
-        abstract: "TTY.Build desktop daemon — remote terminal host.",
+        abstract: "TTY.Build — terminal sessions you can take over from anywhere.",
+        version: TTYBuildVersion.current,
         subcommands: [
-            Serve.self, Ls.self, New.self, Kill.self, Pair.self, Status.self,
-            Agents.self, Hooks.self,
+            Serve.self, Attach.self, Ls.self, New.self, Kill.self, Pair.self,
+            Status.self, Agents.self, Hooks.self,
         ]
     )
 }
@@ -39,6 +40,11 @@ struct Serve: ParsableCommand {
                 fail("--service must be an https:// URL")
             }
             try home.save(config: .init(service: url.absoluteString))
+        } else if home.loadConfig() == nil, (try? home.loadIdentity()) == nil {
+            // First run with no explicit choice: the production service.
+            try home.save(config: .init(
+                service: TTYBuildServiceAPI.productionServiceURL.absoluteString
+            ))
         }
 
         let daemon: Daemon
@@ -47,7 +53,15 @@ struct Serve: ParsableCommand {
         } catch {
             fail("\(error)")
         }
-        try daemon.start()
+        do {
+            try daemon.start()
+        } catch ControlServer.ServerError.socketBusy {
+            fail("""
+            another TTY.Build daemon is already running — the menu bar app, \
+            or another `ttybuild serve`.
+            One computer runs one TTY.Build. Quit it first, then retry.
+            """)
+        }
 
         print("ttybuild daemon started")
         print("  socket:  \(home.socketPath)")
@@ -82,6 +96,68 @@ struct Serve: ParsableCommand {
             source.resume()
         }
         dispatchMain()
+    }
+}
+
+// MARK: - attach
+
+struct Attach: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Attach this terminal to a session with exclusive hold.",
+        discussion: """
+        Attaching takes over the session: other surfaces (the iPhone, other \
+        terminals) show a placeholder until they claim it back. Detach with \
+        Ctrl-\\ pressed twice; when preempted, ⏎ reclaims and q quits.
+        """
+    )
+
+    @Argument(help: "Session id (see `ttybuild ls`), or omit with --new.")
+    var id: Int?
+
+    @Flag(name: .long, help: "Create a new session and attach to it.")
+    var new = false
+
+    @Option(name: .long, help: "Working directory for --new.")
+    var cwd: String?
+
+    func validate() throws {
+        if new, id != nil {
+            throw ValidationError("pass either a session id or --new, not both")
+        }
+        if !new, id == nil {
+            throw ValidationError("pass a session id, or --new to create one")
+        }
+    }
+
+    func run() throws {
+        guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else {
+            fail("attach needs an interactive terminal")
+        }
+
+        let home = TTYBuildHome()
+        var request: [String: Any] = ["cmd": "attach"]
+        if new {
+            request["new"] = true
+            if let cwd { request["cwd"] = cwd }
+            let size = TerminalIO.windowSize()
+            request["cols"] = Int(size.cols)
+            request["rows"] = Int(size.rows)
+        } else if let id {
+            request["id"] = id
+        }
+
+        let stream: AttachStream
+        let handshake: AttachStream.Handshake
+        do {
+            (stream, handshake) = try AttachStream.connect(
+                socketPath: home.socketPath, request: request
+            )
+        } catch {
+            fail("\(error)")
+        }
+
+        let session = AttachSession(stream: stream, handshake: handshake)
+        throw ExitCode(session.run())
     }
 }
 
@@ -292,10 +368,27 @@ struct Pair: ParsableCommand {
     @Flag(help: "Register a fresh computer identity and E2EE secret.")
     var reset = false
 
+    @Flag(help: "Skip the --reset confirmation prompt.")
+    var yes = false
+
     @Option(help: "TTY.Build HTTPS service origin; written to config.json for future runs.")
     var service: String?
 
     func run() throws {
+        if reset, !yes {
+            guard isatty(STDIN_FILENO) == 1 else {
+                fail("--reset requires confirmation; pass --yes when scripting")
+            }
+            print("""
+            --reset rotates this computer's identity, host credential, and \
+            E2EE secret: every paired device is disconnected and must pair \
+            again.
+            """)
+            print("Type 'reset' to continue: ", terminator: "")
+            guard readLine()?.trimmingCharacters(in: .whitespaces) == "reset" else {
+                fail("aborted")
+            }
+        }
         let home = TTYBuildHome()
         if let service {
             guard let url = validServiceURL(service) else {

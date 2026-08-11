@@ -39,6 +39,30 @@ final class DaemonControlTests: XCTestCase {
         try ControlClient.roundTrip(socketPath: home.socketPath, request: request)
     }
 
+    /// Single-daemon rule: a second server must refuse a socket a live
+    /// daemon answers on, but may replace a stale socket file.
+    func testSecondDaemonRefusesLiveSocketButReplacesStaleOne() throws {
+        XCTAssertThrowsError(
+            try ControlServer(path: home.socketPath) { _ in .ok([:]) }
+        ) { error in
+            guard case ControlServer.ServerError.socketBusy = error else {
+                return XCTFail("expected socketBusy, got \(error)")
+            }
+        }
+
+        // A stale socket (file exists, nobody listening) is reclaimed.
+        daemon.shutdown()
+        let stalePath = home.socketPath
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stalePath))
+        FileManager.default.createFile(atPath: stalePath, contents: nil)
+        let server = try ControlServer(path: stalePath) { _ in .ok([:]) }
+        let reply = try ControlClient.roundTrip(
+            socketPath: stalePath, request: ["cmd": "anything"]
+        )
+        XCTAssertEqual(reply["ok"] as? Bool, true)
+        server.stop()
+    }
+
     func testLsNewKillRoundTrip() throws {
         var reply = try send(["cmd": "ls"])
         XCTAssertEqual(reply["ok"] as? Bool, true)
