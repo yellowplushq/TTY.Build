@@ -11,11 +11,15 @@ import TTYBuildDaemonCore
 /// but built around the fact that we always have an executable script:
 /// - `.opensCommandFiles`: the app declares the shell-script document type
 ///   and executes `.command` files it opens (Terminal.app, iTerm2).
+/// - AppleScript window creation: the app ships a real scripting
+///   dictionary that can open a window running a command in the existing
+///   instance (Ghostty ≥ 1.3's `new window with configuration`).
 /// - `.executeArgs`: the app's CLI runs a program passed via
 ///   `open -na <app> --args …` (Ghostty/Alacritty `-e`, kitty positional,
 ///   WezTerm `start --`).
-/// Apps with neither (e.g. Warp, which would need Accessibility-permission
-/// keystroke injection à la VibeTunnel) fall back to Terminal.app.
+/// Apps with none of these (e.g. Warp, which would need
+/// Accessibility-permission keystroke injection à la VibeTunnel) fall
+/// back to Terminal.app.
 enum KnownTerminal: String, CaseIterable {
     case terminal
     case iTerm2
@@ -86,15 +90,35 @@ enum KnownTerminal: String, CaseIterable {
     }
 
     /// Whether we can type the command into a fresh window of a running
-    /// instance (⌘N + keystrokes via System Events). The escape hatch for
-    /// single-instance apps where `open -n` would spawn a second app
-    /// instance (Ghostty) and for apps with no CLI channel at all (Warp).
-    /// Requires the Accessibility permission the app already asks for.
+    /// instance (⌘N + keystrokes via System Events). The last-resort
+    /// escape hatch for apps with no CLI or scripting channel at all
+    /// (Warp). Requires the Accessibility permission the app already asks
+    /// for, plus Automation consent for System Events, and its fixed
+    /// activation delays are inherently racy — never use it for an app
+    /// that has any other channel.
     var supportsKeystrokeWindow: Bool {
         switch self {
-        case .ghostty, .warp, .warpPreview: true
+        case .warp, .warpPreview: true
         default: false
         }
+    }
+
+    /// Whether the installed app can open a window running a command via
+    /// its own AppleScript dictionary — the sanctioned channel for
+    /// single-instance apps, where `open -n` would spawn a second app
+    /// instance and keystroke injection is a permission-and-timing
+    /// gamble. Ghostty ships its dictionary since 1.3.0 (users can turn
+    /// it off with `macos-applescript = false`, which surfaces as a
+    /// script error we fall back from). Needs only the per-app
+    /// Automation consent prompt, not Accessibility.
+    var supportsAppleScriptWindow: Bool {
+        guard self == .ghostty, let url = installedURL,
+              let version = Bundle(url: url)?
+              .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        else { return false }
+        let parts = version.split(separator: ".").compactMap { Int($0) }
+        guard let major = parts.first else { return false }
+        return major > 1 || (major == 1 && parts.count > 1 && parts[1] >= 3)
     }
 
     /// The "run it" keystroke. Warp ignores key code 36 and needs a raw
@@ -280,9 +304,17 @@ enum TerminalOpener {
             return
         }
 
-        // A running single-instance terminal (Ghostty): `open -n` would
-        // spawn a second app instance, so type the command into a fresh
-        // window of the existing one when Accessibility allows it.
+        // A single-instance terminal with a scripting dictionary
+        // (Ghostty ≥ 1.3): open a window running the script in the
+        // existing (or auto-launched) instance. Falls back to a second
+        // instance below if the user denied Automation.
+        if terminal.supportsAppleScriptWindow {
+            launchViaAppleScriptWindow(script: script, in: terminal)
+            return
+        }
+
+        // Keystroke-only terminals (Warp) with a running instance, when
+        // Accessibility permits.
         if terminal.supportsKeystrokeWindow, terminal.isRunning,
            AXIsProcessTrusted()
         {
@@ -290,17 +322,7 @@ enum TerminalOpener {
             return
         }
 
-        if let args = terminal.executeArguments(script: script.path),
-           let app = terminal.installedURL
-        {
-            // `open -na <app> --args …`: a fresh (first or, for a running
-            // single-instance app, second) instance running the script —
-            // no AppleScript and no Accessibility permission involved.
-            configuration.createsNewApplicationInstance = true
-            configuration.arguments = args
-            NSWorkspace.shared.openApplication(
-                at: app, configuration: configuration
-            ) { _, _ in }
+        if launchViaNewInstance(script: script, in: terminal) {
             return
         }
 
@@ -318,6 +340,66 @@ enum TerminalOpener {
             ) { _, _ in }
         } else {
             NSWorkspace.shared.open(script)
+        }
+    }
+
+    /// `open -na <app> --args …`: a fresh (first or, for a running
+    /// single-instance app, second) instance running the script — no
+    /// AppleScript and no Accessibility permission involved. Returns
+    /// false when the terminal has no execute-args channel.
+    @discardableResult
+    private static func launchViaNewInstance(
+        script: URL, in terminal: KnownTerminal
+    ) -> Bool {
+        guard let args = terminal.executeArguments(script: script.path),
+              let app = terminal.installedURL
+        else { return false }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        configuration.arguments = args
+        NSWorkspace.shared.openApplication(
+            at: app, configuration: configuration
+        ) { _, _ in }
+        return true
+    }
+
+    /// Opens a new window running the script via the terminal's own
+    /// AppleScript dictionary (Ghostty's `new window with configuration`,
+    /// whose `command` runs instead of the shell). Works whether or not
+    /// the app is running and needs only Automation consent. If osascript
+    /// fails — consent denied (-1743), `macos-applescript = false` — fall
+    /// back to a fresh instance via execute-args.
+    private static func launchViaAppleScriptWindow(
+        script: URL, in terminal: KnownTerminal
+    ) {
+        // Ghostty hands `command` to a shell (`login … -c exec -l …`),
+        // so the path is shell-quoted, then AppleScript-string-escaped.
+        let escaped = shellQuoted(script.path)
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let appleScript = """
+        tell application id "\(terminal.bundleIdentifier)"
+            set cfg to new surface configuration
+            set command of cfg to "\(escaped)"
+            new window with configuration cfg
+        end tell
+        """
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", appleScript]
+            let failed: Bool
+            do {
+                try process.run()
+                process.waitUntilExit()
+                failed = process.terminationStatus != 0
+            } catch {
+                failed = true
+            }
+            guard failed else { return }
+            Task { @MainActor in
+                launchViaNewInstance(script: script, in: terminal)
+            }
         }
     }
 
