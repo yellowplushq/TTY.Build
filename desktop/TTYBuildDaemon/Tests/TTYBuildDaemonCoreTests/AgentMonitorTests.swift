@@ -63,7 +63,6 @@ final class AgentMonitorTests: XCTestCase {
         prompt: String? = nil, message: String? = nil, action: String? = nil,
         transcriptPath: String? = nil,
         agentError: Bool? = nil,
-        notifyKind: String? = nil,
         seq: UInt64? = nil, agentPid: Int32? = nil,
         lineage: [AgentLineageEntry]? = nil
     ) -> AgentEvent {
@@ -73,7 +72,6 @@ final class AgentMonitorTests: XCTestCase {
             prompt: prompt, message: message, action: action,
             transcriptPath: transcriptPath,
             agentError: agentError,
-            notifyKind: notifyKind,
             seq: seq, agentPid: agentPid,
             lineage: lineage ?? [AgentLineageEntry(pid: livePid, name: "claude")]
         )
@@ -853,34 +851,6 @@ extension AgentMonitorTests {
         XCTAssertEqual(windowed.list().first?.state, .waiting)
         XCTAssertEqual(updates.all.count, 1)
         XCTAssertEqual(updates.all.first?.attention, .waiting)
-    }
-
-    func testNotifyOtherKindNeverChangesState() throws {
-        let updates = Updates()
-        monitor.onAttention = { updates.append($0, $1) }
-        monitor.ingest(event("prompt", prompt: "go"))
-        monitor.ingest(event(
-            "notify", message: "A new version is available", notifyKind: "other"
-        ))
-        let info = try only()
-        XCTAssertEqual(info.state, .running)
-        XCTAssertNil(info.message, "noise notifications must not replace the message")
-        XCTAssertTrue(updates.all.isEmpty)
-    }
-
-    func testNotifyPermissionAndIdleKindsStillWait() throws {
-        monitor.ingest(event(
-            "notify", id: "perm-1", message: "Needs permission", notifyKind: "permission"
-        ))
-        XCTAssertEqual(
-            monitor.list().first { $0.id == "perm-1" }?.state, .waiting
-        )
-        monitor.ingest(event(
-            "notify", id: "idle-1", message: "Waiting for your input", notifyKind: "idle"
-        ))
-        XCTAssertEqual(
-            monitor.list().first { $0.id == "idle-1" }?.state, .waiting
-        )
     }
 
     func testStaleSeqIsDropped() throws {

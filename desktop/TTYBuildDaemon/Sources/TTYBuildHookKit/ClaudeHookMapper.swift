@@ -45,21 +45,23 @@ public enum ClaudeHookMapper {
                 report.action = action.isEmpty ? nil : action
             }
         case "Notification":
+            // Claude fires Notification for more than input requests. Only a
+            // permission prompt or the idle reminder means "waiting for the
+            // user"; anything else is dropped here like an unknown event —
+            // noise must not flip a working agent to waiting (or even bump
+            // its row). Prefer the structured type when the host provides
+            // one; fall back to classifying the human-readable message.
             report.event = "notify"
             report.message = (object["message"] as? String).map {
                 sanitizeHookText($0, cap: HookFieldCaps.message)
             }
-            // Prefer the structured type when the host provides one; fall
-            // back to classifying the human-readable message.
-            if let type = object["notification_type"] as? String,
-               !type.isEmpty
-            {
-                report.notifyKind = Self.notifyKind(fromType: type)
+            let kind: HookNotificationClassifier.Kind
+            if let type = object["notification_type"] as? String, !type.isEmpty {
+                kind = Self.notifyKind(fromType: type)
             } else {
-                report.notifyKind = HookNotificationClassifier.classify(
-                    message: report.message
-                )
+                kind = HookNotificationClassifier.classify(message: report.message)
             }
+            guard kind.isInputRequest else { return nil }
         case "PreCompact":
             report.event = "compact"
         case "Stop":
@@ -97,15 +99,15 @@ public enum ClaudeHookMapper {
     }
 
     /// Newer Claude builds carry `notification_type` on Notification stdin;
-    /// map the documented values and classify the message text for the rest.
-    static func notifyKind(fromType type: String) -> String {
+    /// an explicit non-input type wins over permission-looking message text.
+    static func notifyKind(fromType type: String) -> HookNotificationClassifier.Kind {
         switch type.lowercased() {
         case "permission_request", "permission_prompt", "permission":
-            HookNotificationClassifier.permission
+            .permission
         case "idle", "idle_prompt", "waiting_for_input":
-            HookNotificationClassifier.idle
+            .idle
         default:
-            HookNotificationClassifier.other
+            .other
         }
     }
 }

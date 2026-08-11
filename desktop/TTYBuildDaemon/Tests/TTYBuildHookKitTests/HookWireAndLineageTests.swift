@@ -47,10 +47,9 @@ final class HookWireAndLineageTests: XCTestCase {
         XCTAssertNil(wireLineage[1]["tty"])
     }
 
-    func testRequestLineCarriesSeqAgentPidAndNotifyKind() throws {
+    func testRequestLineCarriesSeqAndAgentPid() throws {
         let report = HookReport(
-            event: "notify", agentSessionId: "s-1", message: "Permission needed",
-            notifyKind: "permission"
+            event: "notify", agentSessionId: "s-1", message: "Permission needed"
         )
         let line = try XCTUnwrap(HookWire.requestLine(
             agent: "claude", report: report, lineage: [],
@@ -61,7 +60,6 @@ final class HookWireAndLineageTests: XCTestCase {
         )
         XCTAssertEqual((object["seq"] as? NSNumber)?.uint64Value, 123_456_789)
         XCTAssertEqual(object["agentPid"] as? Int, 4242)
-        XCTAssertEqual(object["notifyKind"] as? String, "permission")
 
         // Old-style calls carry none of the new fields.
         let bare = try XCTUnwrap(HookWire.requestLine(
@@ -74,7 +72,6 @@ final class HookWireAndLineageTests: XCTestCase {
         )
         XCTAssertNil(bareObject["seq"])
         XCTAssertNil(bareObject["agentPid"])
-        XCTAssertNil(bareObject["notifyKind"])
     }
 
     func testRequestLineCarriesAgentError() throws {

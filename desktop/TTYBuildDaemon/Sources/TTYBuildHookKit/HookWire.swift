@@ -30,7 +30,6 @@ public enum HookWire {
             object["transcriptPath"] = transcriptPath
         }
         if let agentError = report.agentError { object["agentError"] = agentError }
-        if let notifyKind = report.notifyKind { object["notifyKind"] = notifyKind }
         object["lineage"] = lineage.map { entry -> [String: Any] in
             var encoded: [String: Any] = ["pid": Int(entry.pid), "name": entry.name]
             if let tty = entry.tty { encoded["tty"] = tty }

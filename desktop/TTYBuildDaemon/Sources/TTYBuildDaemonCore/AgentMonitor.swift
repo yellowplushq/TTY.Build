@@ -36,9 +36,6 @@ public struct AgentEvent: Sendable {
     public var transcriptPath: String?
     /// `stop` only: the turn ended on an agent-side failure (API error).
     public var agentError: Bool?
-    /// `notify` only: permission | idle | other. Only the first two mean
-    /// "waiting for the user"; nil (older reporters) keeps legacy behavior.
-    public var notifyKind: String?
     /// Machine-wide monotonic capture time stamped by the reporter, used to
     /// drop reports that arrive behind a newer one for the same session.
     public var seq: UInt64?
@@ -53,7 +50,6 @@ public struct AgentEvent: Sendable {
         prompt: String? = nil, message: String? = nil, action: String? = nil,
         transcriptPath: String? = nil,
         agentError: Bool? = nil,
-        notifyKind: String? = nil,
         seq: UInt64? = nil, agentPid: Int32? = nil,
         lineage: [AgentLineageEntry] = []
     ) {
@@ -67,7 +63,6 @@ public struct AgentEvent: Sendable {
         self.action = action
         self.transcriptPath = transcriptPath
         self.agentError = agentError
-        self.notifyKind = notifyKind
         self.seq = seq
         self.agentPid = agentPid
         self.lineage = lineage
@@ -507,12 +502,9 @@ public final class AgentMonitor: @unchecked Sendable {
             let provided = event.message.map { Self.sanitize($0, cap: Self.messageCap) }
             record.message = provided?.isEmpty == false ? provided : "Waiting for your answer"
         case "notify":
-            // Hosts fire notification hooks for more than input requests.
-            // Only a permission prompt or the idle reminder means "waiting
-            // for the user"; anything else (`other`) must not flip a working
-            // agent — it is dropped entirely. nil kind = a reporter older
-            // than the field, which keeps the legacy waiting behavior.
-            if event.notifyKind == "other" { break }
+            // Noise notifications never get here: the mappers forward notify
+            // only for payloads that mean "waiting for the user" (permission
+            // prompts, the idle reminder — HookNotificationClassifier).
             // `.done` is sticky against notify too: Claude fires its idle
             // Notification hook ("waiting for your input") when the REPL
             // sits unattended after a Stop, and that must not resurrect a

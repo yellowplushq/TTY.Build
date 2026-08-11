@@ -29,8 +29,6 @@ public struct ControlRequest: Decodable, Sendable {
     public var action: String?
     public var transcriptPath: String?
     public var agentError: Bool?
-    /// `notify` events: permission | idle | other (see HookReport.notifyKind).
-    public var notifyKind: String?
     /// Machine-wide monotonic capture time from the reporter; orders racing
     /// same-session reports. Absent from reporters older than the field.
     public var seq: UInt64?

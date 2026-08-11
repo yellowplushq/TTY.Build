@@ -30,7 +30,7 @@ final class AgentHookMapperTests: XCTestCase {
     func testGenericEventPassThrough() {
         for slug in ["codex", "kimi", "grok", "kiro", "copilot"] {
             for event in [
-                "session-start", "prompt", "tool", "busy", "ask", "notify",
+                "session-start", "prompt", "tool", "busy", "ask",
                 "stop", "session-end",
             ] {
                 let report = map(slug, event, flatBase())
@@ -38,6 +38,12 @@ final class AgentHookMapperTests: XCTestCase {
                 XCTAssertEqual(report?.agentSessionId, "s-1")
                 XCTAssertEqual(report?.cwd, "/tmp/project")
             }
+            // notify passes through only when the payload is an input
+            // request (see the classification tests below).
+            let notify = map(slug, "notify", flatBase([
+                "message": "Needs your permission to run Bash",
+            ]))
+            XCTAssertEqual(notify?.event, "notify", slug)
         }
     }
 
@@ -121,7 +127,7 @@ final class AgentHookMapperTests: XCTestCase {
             "assistant_response": "tertiary",
         ])
         XCTAssertEqual(
-            map("codex", "notify", emptyFirst)?.message, "secondary",
+            map("codex", "busy", emptyFirst)?.message, "secondary",
             "empty message falls through to last_assistant_message"
         )
 
@@ -164,7 +170,7 @@ final class AgentHookMapperTests: XCTestCase {
             "API cleanup"
         )
         XCTAssertNil(
-            map("codex", "notify", flatBase(["title": "Agent completed"]))?.sessionName,
+            map("codex", "stop", flatBase(["title": "Agent completed"]))?.sessionName,
             "event titles are not persistent session names"
         )
     }
@@ -261,7 +267,7 @@ final class AgentHookMapperTests: XCTestCase {
 
     func testControlCharactersStripped() {
         let payload = flatBase(["message": "line1\u{07}\u{1B}[31mline2\u{7F}"])
-        let message = map("codex", "notify", payload)?.message
+        let message = map("codex", "busy", payload)?.message
         XCTAssertNotNil(message)
         XCTAssertFalse(
             message!.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
@@ -278,7 +284,6 @@ final class AgentHookMapperTests: XCTestCase {
         XCTAssertEqual(report?.agentSessionId, "s-1")
         XCTAssertEqual(report?.cwd, "/tmp/project")
         XCTAssertEqual(report?.message, "Allow Bash?")
-        XCTAssertEqual(report?.notifyKind, "permission")
     }
 
     func testCopilotNotificationGatedOnElicitationDialog() {
@@ -287,7 +292,6 @@ final class AgentHookMapperTests: XCTestCase {
         ]))
         XCTAssertEqual(report?.event, "notify")
         XCTAssertEqual(report?.message, "Pick one")
-        XCTAssertEqual(report?.notifyKind, "permission")
     }
 
     func testCopilotNotificationRawSubstringNoLongerPasses() {
@@ -303,7 +307,6 @@ final class AgentHookMapperTests: XCTestCase {
             "message": "Copilot needs your permission to run Bash",
         ]))
         XCTAssertEqual(report?.event, "notify")
-        XCTAssertEqual(report?.notifyKind, "permission")
     }
 
     func testCopilotNotificationOtherTypeDropped() {
@@ -317,20 +320,21 @@ final class AgentHookMapperTests: XCTestCase {
             let permission = map(slug, "notify", flatBase([
                 "message": "Grok needs your permission to use Bash",
             ]))
-            XCTAssertEqual(permission?.notifyKind, "permission", slug)
+            XCTAssertEqual(permission?.event, "notify", slug)
 
             let idle = map(slug, "notify", flatBase([
                 "message": "Kimi is waiting for your input",
             ]))
-            XCTAssertEqual(idle?.notifyKind, "idle", slug)
+            XCTAssertEqual(idle?.event, "notify", slug)
 
-            // Noise notifications survive as events but are marked `other`;
-            // the daemon then leaves the state untouched.
-            let noise = map(slug, "notify", flatBase([
-                "message": "A new version is available",
-            ]))
-            XCTAssertEqual(noise?.event, "notify", slug)
-            XCTAssertEqual(noise?.notifyKind, "other", slug)
+            // Noise notifications are dropped at the mapper: they must not
+            // flip a working agent to waiting, or even bump its row.
+            XCTAssertNil(
+                map(slug, "notify", flatBase([
+                    "message": "A new version is available",
+                ])),
+                slug
+            )
         }
     }
 

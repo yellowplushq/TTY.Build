@@ -162,11 +162,12 @@ the existing pairing / new-session guidance.
   on background subagents — so an immediate "finished" alert is often
   premature. Waiting/error alerts fire as soon as their confirmation window
   commits.
-- Notification hooks are classified at the mapper (`notifyKind`:
-  permission/idle/other). Only permission prompts and the idle reminder flip
-  an agent to waiting; other notifications (update toasts, plugin notes) are
-  dropped, because hosts fire notification hooks for plenty of things that
-  are not input requests.
+- Notification hooks are classified at the mapper
+  (`HookNotificationClassifier`: permission prompt / idle reminder / other).
+  Only the first two are forwarded as `notify`; the rest is dropped inside
+  the reporter like an unknown event, because hosts fire notification hooks
+  for plenty of things that are not input requests. A `notify` reaching the
+  daemon therefore always means "waiting for the user".
 - Reports carry a machine-wide monotonic `seq`; the daemon drops a report
   older than one already applied for the session, so racing hook processes
   cannot rewind the state machine. The reporter also identifies the agent

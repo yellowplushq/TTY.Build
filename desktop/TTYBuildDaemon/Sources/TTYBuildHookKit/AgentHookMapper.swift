@@ -189,13 +189,13 @@ public enum AgentHookMapper {
         case "busy", "stop":
             report.message = stdin.message
         case "notify":
-            report.message = stdin.message
             // grok/kimi are Claude forks with the same two Notification
-            // triggers; classify so noise notifications cannot flip a
-            // working agent to waiting.
-            report.notifyKind = HookNotificationClassifier.classify(
-                message: stdin.message
-            )
+            // triggers; noise notifications are dropped here so they cannot
+            // flip a working agent to waiting.
+            guard HookNotificationClassifier.classify(message: stdin.message)
+                .isInputRequest
+            else { return nil }
+            report.message = stdin.message
         default:
             // session-start, ask, and session-end carry no text.
             break
@@ -215,18 +215,16 @@ public enum AgentHookMapper {
     ) -> HookReport? {
         let object = (try? JSONSerialization.jsonObject(with: stdinData)) as? [String: Any]
         let stdin = ClaudeFlatStdin(object: object)
-        let notifyKind: String
         if let type = object?["type"] as? String, !type.isEmpty {
             guard copilotNotifyGates.contains(type) else { return nil }
-            notifyKind = HookNotificationClassifier.permission
         } else {
-            notifyKind = HookNotificationClassifier.classify(message: stdin.message)
-            guard notifyKind != HookNotificationClassifier.other else { return nil }
+            guard HookNotificationClassifier.classify(message: stdin.message)
+                .isInputRequest
+            else { return nil }
         }
         return HookReport(
             event: "notify", agentSessionId: stdin.sessionId ?? fallbackSessionId,
-            sessionName: stdin.sessionName, cwd: stdin.cwd, message: stdin.message,
-            notifyKind: notifyKind
+            sessionName: stdin.sessionName, cwd: stdin.cwd, message: stdin.message
         )
     }
 
@@ -242,13 +240,11 @@ public enum AgentHookMapper {
         case "tool":
             report.action = stdin.action
             report.message = stdin.message
-        case "busy", "ask", "stop":
+        case "busy", "ask", "notify", "stop":
+            // notify passes through unclassified: our generated plugins only
+            // emit it for deliberate input requests, never for ambient host
+            // notifications.
             report.message = stdin.message
-        case "notify":
-            report.message = stdin.message
-            // Our generated plugins only emit notify for deliberate input
-            // requests, never for ambient host notifications.
-            report.notifyKind = HookNotificationClassifier.permission
         default:
             break // session-start and session-end carry no text
         }
