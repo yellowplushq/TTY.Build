@@ -91,6 +91,15 @@ final class WatchTerminalSession {
         phase = .idle
     }
 
+    /// Writes one semantic key to the PTY. Mirrors the iPhone terminal's
+    /// ungated stdin path: RelayLink itself drops frames safely while the
+    /// channel is down, so a tap during a brief reconnect is simply lost
+    /// rather than queued against a stale session.
+    func send(_ key: TerminalInputKey) {
+        guard let sessionID, let link, let bytes = key.bytes() else { return }
+        link.send(.stdin(sessionId: sessionID, data: bytes))
+    }
+
     /// Wrist-down: park the link with its E2EE state intact instead of
     /// tearing it down, so the next wake usually needs no handshake.
     func suspend() {

@@ -8,10 +8,14 @@ struct WatchTerminalView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            WatchTerminalContent(
-                snapshot: session.snapshot,
-                phase: session.phase
-            )
+            VStack(spacing: 0) {
+                WatchTerminalContent(
+                    snapshot: session.snapshot,
+                    phase: session.phase
+                )
+
+                WatchTerminalKeyBar { session.send($0) }
+            }
 
             ZStack {
                 Circle()
@@ -45,6 +49,63 @@ struct WatchTerminalView: View {
             guard phase == .active else { return }
             session.resume()
         }
+    }
+}
+
+/// The four keys a wrist-sized terminal actually needs: dismiss/interrupt a
+/// prompt, walk agent menu choices, and confirm. One horizontal row below the
+/// grid keeps every terminal column visible.
+private struct WatchTerminalKeyBar: View {
+    let onKey: (TerminalInputKey) -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            key(.escape, label: "esc", accessibility: "Escape")
+            key(.arrow(.up), systemImage: "arrow.up", accessibility: "Up arrow")
+            key(.arrow(.down), systemImage: "arrow.down", accessibility: "Down arrow")
+            key(.enter, systemImage: "return", accessibility: "Return")
+        }
+        // The bar ignores the safe area, so these insets keep the outer keys
+        // clear of the physical display's rounded bottom corners.
+        .padding(.horizontal, 8)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+    }
+
+    private func key(
+        _ input: TerminalInputKey,
+        label: String? = nil,
+        systemImage: String? = nil,
+        accessibility: String
+    ) -> some View {
+        Button {
+            onKey(input)
+        } label: {
+            Group {
+                if let label {
+                    Text(label)
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                } else if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .semibold))
+                }
+            }
+            .foregroundStyle(.white)
+        }
+        .buttonStyle(WatchTerminalKeyStyle())
+        .accessibilityLabel(accessibility)
+    }
+}
+
+private struct WatchTerminalKeyStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(maxWidth: .infinity, minHeight: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(.white.opacity(configuration.isPressed ? 0.32 : 0.13))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -301,11 +362,21 @@ struct WatchTerminalFixtureView: View {
     }()
 
     var body: some View {
+        // Mirror the live terminal's edge-to-edge composition exactly, so a
+        // fixture screenshot is evidence for the shipping layout.
         NavigationStack {
-            WatchTerminalContent(
-                snapshot: Self.snapshot,
-                phase: .live
-            )
+            VStack(spacing: 0) {
+                WatchTerminalContent(
+                    snapshot: Self.snapshot,
+                    phase: .live
+                )
+
+                WatchTerminalKeyBar { _ in }
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            ._statusBarHidden(true)
+            .persistentSystemOverlays(.hidden)
+            .ignoresSafeArea()
         }
     }
 }
