@@ -160,6 +160,9 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - WatchApp
+      # The key-byte encoder is shared with the iPhone terminal so both
+      # surfaces emit identical escape sequences.
+      - Sources/UI/TerminalInputKey.swift
       # Agent brand marks (shared catalog; the app-icon catalog stays
       # target-specific).
       - Resources/AgentMarks.xcassets
