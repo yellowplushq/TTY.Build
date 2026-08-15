@@ -95,6 +95,10 @@ struct DesktopPairingPanel: View {
     let isLoading: Bool
     let onRefresh: () -> Void
 
+    private static let appStoreURL = URL(
+        string: "https://apps.apple.com/us/app/tty-build-agents-terminal/id6792312114"
+    )!
+
     var body: some View {
         VStack(spacing: 16) {
             VStack(spacing: 6) {
@@ -154,6 +158,17 @@ struct DesktopPairingPanel: View {
                 Label("Single-use · valid for 15 minutes", systemImage: "clock")
                     .foregroundStyle(TTYBuildTheme.tertiaryContent)
             }
+
+            Divider()
+
+            Button {
+                NSWorkspace.shared.open(Self.appStoreURL)
+            } label: {
+                Label("Get TTY.Build on the App Store", systemImage: "arrow.up.forward.app")
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .foregroundStyle(TTYBuildTheme.secondaryContent)
         }
         .frame(maxWidth: .infinity)
         .padding(16)

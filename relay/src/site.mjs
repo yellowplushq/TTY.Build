@@ -2,6 +2,8 @@ import { clientAddress, enforceRateLimit } from "./core.mjs";
 import { injectPairingCode } from "./paired-zip.mjs";
 
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const APP_STORE_URL =
+  "https://apps.apple.com/us/app/tty-build-agents-terminal/id6792312114";
 const UPSTREAM_ZIP_CACHE_SECONDS = 5 * 60;
 const MACOS_ASSET = "TTYBuild-macOS.dmg";
 const MACOS_ZIP_ASSET = "TTYBuild-macOS.zip";
@@ -32,6 +34,9 @@ function redirect(location, method) {
 export function handleDesktopDownload(request, env, url) {
   if (!["GET", "HEAD"].includes(request.method)) return null;
   if (url.pathname === "/download") return redirect("/download/macos", request.method);
+  // The App Store listing needs no release repository, so it resolves before
+  // the GitHub-backed assets and their configuration check.
+  if (url.pathname === "/download/ios") return redirect(APP_STORE_URL, request.method);
   const asset = DESKTOP_ASSETS.get(url.pathname);
   if (!asset) return null;
 
@@ -187,4 +192,4 @@ export async function handleWebsiteAsset(request, env) {
   });
 }
 
-export { APPCAST_ASSET, CLI_ZIP_ASSET, MACOS_ASSET, MACOS_ZIP_ASSET };
+export { APP_STORE_URL, APPCAST_ASSET, CLI_ZIP_ASSET, MACOS_ASSET, MACOS_ZIP_ASSET };

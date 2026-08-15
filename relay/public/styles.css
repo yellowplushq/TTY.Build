@@ -160,6 +160,7 @@ h1 span { color: #737373; }
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -249,6 +250,22 @@ h1 span { color: #737373; }
 .button-secondary { color: var(--ink); background: var(--surface); }
 .button-secondary:hover { background: var(--raised); border-color: var(--line-strong); }
 .button-secondary .arrow { margin-left: 4px; color: var(--muted); font-size: 17px; }
+.button-secondary .button-icon { background: rgba(255, 255, 255, 0.07); }
+.button-appstore svg { display: block; }
+
+.how-link {
+  margin-top: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-decoration: none;
+  transition: color 160ms ease;
+}
+
+.how-link:hover { color: var(--ink); }
+.how-link span { font-size: 15px; }
 
 .product-stage {
   position: relative;
@@ -461,6 +478,7 @@ html {
   .hero { min-height: 0; grid-template-columns: 1fr; gap: 44px; padding: 56px 0 46px; }
   .hero-copy { text-align: center; }
   .eyebrow, .actions { justify-content: center; }
+  .how-link { justify-content: center; }
   h1, .lede { margin-left: auto; margin-right: auto; }
   h1 { font-size: clamp(54px, 11vw, 82px); }
   .product-stage { width: min(650px, 100%); min-height: 430px; margin: 0 auto; }
@@ -530,6 +548,9 @@ html {
 .legal-copy ul { margin: 12px 0 0; padding-left: 20px; }
 .legal-copy a { color: var(--ink); }
 .support-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 34px; }
+/* `.legal-copy a` outranks `.button-primary`, which would leave white text
+   on the white primary button. */
+.support-actions .button-primary { color: var(--canvas); }
 
 @media (max-width: 640px) {
   .privacy-mark { display: none; }

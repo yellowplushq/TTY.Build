@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  APP_STORE_URL,
   APPCAST_ASSET,
   CLI_ZIP_ASSET,
   handleDesktopDownload,
@@ -75,6 +76,15 @@ test("the short download path redirects to the canonical path", () => {
   assert.equal(response.status, 302);
   assert.equal(response.headers.get("location"), "/download/macos");
   assert.equal(response.headers.get("content-length"), "0");
+});
+
+test("the iOS download path redirects to the App Store without release config", () => {
+  const req = request("/download/ios");
+  const response = handleDesktopDownload(req, {}, new URL(req.url));
+
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get("location"), APP_STORE_URL);
+  assert.equal(response.headers.get("cache-control"), "no-store");
 });
 
 test("an unconfigured release repository fails without a misleading link", async () => {
@@ -168,6 +178,7 @@ test("the one-screen homepage exposes the product promise and download CTA", asy
   assert.match(html, /href="\/favicon-32\.png"/);
   assert.match(html, /src="\/brand-icon\.png"/);
   assert.match(html, /href="\/download\/macos"/);
+  assert.match(html, /href="https:\/\/apps\.apple\.com\/us\/app\/tty-build-agents-terminal\/id6792312114"/);
   assert.match(html, /8-digit code/);
   assert.match(html, /Terminal bytes and encryption keys never live on the service/);
   assert.match(html, /href="\/privacy\/"/);
@@ -256,5 +267,6 @@ test("support and privacy pages expose release-ready public information", async 
   assert.match(privacy, /end-to-end encrypted/i);
   assert.match(privacy, /does not store terminal content/i);
   assert.match(support, /8-digit code/);
+  assert.match(support, /apps\.apple\.com\/us\/app\/tty-build-agents-terminal\/id6792312114/);
   assert.match(support, /mailto:eyhn@yellowplus\.app/);
 });
