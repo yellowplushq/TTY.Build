@@ -1,0 +1,43 @@
+version: 2
+build:
+  targets: [ios-simulator, ios]
+  script: |
+    set -euo pipefail
+
+    # TTYBuild.xcodeproj is generated, never committed (*.xcodeproj is
+    # gitignored): a fresh clone has to mint it before anything can build.
+    command -v xcodegen >/dev/null 2>&1 || {
+      echo "xcodegen is required to generate ios/TTYBuild.xcodeproj (brew install xcodegen)." >&2
+      exit 69
+    }
+    (cd ios && xcodegen generate --quiet)
+
+    case "$AIRBUILD_TARGET" in
+      ios-simulator)
+        destination='generic/platform=iOS Simulator'
+        configuration=Debug
+        ;;
+      ios)
+        destination='generic/platform=iOS'
+        configuration=Release
+        ;;
+      *)
+        echo "Unsupported AIRBUILD_TARGET: ${AIRBUILD_TARGET:-unset}" >&2
+        exit 64
+        ;;
+    esac
+
+    archive_path=".airbuild/artifacts/TTYBuild.xcarchive"
+    rm -rf -- "$archive_path"
+
+    xcodebuild \
+      -project ios/TTYBuild.xcodeproj \
+      -scheme TTYBuild \
+      -configuration "$configuration" \
+      -destination "$destination" \
+      -archivePath "$archive_path" \
+      CODE_SIGNING_ALLOWED=NO \
+      CODE_SIGNING_REQUIRED=NO \
+      archive
+  artifact:
+    path: .airbuild/artifacts/TTYBuild.xcarchive

@@ -1,3 +1,4 @@
+.airbuild/
 .artifacts/
 .DS_Store
 *.xcodeproj
