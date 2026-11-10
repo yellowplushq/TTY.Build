@@ -66,7 +66,10 @@ fi
 
 ditto "$BUILT_APP" "$APP_PATH"
 
-lipo "$APP_PATH/Contents/MacOS/TTYBuild" -verify_arch "${ARCHITECTURES[@]}"
+# Xcode 27's lipo rejects more than one architecture per -verify_arch.
+for architecture in "${ARCHITECTURES[@]}"; do
+  lipo "$APP_PATH/Contents/MacOS/TTYBuild" -verify_arch "$architecture"
+done
 
 actual_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
 actual_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
