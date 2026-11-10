@@ -288,6 +288,33 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertTrue(manager.list().isEmpty)
     }
 
+    /// fish ignores a bare SIGHUP while its tty is still usable; it only exits
+    /// once a read returns EOF. Closing must hang up the tty like a terminal
+    /// window closing, or every closed session leaks its shell.
+    func testCloseEndsShellThatIgnoresSIGHUP() throws {
+        let manager = SessionManager(options: SessionManager.Options(
+            shell: "/bin/sh",
+            shellArguments: ["-c", "trap '' HUP; echo ttybuild-ready; read line"]
+        ))
+        defer { manager.closeAll() }
+
+        let collected = OutputCollector()
+        manager.onEvent = { event in
+            if case .output(_, let data, _) = event { collected.append(data) }
+        }
+        let id = try manager.create(cwd: nil, cols: 80, rows: 24)
+        try collected.wait(for: "ttybuild-ready", timeout: 10)
+        let pid = try XCTUnwrap(manager.agentMatchTargets().first?.shellPid)
+
+        XCTAssertTrue(manager.close(id: id))
+
+        let deadline = Date().addingTimeInterval(5)
+        while kill(pid, 0) == 0, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertNotEqual(kill(pid, 0), 0, "shell outlived its closed session")
+    }
+
     func testOSCTitleUpdatesSessionInfo() throws {
         let manager = SessionManager(options: testOptions())
         defer { manager.closeAll() }

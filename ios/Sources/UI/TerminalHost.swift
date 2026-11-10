@@ -22,6 +22,9 @@ final class TerminalHost {
     /// emulator has applied the grid, so a TUI repaint triggered by the frame
     /// can never be parsed against a smaller, stale grid.
     var onResize: ((_ cols: UInt16, _ rows: UInt16) -> Void)?
+    /// The user dismissed an exited session (Ghostty's "press any key to
+    /// close" after `markExited`).
+    var onCloseRequest: (() -> Void)?
     /// The grid the emulator has applied — the only size safe to hand to the
     /// daemon. During a layout change this lags `viewport` by one emulator
     /// resize round trip.
@@ -39,28 +42,69 @@ final class TerminalHost {
 
     var isTextSelectionActive: Bool { selectionOverlay != nil }
 
-    /// While a replay snapshot is being digested, the emulator re-answers any
-    /// terminal queries (DA, DECRQM, …) contained in the replayed history.
-    /// Those auto-responses — all ESC-prefixed control sequences — must not
-    /// reach the PTY (the host answered them long ago) or the shell echoes them
-    /// as garbage. Only ESC-prefixed writes are muted, so keystrokes the user
-    /// types right after a reconnect/replay still go through.
-    private var muteInputUntil: Date?
-
     private let session: InMemoryTerminalSession
+    private let relay: Relay
+    /// Set by `markExited`: the remote process is gone, so any key the user
+    /// presses dismisses the session instead of reaching a dead PTY.
+    private var hasExited = false
+
+    /// The visible grid as text, one line per row.
+    var viewportText: String? { session.readViewportText() }
 
     /// Weak trampoline so the `@Sendable` emulator callbacks (fired off-main)
     /// can reach the main-actor host without a retain cycle.
+    ///
+    /// It also owns the replay mute. While a replay snapshot's history is
+    /// being digested, the emulator re-answers any terminal queries (DA,
+    /// DECRQM, …) contained in it. Those auto-responses must not reach the PTY
+    /// (whoever was attached answered them long ago) or the shell echoes them
+    /// as garbage.
+    ///
+    /// The emulator hands replies to this callback asynchronously, after the
+    /// bytes that caused them are parsed, so no point in time marks the end of
+    /// the history's replies. Instead the history is followed by a barrier
+    /// query; replies are delivered in order, so everything up to and
+    /// including the barrier's reply belongs to the history, and everything
+    /// after it to live output.
     private final class Relay: @unchecked Sendable {
         weak var host: TerminalHost?
+        private let lock = NSLock()
+        /// Barriers fed but not yet answered, one per replay in flight.
+        private var pendingBarriers = 0
+
+        func beginReplay() {
+            lock.withLock { pendingBarriers += 1 }
+        }
+
+        /// Whether to drop `data` instead of sending it to the PTY.
+        func mutes(_ data: Data) -> Bool {
+            lock.withLock {
+                guard pendingBarriers > 0 else { return false }
+                if data == TerminalHost.replayBarrierReply {
+                    pendingBarriers -= 1
+                    return true
+                }
+                return TerminalHost.isEmulatorQueryReply(data)
+            }
+        }
     }
+
+    /// DECRQM for a private mode no program uses, so the history cannot
+    /// contain it; Ghostty answers an unknown mode with "not recognized".
+    nonisolated private static let replayBarrierQuery = Data("\u{1b}[?59127$p".utf8)
+    nonisolated private static let replayBarrierReply = Data("\u{1b}[?59127;0$y".utf8)
 
     init(controller: TerminalController) {
         self.controller = controller
 
         let relay = Relay()
+        self.relay = relay
         session = InMemoryTerminalSession(
             write: { data in
+                // Only the emulator's query replies are muted. Keyboard input
+                // can start with ESC too (bare Esc, arrow keys, Alt+letter) and
+                // must pass through even while a replay is being digested.
+                if relay.mutes(data) { return }
                 Task { @MainActor in relay.host?.handleInput(data) }
             },
             // Ghostty fires this callback while a grid resize is still queued
@@ -73,7 +117,12 @@ final class TerminalHost {
         )
 
         view = TTYBuildTerminalView(frame: .zero)
-        view.configuration = TerminalSurfaceOptions(backend: .inMemory(session))
+        // Keep an exited session on screen until a key dismisses it; Ghostty
+        // otherwise closes the surface the moment `markExited` lands.
+        view.configuration = TerminalSurfaceOptions(
+            backend: .inMemory(session),
+            waitAfterCommand: true
+        )
         view.controller = controller
         view.delegate = self
         view.backgroundColor = .clear
@@ -122,6 +171,10 @@ final class TerminalHost {
 
     func sendToolbarKey(_ key: TerminalInputKey) {
         guard isActive else { return }
+        if hasExited, key != .dismissKeyboard {
+            onCloseRequest?()
+            return
+        }
         switch key {
         case .text(let text):
             // Use libghostty's text path so sticky Control/Option/Command and
@@ -240,10 +293,19 @@ final class TerminalHost {
     /// scrollback) so a reconnect replay doesn't duplicate earlier output.
     /// Also applied while hidden — a pooled channel's reconnect replay is
     /// what keeps the background emulator in sync.
+    ///
+    /// Replies to queries in the replayed history are muted, but the trailing
+    /// control-only run is fed after the barrier, unmuted: a process can be
+    /// blocked on a query there that nothing has answered yet (fish waits for
+    /// its startup DA1 reply before printing a prompt). This holds even while
+    /// no surface is attached, since the bytes are parsed in order on attach.
     func feedReplay(_ data: Data) {
-        muteInputUntil = Date().addingTimeInterval(0.5)
+        let (history, pending) = TerminalReplayTail.split(data)
+        relay.beginReplay()
         session.receive(Data("\u{1b}c\u{1b}[3J".utf8))
-        session.receive(data)
+        session.receive(history)
+        session.receive(Self.replayBarrierQuery)
+        session.receive(pending)
         // Both the RIS above and any reset inside the replayed history clear
         // mode 2048, which the applied-resize pipeline depends on. Re-arming
         // also makes the emulator re-report its current grid, refreshing the
@@ -262,8 +324,16 @@ final class TerminalHost {
 
     /// Surface the remote process exit inside the emulator. Also applied
     /// while hidden so a pooled page shows the exit when paged back to.
-    func markExited(code: Int) {
-        session.finish(exitCode: UInt32(clamping: max(0, code)), runtimeMilliseconds: 0)
+    ///
+    /// `runtime` is how long the session lived. Ghostty reports a short-lived
+    /// non-zero exit as a failed launch, so a constant 0 would label every
+    /// such exit "failed to launch".
+    func markExited(code: Int, runtime: TimeInterval) {
+        session.finish(
+            exitCode: UInt32(clamping: max(0, code)),
+            runtimeMilliseconds: UInt64(max(0, runtime) * 1000)
+        )
+        hasExited = true
         kickRender()
     }
 
@@ -285,16 +355,14 @@ final class TerminalHost {
         }
         guard !data.isEmpty else { return }
 
-        if let until = muteInputUntil {
-            if Date() < until {
-                // Drop only the emulator's query replies. Keyboard input can
-                // start with ESC too (bare Esc, arrow keys, Alt+letter) and
-                // must pass through even inside the mute window.
-                if Self.isEmulatorQueryReply(data) { return }
-            } else {
-                muteInputUntil = nil
-            }
+        // Ghostty closes an exited surface on its own key-event path only.
+        // Software-keyboard text arrives here instead, so dismiss the session
+        // for it too; the emulator's own query replies are not keystrokes.
+        if hasExited {
+            if !Self.isEmulatorQueryReply(data) { onCloseRequest?() }
+            return
         }
+
         // Software-key input is consumed by libghostty's sticky path before it
         // reaches this callback. A hardware keyboard, including Simulator's
         // Mac keyboard bridge, bypasses `insertText` and arrives here as one
@@ -317,7 +385,7 @@ final class TerminalHost {
     /// CSI reports terminating in `c` (DA), `n` (DSR), `y` (DECRQM), `R` (CPR),
     /// and DCS/OSC responses. Keyboard sequences are different shapes — bare
     /// ESC, `ESC [ A…D` arrows, `ESC O …`, Alt+letter — and all return false.
-    private static func isEmulatorQueryReply(_ data: Data) -> Bool {
+    nonisolated private static func isEmulatorQueryReply(_ data: Data) -> Bool {
         guard data.count >= 3, data.first == 0x1b, let last = data.last
         else { return false }
         switch data[data.index(data.startIndex, offsetBy: 1)] {
@@ -434,8 +502,16 @@ final class TerminalHost {
 
 extension TerminalHost: TerminalSurfaceGridResizeDelegate,
     TerminalSurfaceLifecycleDelegate,
-    TerminalSurfaceTextSelectionRequestDelegate
+    TerminalSurfaceTextSelectionRequestDelegate,
+    TerminalSurfaceCloseDelegate
 {
+    func terminalDidClose(processAlive: Bool) {
+        // Ghostty asks to close once a hardware key is pressed on an exited
+        // session. A live remote process is never closed from the emulator.
+        guard !processAlive else { return }
+        onCloseRequest?()
+    }
+
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
         guard isActive else { return }
         // Arm as early as possible so the very first grid announcement to the

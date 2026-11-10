@@ -15,6 +15,14 @@ private enum TerminalKeyboardPagingHintMemory {
     }
 }
 
+enum TerminalExitPolicy {
+    /// Only a clean exit closes the tab on its own; a failure stays on screen
+    /// so its last output and status can be read.
+    static func closesTab(exitCode: Int) -> Bool {
+        exitCode == 0
+    }
+}
+
 enum TerminalFocusPolicy {
     /// The keyboard follows its own state, never the navigation: a page change
     /// refocuses only when the keyboard was up on the page being left, so a
@@ -323,7 +331,7 @@ final class MainViewController: UIViewController {
             .store(in: &cancellables)
 
         manager.exits
-            .sink { [weak self] id, code in self?.pages[id]?.host.markExited(code: code) }
+            .sink { [weak self] id, code in self?.handleExit(id: id, code: code) }
             .store(in: &cancellables)
 
         // NOTE: @Published emits during willSet — inside a sink the source
@@ -588,6 +596,9 @@ final class MainViewController: UIViewController {
             page.overlay.onClaim = { [weak self] in
                 self?.manager.claimTerminal(id)
             }
+            page.host.onCloseRequest = { [weak self] in
+                self?.closeTerminal(id)
+            }
             page.host.onModifierStateChange = { [weak self] state in
                 guard let self, visibleId == id else { return }
                 toolbar.setModifierState(state)
@@ -787,6 +798,22 @@ final class MainViewController: UIViewController {
             }
         }
         manager.closeTerminal(id)
+    }
+
+    /// A clean exit is the user ending the shell on purpose (`exit`, Ctrl-D),
+    /// so its tab closes like a terminal window. Any other status keeps the
+    /// tab with its last output and Ghostty's exit message; a key press then
+    /// closes it through `onCloseRequest`.
+    private func handleExit(id: TerminalID, code: Int) {
+        if TerminalExitPolicy.closesTab(exitCode: code) {
+            closeTerminal(id)
+            return
+        }
+        guard let page = pages[id], let terminal = manager.terminal(id) else { return }
+        page.host.markExited(
+            code: code,
+            runtime: Date().timeIntervalSince1970 - terminal.info.createdAt
+        )
     }
 
     /// Instant switch (tab strip tap, own-create echo). `focus: true` is the

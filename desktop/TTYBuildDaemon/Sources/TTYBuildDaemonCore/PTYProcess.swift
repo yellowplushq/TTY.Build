@@ -312,5 +312,9 @@ public final class PTYProcess: @unchecked Sendable {
         // Kill the whole session (the shell and its children).
         kill(-pid, SIGHUP)
         kill(pid, SIGHUP)
+        // Then hang up the tty, as a closing terminal window does. Some shells
+        // (fish) ignore a bare SIGHUP while their tty is still usable and only
+        // exit once a read returns EOF. `exitSource` stays armed to reap them.
+        queue.async { [self] in closeMaster() }
     }
 }
