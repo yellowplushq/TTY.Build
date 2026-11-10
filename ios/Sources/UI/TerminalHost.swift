@@ -58,22 +58,41 @@ final class TerminalHost {
     /// being digested, the emulator re-answers any terminal queries (DA,
     /// DECRQM, …) contained in it. Those auto-responses must not reach the PTY
     /// (whoever was attached answered them long ago) or the shell echoes them
-    /// as garbage. The mute is checked on the emulator thread as each reply is
-    /// generated, so it covers exactly the replayed history: live output parsed
-    /// afterwards is answered even if it arrives a moment later.
+    /// as garbage.
+    ///
+    /// The emulator hands replies to this callback asynchronously, after the
+    /// bytes that caused them are parsed, so no point in time marks the end of
+    /// the history's replies. Instead the history is followed by a barrier
+    /// query; replies are delivered in order, so everything up to and
+    /// including the barrier's reply belongs to the history, and everything
+    /// after it to live output.
     private final class Relay: @unchecked Sendable {
         weak var host: TerminalHost?
         private let lock = NSLock()
-        private var muteQueryRepliesUntil = Date.distantPast
+        /// Barriers fed but not yet answered, one per replay in flight.
+        private var pendingBarriers = 0
 
-        var mutesQueryReplies: Bool {
-            lock.withLock { Date() < muteQueryRepliesUntil }
+        func beginReplay() {
+            lock.withLock { pendingBarriers += 1 }
         }
 
-        func muteQueryReplies(until deadline: Date) {
-            lock.withLock { muteQueryRepliesUntil = deadline }
+        /// Whether to drop `data` instead of sending it to the PTY.
+        func mutes(_ data: Data) -> Bool {
+            lock.withLock {
+                guard pendingBarriers > 0 else { return false }
+                if data == TerminalHost.replayBarrierReply {
+                    pendingBarriers -= 1
+                    return true
+                }
+                return TerminalHost.isEmulatorQueryReply(data)
+            }
         }
     }
+
+    /// DECRQM for a private mode no program uses, so the history cannot
+    /// contain it; Ghostty answers an unknown mode with "not recognized".
+    nonisolated private static let replayBarrierQuery = Data("\u{1b}[?59127$p".utf8)
+    nonisolated private static let replayBarrierReply = Data("\u{1b}[?59127;0$y".utf8)
 
     init(controller: TerminalController) {
         self.controller = controller
@@ -85,9 +104,7 @@ final class TerminalHost {
                 // Only the emulator's query replies are muted. Keyboard input
                 // can start with ESC too (bare Esc, arrow keys, Alt+letter) and
                 // must pass through even while a replay is being digested.
-                if relay.mutesQueryReplies, TerminalHost.isEmulatorQueryReply(data) {
-                    return
-                }
+                if relay.mutes(data) { return }
                 Task { @MainActor in relay.host?.handleInput(data) }
             },
             // Ghostty fires this callback while a grid resize is still queued
@@ -278,22 +295,16 @@ final class TerminalHost {
     /// what keeps the background emulator in sync.
     ///
     /// Replies to queries in the replayed history are muted, but the trailing
-    /// control-only run is fed unmuted once the history is parsed: a process
-    /// can be blocked on a query there that nothing has answered yet (fish
-    /// waits for its startup DA1 reply before printing a prompt).
+    /// control-only run is fed after the barrier, unmuted: a process can be
+    /// blocked on a query there that nothing has answered yet (fish waits for
+    /// its startup DA1 reply before printing a prompt). This holds even while
+    /// no surface is attached, since the bytes are parsed in order on attach.
     func feedReplay(_ data: Data) {
         let (history, pending) = TerminalReplayTail.split(data)
-        relay.muteQueryReplies(until: .distantFuture)
+        relay.beginReplay()
         session.receive(Data("\u{1b}c\u{1b}[3J".utf8))
         session.receive(history)
-        if session.waitForPendingOutput() {
-            relay.muteQueryReplies(until: .distantPast)
-        } else {
-            // No surface is attached yet, so the history is parsed only when
-            // one attaches. Bound the mute in time instead of holding it until
-            // then; a reply it lets through is a stray sequence, not a hang.
-            relay.muteQueryReplies(until: Date().addingTimeInterval(0.5))
-        }
+        session.receive(Self.replayBarrierQuery)
         session.receive(pending)
         // Both the RIS above and any reset inside the replayed history clear
         // mode 2048, which the applied-resize pipeline depends on. Re-arming
