@@ -55,7 +55,13 @@ swift build \
   --arch arm64 --arch x86_64 \
   --product ttybuild-hook
 
-BIN_DIR="$PACKAGE_PATH/.build/apple/Products/Release"
+# Ask SwiftPM where the universal products went; Xcode 27 moved them from
+# .build/apple to .build/out.
+BIN_DIR="$(swift build \
+  --package-path "$PACKAGE_PATH" \
+  --configuration release \
+  --arch arm64 --arch x86_64 \
+  --show-bin-path)"
 for binary in ttybuild ttybuild-hook; do
   [[ -x "$BIN_DIR/$binary" ]] || {
     echo "Universal build output missing: $BIN_DIR/$binary" >&2
